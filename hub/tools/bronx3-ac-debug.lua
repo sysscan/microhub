@@ -26,8 +26,15 @@ local function getGenv()
 	return getgenv and getgenv() or _G
 end
 
+do
+	local prior = getGenv().__Bronx3ACDebug
+	if typeof(prior) == "table" and typeof(prior.stop) == "function" then
+		pcall(prior.stop)
+	end
+end
+
 local LOG_ROOT = "hub/tools/bronx3-ac-debug/logs"
-local DEBUG_VERSION = "4-flush-fix"
+local DEBUG_VERSION = "5-orphan-stop"
 local FLUSH_INTERVAL = 1.25
 local SAMPLE_INTERVAL = 0.5
 local MARK_COOLDOWN = 0.08
@@ -496,13 +503,14 @@ end
 
 function Bronx3ACDebug.start(ctx)
 	if session.running then
-		Bronx3ACDebug.setContext(ctx or {})
-		return Bronx3ACDebug
+		Bronx3ACDebug.stop()
 	end
 	if not canWriteFiles() then
 		warn("[Bronx3ACDebug] appendfile/writefile unavailable — logging disabled")
 		return Bronx3ACDebug
 	end
+
+	warn("[Bronx3ACDebug] starting version", DEBUG_VERSION)
 
 	ensureLogDir()
 	session.logPath = LOG_ROOT .. "/session-" .. os.date("%Y%m%d-%H%M%S") .. ".log"
@@ -527,13 +535,14 @@ function Bronx3ACDebug.start(ctx)
 	writefile(
 		session.logPath,
 		string.format(
-			"=== Tha Bronx 3 AC Debug Session ===\nstarted=%s\nplaceId=%s\nuserId=%s\nexecutor=%s %s\nlogPath=%s\n\n",
+			"=== Tha Bronx 3 AC Debug Session ===\nstarted=%s\nplaceId=%s\nuserId=%s\nexecutor=%s %s\nlogPath=%s\ndebugVersion=%s\n\n",
 			os.date("%Y-%m-%d %H:%M:%S"),
 			tostring(game.PlaceId),
 			tostring(LocalPlayer.UserId),
 			tostring(executorName),
 			tostring(executorVersion),
-			session.logPath
+			session.logPath,
+			DEBUG_VERSION
 		)
 	)
 

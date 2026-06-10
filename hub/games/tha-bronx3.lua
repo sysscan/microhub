@@ -298,7 +298,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local acDebugModule = nil
-local AC_DEBUG_VERSION = "4-flush-fix"
+local AC_DEBUG_VERSION = "5-orphan-stop"
 
 local function getAcDebugContext()
 	return {
@@ -410,12 +410,17 @@ local function applyAcDebug()
 		return
 	end
 	if Config.ACDebug then
+		local prior = (getgenv and getgenv() or _G).__Bronx3ACDebug
+		if typeof(prior) == "table" and prior ~= mod and typeof(prior.stop) == "function" then
+			pcall(prior.stop)
+		end
 		if typeof(mod.start) == "function" then
 			mod.start(getAcDebugContext())
 		end
 		local logPath = typeof(mod.getLogPath) == "function" and mod.getLogPath() or nil
+		local version = typeof(mod.getVersion) == "function" and mod.getVersion() or "unknown"
 		if logPath then
-			notify("Logging to " .. logPath, "AC Debug", 8)
+			notify("AC Debug " .. version .. " → " .. logPath, "AC Debug", 8)
 		end
 	else
 		if typeof(mod.stop) == "function" then
