@@ -4,14 +4,21 @@ Loads game scripts by `game.PlaceId`.
 
 ## Loader (Volt)
 
+**Paste this every time** (do not save/reuse an old loader body — you will stay stuck on an old version).
+
 ```lua
+getgenv().HUB_USE_LOCAL = false
+local bust = os.time() .. "_" .. math.random(1e5, 1e9)
 local r = request({
-	Url = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua?t=" .. os.time(),
+	Url = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua?t=" .. bust,
 	Method = "GET",
+	Headers = { ["Cache-Control"] = "no-cache, no-store" },
 })
 assert(r.Success, r.StatusMessage or "download failed")
 loadstring(r.Body, "MicroHub.Loader")()
 ```
+
+You should see `boot loader v8` and `UI remote v2.0.1` in the output. If you still see `loader v6`, you are not running the snippet above.
 
 Re-run anytime — previous modules are stopped first. Every file is fetched from GitHub; nothing is written to your workspace unless you opt into local dev mode.
 
@@ -21,9 +28,10 @@ Copy `hub/` into your executor workspace, then:
 
 ```lua
 getgenv().HUB_USE_LOCAL = true
+getgenv().HUB_UI_LOCAL = true  -- optional: also use workspace lib/ui.lua
 ```
 
-Run the loader snippet above. Files are read from `hub/` (override path with `HUB_LOCAL_ROOT`).
+Run the loader snippet above. Files are read from `hub/` (override path with `HUB_LOCAL_ROOT`). `lib/ui.lua` still comes from GitHub unless `HUB_UI_LOCAL` is set.
 
 ## Layout
 

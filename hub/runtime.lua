@@ -46,12 +46,20 @@ function Runtime.sanitize(source)
 	return source
 end
 
+local function cacheBust()
+	return tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999999))
+end
+
 function Runtime.fetchHttp(path)
 	if typeof(request) ~= "function" then
 		error("request() unavailable — cannot fetch " .. path, 0)
 	end
-	local url = Runtime._base .. "/" .. path .. "?t=" .. tostring(os.time())
-	local res = request({ Url = url, Method = "GET" })
+	local url = Runtime._base .. "/" .. path .. "?t=" .. cacheBust()
+	local res = request({
+		Url = url,
+		Method = "GET",
+		Headers = { ["Cache-Control"] = "no-cache, no-store" },
+	})
 	if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
 		return Runtime.sanitize(res.Body)
 	end
@@ -67,10 +75,24 @@ function Runtime.readLocal(path)
 	return Runtime.sanitize(readfile(localPath))
 end
 
+function Runtime.wantsLocalFile(path)
+	if not Runtime.useLocal() then
+		return false
+	end
+	if path == "lib/ui.lua" and getGenv().HUB_UI_LOCAL ~= true then
+		return false
+	end
+	return true
+end
+
 function Runtime.fetch(path)
-	if Runtime.useLocal() then
+	if Runtime.wantsLocalFile(path) then
 		local source = Runtime.readLocal(path)
 		if source then
+			if path == "lib/ui.lua" and source:find("TouchTap", 1, true) then
+				warn("[MicroHub] stale local ui.lua ignored — fetching from GitHub")
+				return Runtime.fetchHttp(path), "remote"
+			end
 			return source, "local"
 		end
 		error("local file missing: " .. Runtime._localRoot .. "/" .. path, 0)

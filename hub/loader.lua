@@ -7,7 +7,7 @@
 	Dev mode: getgenv().HUB_USE_LOCAL = true  (read hub/ from executor workspace)
 ]]
 
-local LOADER_VERSION = 7
+local LOADER_VERSION = 8
 local DEFAULT_BASE = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 local LOADED_KEY = "__MicroHubLoaded"
 local UI_LIB_KEY = "__MicroHubUILib"
@@ -49,9 +49,17 @@ local function sanitize(source)
 	return source
 end
 
+local function cacheBust()
+	return tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999999))
+end
+
 local function fetchHttp(base, path)
-	local url = base .. "/" .. path .. "?t=" .. tostring(os.time())
-	local res = request({ Url = url, Method = "GET" })
+	local url = base .. "/" .. path .. "?t=" .. cacheBust()
+	local res = request({
+		Url = url,
+		Method = "GET",
+		Headers = { ["Cache-Control"] = "no-cache, no-store" },
+	})
 	if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
 		return sanitize(res.Body)
 	end
@@ -59,9 +67,20 @@ local function fetchHttp(base, path)
 	error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
 end
 
+local function wantsLocalFile(path)
+	if getGenv().HUB_USE_LOCAL ~= true or typeof(isfile) ~= "function" then
+		return false
+	end
+	-- UI always from GitHub unless explicitly opted in (avoids stale workspace ui.lua).
+	if path == "lib/ui.lua" and getGenv().HUB_UI_LOCAL ~= true then
+		return false
+	end
+	return true
+end
+
 local function loadModuleSource(base, path)
 	local root = getGenv().HUB_LOCAL_ROOT or "hub"
-	if getGenv().HUB_USE_LOCAL == true and typeof(isfile) == "function" and isfile(root .. "/" .. path) then
+	if wantsLocalFile(path) and isfile(root .. "/" .. path) then
 		return sanitize(readfile(root .. "/" .. path)), "local"
 	end
 	return fetchHttp(base, path), "remote"
@@ -129,6 +148,11 @@ local function mergeManifest(manifest)
 end
 
 local success, err = pcall(function()
+	warn("[MicroHub] boot loader v" .. LOADER_VERSION)
+	local genv = getGenv()
+	if genv.HUB_USE_LOCAL == true then
+		warn("[MicroHub] HUB_USE_LOCAL is on — workspace hub/ overrides most files (not lib/ui.lua)")
+	end
 	local base = DEFAULT_BASE
 	local config = loadTable(base, "config.lua")
 	base = config.Repository or base
