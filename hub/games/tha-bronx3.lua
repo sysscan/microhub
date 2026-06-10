@@ -4,6 +4,7 @@
 
 	Verify AC bypass: LocalPlayer:GetAttribute("LastACPos") should stay nil.
 	Fly: WASD + Space/Ctrl while Fly toggle is on (use with AC Bypass).
+	With AC Bypass, fly stays unanchored while moving and respects server _Y ceiling.
 ]]
 
 local Players = game:GetService("Players")
@@ -38,6 +39,9 @@ local Config = {
 	FlySpeed = 48,
 	RunSpeed = 16,
 }
+
+-- Server sets LocalPlayer._Y while tracking vertical movement; flying far above it triggers removal.
+local FLY_AC_MAX_ABOVE_Y = 18
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
 local BOOST_JUMP_POWER = Config.JumpPower
@@ -397,6 +401,10 @@ local bypassSession = {
 	character = nil,
 }
 
+local flyBypassState = {
+	acGroundY = LocalPlayer:GetAttribute("_Y"),
+}
+
 local function releaseRootPart(rootPart)
 	if rootPart and rootPart.Parent then
 		rootPart.Anchored = false
@@ -458,7 +466,7 @@ local function applyMovementBypass(character)
 		acDebugMark("bypass_pre", { anchored = root.Anchored })
 	end)
 
-	bypassSession.postConn = RunService.PostSimulation:Connect(function()
+	bypassSession.postConn = RunService.PostSimulation:Connect(function(deltaTime)
 		local root = bypassSession.rootPart
 		local char = bypassSession.character
 		if not rootIsLive(root, char) then
@@ -469,6 +477,19 @@ local function applyMovementBypass(character)
 			releaseRootPart(root)
 			return
 		end
+
+		local flyActive = false
+		if Config.Fly then
+			flyActive = applyFlyStep(root, humanoid, deltaTime, true)
+		elseif humanoid.PlatformStand then
+			humanoid.PlatformStand = false
+		end
+
+		if flyActive then
+			acDebugMark("bypass_post_fly", { anchored = root.Anchored, acY = flyBypassState.acGroundY })
+			return
+		end
+
 		if not root.Anchored then
 			root.Anchored = true
 		end
@@ -1273,18 +1294,12 @@ local function applySurvivalBypasses()
 end
 
 -- ---------------------------------------------------------------------------
--- Fly (works with AC bypass root anchoring)
+-- Fly (PostSimulation when AC bypass is on — avoids anchor/CFrame fight)
 -- ---------------------------------------------------------------------------
 
-local function applyFly(deltaTime)
-	if not Config.Fly then
-		return
-	end
-	local root = getRootPart()
-	local camera = workspace.CurrentCamera
-	local humanoid = getHumanoid()
-	if not root or not camera or not humanoid or humanoid.Health <= 0 then
-		return
+local function getFlyMoveDirection(camera)
+	if not camera then
+		return Vector3.zero
 	end
 
 	local move = Vector3.zero
@@ -1306,19 +1321,87 @@ local function applyFly(deltaTime)
 	if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
 		move -= Vector3.yAxis
 	end
+	return move
+end
 
-	if move.Magnitude > 0 then
-		root.CFrame += move.Unit * Config.FlySpeed * deltaTime
-		root.AssemblyLinearVelocity = Vector3.zero
+local function clampFlyMoveForAc(root, move)
+	local acY = flyBypassState.acGroundY
+	if typeof(acY) ~= "number" or move.Magnitude <= 0 then
+		return move
+	end
+
+	local ceiling = acY + FLY_AC_MAX_ABOVE_Y
+	if root.Position.Y < ceiling or move.Y <= 0 then
+		return move
+	end
+
+	local flat = Vector3.new(move.X, 0, move.Z)
+	if flat.Magnitude > 0 then
+		return flat
+	end
+	return Vector3.zero
+end
+
+-- Returns true when fly input is actively driving movement this frame.
+local function applyFlyStep(root, humanoid, deltaTime, withBypass)
+	if not Config.Fly or not root or not humanoid or humanoid.Health <= 0 then
+		return false
+	end
+
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return false
+	end
+
+	local move = clampFlyMoveForAc(root, getFlyMoveDirection(camera))
+	if move.Magnitude <= 0 then
+		if withBypass and humanoid.PlatformStand then
+			humanoid.PlatformStand = false
+		end
+		return false
+	end
+
+	local dt = typeof(deltaTime) == "number" and deltaTime or (1 / 60)
+	local direction = move.Unit
+	local speed = Config.FlySpeed
+
+	if withBypass then
+		humanoid.PlatformStand = true
+		root.AssemblyLinearVelocity = direction * speed
 		root.AssemblyAngularVelocity = Vector3.zero
 		acDebugMark("fly_move", {
-			speed = Config.FlySpeed,
-			delta = deltaTime,
+			mode = "bypass_velocity",
+			speed = speed,
+			delta = dt,
 			move = move.Magnitude,
 			pos = root.Position,
 			anchored = root.Anchored,
+			acY = flyBypassState.acGroundY,
 		})
+		return true
 	end
+
+	root.CFrame += direction * speed * dt
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	acDebugMark("fly_move", {
+		mode = "cframe",
+		speed = speed,
+		delta = dt,
+		move = move.Magnitude,
+		pos = root.Position,
+		anchored = root.Anchored,
+	})
+	return true
+end
+
+local function applyFly(deltaTime)
+	if not Config.Fly or Config.MovementBypass then
+		return
+	end
+	local root = getRootPart()
+	local humanoid = getHumanoid()
+	applyFlyStep(root, humanoid, deltaTime, false)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1738,6 +1821,12 @@ local HubUI = UILib.create({
 		end
 	end,
 })
+
+LocalPlayer.AttributeChanged:Connect(function(name)
+	if name == "_Y" then
+		flyBypassState.acGroundY = LocalPlayer:GetAttribute("_Y")
+	end
+end)
 
 LocalPlayer.CharacterAdded:Connect(bindCharacter)
 LocalPlayer.CharacterRemoving:Connect(onCharacterRemoving)

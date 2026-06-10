@@ -54,6 +54,8 @@ local REMOTE_WATCH = {
 
 local SUSPICIOUS_ATTRS = {
 	LastACPos = true,
+	_Y = true,
+	AirTime = true,
 	LayingPivot = true,
 	MaxMoney = true,
 	Vomit = true,

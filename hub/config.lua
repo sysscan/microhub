@@ -1,6 +1,6 @@
 return {
 	Name = "MicroHub",
-	Version = "1.1.2",
+	Version = "1.1.3",
 	Repository = "https://raw.githubusercontent.com/sysscan/microhub/main/hub",
 	-- Version markers must appear in remote source (see DEBUG_VERSION etc. in each file).
 	ModuleVersions = {
