@@ -11,13 +11,14 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "10-refine"
+local GAME_BUILD = "11-sticky-aim"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
 	Aimbot = false,
 	AimTeamCheck = true,
 	AimHold = true,
+	AimSticky = false,
 	AimFOV = 120,
 	AimSmooth = 35,
 	AimPart = "Head",
@@ -60,6 +61,8 @@ local wallsFolder = workspace:FindFirstChild("Walls")
 local espNeedsHide = false
 local aimFovSq = Config.AimFOV * Config.AimFOV
 local aimFovCircle: any = nil
+local stickyChar: Model? = nil
+local stickyNeedsRelease = false
 
 local function setAimFOV(value: number)
 	Config.AimFOV = math.clamp(math.floor(value), 20, 500)
@@ -321,15 +324,36 @@ local function screenDistSq(worldPos: Vector3, origin: Vector2): number?
 	return dx * dx + dy * dy
 end
 
+local function isAimEligible(char: Model, name: string): boolean
+	if not isCombatModel(char) or isAllySpawnShielded(name) then
+		return false
+	end
+	if Config.AimTeamCheck and relation(name, char) == "Ally" then
+		return false
+	end
+	return true
+end
+
+local function targetName(char: Model): string
+	for model, name in collectTargets() do
+		if model == char then
+			return name
+		end
+	end
+	return char.Name
+end
+
+local function charFromPart(part: BasePart): Model?
+	local model = part.Parent
+	return if model and model:IsA("Model") then model else nil
+end
+
 local function closestAimPart(origin: Vector2): BasePart?
 	local bestPart: BasePart? = nil
 	local bestDistSq = aimFovSq
 
 	for char, name in collectTargets() do
-		if not isCombatModel(char) or isAllySpawnShielded(name) then
-			continue
-		end
-		if Config.AimTeamCheck and relation(name, char) == "Ally" then
+		if not isAimEligible(char, name) then
 			continue
 		end
 		local part = aimPart(char)
@@ -340,6 +364,16 @@ local function closestAimPart(origin: Vector2): BasePart?
 	end
 
 	return bestPart
+end
+
+local function stickyAimPart(): BasePart?
+	if not stickyChar or not stickyChar.Parent then
+		return nil
+	end
+	if not isAimEligible(stickyChar, targetName(stickyChar)) then
+		return nil
+	end
+	return aimPart(stickyChar)
 end
 
 local function aimAlpha(dt: number): number
@@ -360,13 +394,36 @@ local function updateAimbot(dt: number)
 		aimFovCircle.Visible = Config.Aimbot and Config.AimFOVCircle
 	end
 
-	local active = Config.Aimbot
-		and (not Config.AimHold or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2))
-	if not active then
+	local holding = not Config.AimHold or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+	if not Config.Aimbot or not holding then
+		stickyChar = nil
+		stickyNeedsRelease = false
 		return
 	end
 
-	local part = closestAimPart(origin)
+	local part: BasePart? = nil
+
+	if Config.AimSticky then
+		if stickyNeedsRelease then
+			return
+		end
+		part = stickyAimPart()
+		if not part then
+			stickyChar = nil
+			part = closestAimPart(origin)
+			if part then
+				stickyChar = charFromPart(part)
+			else
+				stickyNeedsRelease = true
+				return
+			end
+		end
+	else
+		stickyChar = nil
+		stickyNeedsRelease = false
+		part = closestAimPart(origin)
+	end
+
 	if not part or not part.Parent then
 		return
 	end
@@ -641,6 +698,7 @@ UILib.create({
 						{ type = "toggle", key = "Aimbot", label = "Aimbot", hud = "Aimbot" },
 						{ type = "toggle", key = "AimTeamCheck", label = "Team Check", hud = "Team Check" },
 						{ type = "toggle", key = "AimHold", label = "Hold RMB", hud = "Hold RMB" },
+						{ type = "toggle", key = "AimSticky", label = "Sticky Aim", hud = "Sticky Aim" },
 						{
 							type = "select",
 							key = "AimPart",
@@ -650,7 +708,7 @@ UILib.create({
 						{ type = "slider", key = "AimFOV", label = "FOV", min = 20, max = 500, step = 10, onChange = setAimFOV },
 						{ type = "slider", key = "AimSmooth", label = "Smoothness", min = 1, max = 100, step = 1 },
 						{ type = "toggle", key = "AimFOVCircle", label = "FOV Circle", hud = "FOV Circle" },
-						{ type = "hint", text = "Smoothness: 1 = snap, 100 = glide. Hold RMB to aim." },
+						{ type = "hint", text = "Sticky locks target until RMB release or death. Smoothness: 1 snap, 100 glide." },
 					},
 				},
 			},
