@@ -298,7 +298,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local acDebugModule = nil
-local AC_DEBUG_VERSION = "3-no-global-namecall"
+local AC_DEBUG_VERSION = "4-flush-fix"
 
 local function getAcDebugContext()
 	return {

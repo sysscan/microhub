@@ -27,7 +27,7 @@ local function getGenv()
 end
 
 local LOG_ROOT = "hub/tools/bronx3-ac-debug/logs"
-local DEBUG_VERSION = "3-no-global-namecall"
+local DEBUG_VERSION = "4-flush-fix"
 local FLUSH_INTERVAL = 1.25
 local SAMPLE_INTERVAL = 0.5
 local MARK_COOLDOWN = 0.08
@@ -173,44 +173,6 @@ local function callerHint()
 	return "unknown"
 end
 
-local function flushLog(force)
-	if not canWriteFiles() or #session.queue == 0 then
-		return true
-	end
-	local now = os.clock()
-	if not force and now - session.lastFlush < FLUSH_INTERVAL then
-		return true
-	end
-	local batch = session.queue
-	session.queue = {}
-	local ok = flushLines(batch)
-	session.lastFlush = now
-	if not ok then
-		for i = #batch, 1, -1 do
-			table.insert(session.queue, 1, batch[i])
-		end
-	end
-	return ok
-end
-
-local function push(kind, message, data)
-	session.seq += 1
-	local line = {
-		seq = session.seq,
-		t = os.date("%Y-%m-%d %H:%M:%S"),
-		epoch = os.clock(),
-		kind = kind,
-		msg = message,
-		data = data,
-		ctx = session.context,
-	}
-	table.insert(session.queue, line)
-	warn("[Bronx3ACDebug]", kind, message, data and encodeValue(data) or "")
-	if #session.queue >= 64 then
-		flushLog(true)
-	end
-end
-
 local function formatLine(entry)
 	local dataText = ""
 	if entry.data ~= nil then
@@ -255,6 +217,44 @@ local function flushLines(lines)
 		end
 	end)
 	return ok
+end
+
+local function flushLog(force)
+	if not canWriteFiles() or #session.queue == 0 then
+		return true
+	end
+	local now = os.clock()
+	if not force and now - session.lastFlush < FLUSH_INTERVAL then
+		return true
+	end
+	local batch = session.queue
+	session.queue = {}
+	local ok = flushLines(batch)
+	session.lastFlush = now
+	if not ok then
+		for i = #batch, 1, -1 do
+			table.insert(session.queue, 1, batch[i])
+		end
+	end
+	return ok
+end
+
+local function push(kind, message, data)
+	session.seq += 1
+	local line = {
+		seq = session.seq,
+		t = os.date("%Y-%m-%d %H:%M:%S"),
+		epoch = os.clock(),
+		kind = kind,
+		msg = message,
+		data = data,
+		ctx = session.context,
+	}
+	table.insert(session.queue, line)
+	warn("[Bronx3ACDebug]", kind, message, data and encodeValue(data) or "")
+	if #session.queue >= 64 then
+		flushLog(true)
+	end
 end
 
 local function getCharacterSnapshot()
