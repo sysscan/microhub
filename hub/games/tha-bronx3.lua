@@ -46,7 +46,7 @@ local FLY_AC_MAX_ABOVE_Y = 10
 local FLY_BYPASS_MAX_SPEED = 16
 local FLY_BYPASS_MAX_STEP = 0.32
 local FLY_AC_MAX_BELOW_Y = 2
-local GAME_BUILD = "16-money-farms-fix"
+local GAME_BUILD = "17-ui-v2"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -2025,204 +2025,197 @@ end
 hubUiInstance = UILib.create({
 	title = "THA BRONX 3",
 	config = Config,
-	sections = {
+	pages = {
 		{
-			title = "MOVEMENT",
-			toggles = {
-				{ key = "MovementBypass", label = "AC Bypass", hud = "AC Bypass" },
-				{ key = "SpeedBoost", label = "Speed", hud = "Speed" },
-				{ key = "JumpBoost", label = "Jump", hud = "Jump" },
-				{ key = "Fly", label = "Fly", hud = "Fly" },
-				{ key = "AlwaysSprint", label = "Sprint", hud = "Sprint" },
+			label = "Main",
+			sections = {
+				{
+					title = "MOVEMENT",
+					items = {
+						{ type = "toggle", key = "MovementBypass", label = "AC Bypass", hud = "AC Bypass" },
+						{ type = "toggle", key = "SpeedBoost", label = "Speed", hud = "Speed" },
+						{ type = "toggle", key = "JumpBoost", label = "Jump", hud = "Jump" },
+						{ type = "toggle", key = "Fly", label = "Fly", hud = "Fly" },
+						{ type = "toggle", key = "AlwaysSprint", label = "Sprint", hud = "Sprint" },
+						{
+							type = "slider",
+							key = "WalkSpeed",
+							label = "Walk Speed",
+							min = 16,
+							max = 120,
+							step = 2,
+							onChange = function(value)
+								BOOST_WALK_SPEED = value
+							end,
+						},
+						{
+							type = "slider",
+							key = "JumpPower",
+							label = "Jump Power",
+							min = 50,
+							max = 200,
+							step = 5,
+							onChange = function(value)
+								BOOST_JUMP_POWER = value
+							end,
+						},
+						{ type = "slider", key = "FlySpeed", label = "Fly Speed", min = 16, max = 200, step = 4 },
+						{ type = "slider", key = "RunSpeed", label = "Run Speed", min = 16, max = 32, step = 1 },
+					},
+				},
+				{
+					title = "SURVIVAL",
+					items = {
+						{ type = "toggle", key = "NoInjured", label = "No Injured", hud = "No Injured" },
+						{ type = "toggle", key = "NoSleep", label = "No Sleep", hud = "No Sleep" },
+						{ type = "toggle", key = "NoHunger", label = "No Hunger", hud = "No Hunger" },
+					},
+				},
+				{
+					title = "COMBAT",
+					items = {
+						{ type = "toggle", key = "InstantEquip", label = "Inst Equip", hud = "Inst Equip" },
+						{ type = "toggle", key = "GunMods", label = "Gun Mods", hud = "Gun Mods" },
+						{ type = "toggle", key = "ShootBypass", label = "Shoot Bypass", hud = "Shoot Bypass" },
+						{ type = "toggle", key = "NoFallRagdoll", label = "No Fall Rag", hud = "No Fall Rag" },
+						{ type = "toggle", key = "FullRagdoll", label = "Anti Ragdoll", hud = "Anti Ragdoll" },
+					},
+				},
 			},
 		},
 		{
-			title = "SURVIVAL",
-			toggles = {
-				{ key = "NoInjured", label = "No Injured", hud = "No Injured" },
-				{ key = "NoSleep", label = "No Sleep", hud = "No Sleep" },
-				{ key = "NoHunger", label = "No Hunger", hud = "No Hunger" },
+			label = "Farm",
+			sections = {
+				{
+					title = "AUTOFARM",
+					items = {
+						{ type = "toggle", key = "StudioFarm", label = "Studio Farm", hud = "Studio Farm" },
+					},
+				},
 			},
 		},
 		{
-			title = "COMBAT",
-			toggles = {
-				{ key = "InstantEquip", label = "Inst Equip", hud = "Inst Equip" },
-				{ key = "GunMods", label = "Gun Mods", hud = "Gun Mods" },
-				{ key = "ShootBypass", label = "Shoot Bypass", hud = "Shoot Bypass" },
-				{ key = "NoFallRagdoll", label = "No Fall Rag", hud = "No Fall Rag" },
-				{ key = "FullRagdoll", label = "Anti Ragdoll", hud = "Anti Ragdoll" },
+			label = "Money",
+			sections = {
+				{
+					title = "TELEPORTS",
+					items = {
+						{
+							type = "button",
+							id = "tpSell",
+							label = "TP IceFruit Sell",
+							onClick = function()
+								teleportToNamed("IceFruit Sell", function()
+									return findMapObject("IceFruit Sell")
+								end)
+							end,
+						},
+						{
+							type = "button",
+							id = "tpWash",
+							label = "TP Washer",
+							onClick = function()
+								teleportToNamed("WashingMachine", function()
+									return findMapObject("WashingMachine")
+								end)
+							end,
+						},
+						{
+							type = "button",
+							id = "tpStudio",
+							label = "TP Studio",
+							onClick = function()
+								teleportToNamed("Studio", function()
+									local studioPay = findMapObject("StudioPay")
+									return studioPay and findPath(studioPay, "Money", "StudioPay1")
+								end)
+							end,
+						},
+						{ type = "button", id = "tpPot", label = "TP Free Pot", onClick = teleportToFreePot },
+					},
+				},
+				{
+					title = "FARMS",
+					items = {
+						{
+							type = "button",
+							id = "washMoney",
+							label = "Wash Money",
+							onClick = function()
+								task.spawn(runWashMoney)
+							end,
+						},
+						{ type = "button", id = "buySupplies", label = "Buy Kool-Aid", onClick = runBuySupplies },
+						{
+							type = "button",
+							id = "withdraw2750",
+							label = "Withdraw $2746",
+							onClick = function()
+								if withdrawCash(KOOL_AID_COST) then
+									notify("Withdrew " .. formatMoney(KOOL_AID_COST) .. " from bank.", "Bank", 4)
+								else
+									notify("Bank withdraw failed.", "Bank", 5)
+								end
+							end,
+						},
+						{
+							type = "button",
+							id = "koolAidFarm",
+							label = "Kool-Aid Farm",
+							getLabel = function()
+								return koolAidFarmRunning and "Kool-Aid Farm (running...)" or "Kool-Aid Farm"
+							end,
+							canClick = function()
+								return not koolAidFarmRunning
+							end,
+							onClick = function()
+								task.spawn(runKoolAidFarm)
+							end,
+						},
+						{
+							type = "button",
+							id = "ltkDupe",
+							label = "LTK Money Dupe",
+							getLabel = function()
+								return ltkDupeRunning and "LTK Dupe (running...)" or "LTK Money Dupe"
+							end,
+							canClick = function()
+								return not ltkDupeRunning
+							end,
+							onClick = function()
+								task.spawn(runLtkMoneyDupe)
+							end,
+						},
+						{
+							type = "button",
+							id = "fullCycle",
+							label = "Full Money Cycle",
+							getLabel = function()
+								return fullCycleRunning and "Full Cycle (running...)" or "Full Money Cycle"
+							end,
+							canClick = function()
+								return not fullCycleRunning and not koolAidFarmRunning and not ltkDupeRunning
+							end,
+							onClick = runFullMoneyCycle,
+						},
+					},
+				},
 			},
 		},
 		{
-			title = "AUTOFARM",
-			toggles = {
-				{ key = "StudioFarm", label = "Studio Farm", hud = "Studio Farm" },
-			},
-		},
-		{
-			title = "UTILITIES",
-			toggles = {
-				{ key = "InstantPrompts", label = "Inst Prompts", hud = "Inst Prompts" },
-				{ key = "ACDebug", label = "AC Debug", hud = "AC Debug" },
-				{ key = "ShowHUD", label = "Module HUD", hud = nil },
-			},
-		},
-	},
-	footer = {
-		items = {
-			{
-				type = "slider",
-				key = "WalkSpeed",
-				label = "Walk Speed",
-				step = 2,
-				min = 16,
-				max = 120,
-				onChange = function(value)
-					BOOST_WALK_SPEED = value
-				end,
-			},
-			{
-				type = "slider",
-				key = "JumpPower",
-				label = "Jump Power",
-				step = 5,
-				min = 50,
-				max = 200,
-				onChange = function(value)
-					BOOST_JUMP_POWER = value
-				end,
-			},
-			{
-				type = "slider",
-				key = "FlySpeed",
-				label = "Fly Speed",
-				step = 4,
-				min = 16,
-				max = 200,
-			},
-			{
-				type = "slider",
-				key = "RunSpeed",
-				label = "Run Speed",
-				step = 1,
-				min = 16,
-				max = 32,
-			},
-			{
-				type = "button",
-				id = "tpSell",
-				label = "TP IceFruit Sell",
-				onClick = function()
-					teleportToNamed("IceFruit Sell", function()
-						return findMapObject("IceFruit Sell")
-					end)
-				end,
-			},
-			{
-				type = "button",
-				id = "tpWash",
-				label = "TP Washer",
-				onClick = function()
-					teleportToNamed("WashingMachine", function()
-						return findMapObject("WashingMachine")
-					end)
-				end,
-			},
-			{
-				type = "button",
-				id = "tpStudio",
-				label = "TP Studio",
-				onClick = function()
-					teleportToNamed("Studio", function()
-						local studioPay = findMapObject("StudioPay")
-						return studioPay and findPath(studioPay, "Money", "StudioPay1")
-					end)
-				end,
-			},
-			{
-				type = "button",
-				id = "tpPot",
-				label = "TP Free Pot",
-				onClick = teleportToFreePot,
-			},
-			{
-				type = "button",
-				id = "washMoney",
-				label = "Wash Money",
-				onClick = function()
-					task.spawn(runWashMoney)
-				end,
-			},
-			{
-				type = "button",
-				id = "buySupplies",
-				label = "Buy Kool-Aid",
-				onClick = runBuySupplies,
-			},
-			{
-				type = "button",
-				id = "withdraw2750",
-				label = "Withdraw $2750",
-				onClick = function()
-					if withdrawCash(KOOL_AID_COST) then
-						notify("Withdrew " .. formatMoney(KOOL_AID_COST) .. " from bank.", "Bank", 4)
-					else
-						notify("Bank withdraw failed.", "Bank", 5)
-					end
-				end,
-			},
-			{
-				type = "button",
-				id = "koolAidFarm",
-				label = "Kool-Aid Farm",
-				getLabel = function()
-					return koolAidFarmRunning and "Kool-Aid Farm (running...)" or "Kool-Aid Farm"
-				end,
-				canClick = function()
-					return not koolAidFarmRunning
-				end,
-				onClick = function()
-					task.spawn(runKoolAidFarm)
-				end,
-			},
-			{
-				type = "button",
-				id = "ltkDupe",
-				label = "LTK Money Dupe",
-				getLabel = function()
-					return ltkDupeRunning and "LTK Dupe (running...)" or "LTK Money Dupe"
-				end,
-				canClick = function()
-					return not ltkDupeRunning
-				end,
-				onClick = function()
-					task.spawn(runLtkMoneyDupe)
-				end,
-			},
-			{
-				type = "button",
-				id = "fullCycle",
-				label = "Full Money Cycle",
-				getLabel = function()
-					return fullCycleRunning and "Full Cycle (running...)" or "Full Money Cycle"
-				end,
-				canClick = function()
-					return not fullCycleRunning and not koolAidFarmRunning and not ltkDupeRunning
-				end,
-				onClick = runFullMoneyCycle,
-			},
-			{
-				type = "hint",
-				text = "AC Debug → hub/tools/bronx3-ac-debug/logs/",
-			},
-			{
-				type = "hint",
-				text = "WASD+Space/Ctrl fly | Sprint toggle = always run",
-			},
-			{
-				type = "hint",
-				text = "LastACPos nil = bypass active",
+			label = "Misc",
+			sections = {
+				{
+					title = "UTILITIES",
+					items = {
+						{ type = "toggle", key = "InstantPrompts", label = "Inst Prompts", hud = "Inst Prompts" },
+						{ type = "toggle", key = "ACDebug", label = "AC Debug", hud = "AC Debug" },
+						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
+						{ type = "hint", text = "AC Debug → hub/tools/bronx3-ac-debug/logs/" },
+						{ type = "hint", text = "WASD+Space/Ctrl fly | Sprint = always run" },
+						{ type = "hint", text = "LastACPos nil = bypass active" },
+					},
+				},
 			},
 		},
 	},

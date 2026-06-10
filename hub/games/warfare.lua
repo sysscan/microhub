@@ -43,6 +43,10 @@ local Config = {
 	FullBright = false,
 	ShowHUD = true,
 	FOV = 200,
+	AimPart = "Head",
+	ESPEnemyColor = Color3.fromRGB(255, 75, 75),
+	ESPAllyColor = Color3.fromRGB(75, 220, 120),
+	ESPNeutralColor = Color3.fromRGB(255, 220, 80),
 }
 
 local BOOST_WALK_SPEED = 28
@@ -53,14 +57,20 @@ local ZOOM_FOV = 12
 -- One client interval for every gun; TryFireOnce enforces this via nextShotTime.
 local RAPID_FIRE_UNIFIED_INTERVAL = 0.09
 
-local AimPart = "Head"
 local FOVSquared = Config.FOV * Config.FOV
 
-local TeamColors = {
-	Enemy = Color3.fromRGB(255, 75, 75),
-	Ally = Color3.fromRGB(75, 220, 120),
-	Neutral = Color3.fromRGB(255, 220, 80),
-}
+local function getTeamColor(relation)
+	if relation == "Enemy" then
+		return Config.ESPEnemyColor
+	elseif relation == "Ally" then
+		return Config.ESPAllyColor
+	end
+	return Config.ESPNeutralColor
+end
+
+local function getAimPartName()
+	return Config.AimPart or "Head"
+end
 
 local currentTarget = nil
 local killAllForcedTarget = nil
@@ -222,13 +232,13 @@ end
 
 local function getTargetColor(target)
 	if target.player then
-		return TeamColors[getTeamRelation(target.player)]
+		return getTeamColor(getTeamRelation(target.player))
 	end
 	if target.drone then
 		local teamName = target.drone:GetAttribute("Team")
-		return TeamColors[getInstanceTeamRelation(target.drone, teamName and tostring(teamName) or nil)]
+		return getTeamColor(getInstanceTeamRelation(target.drone, teamName and tostring(teamName) or nil))
 	end
-	return TeamColors.Enemy
+	return Config.ESPEnemyColor
 end
 
 local function setFOV(value)
@@ -267,62 +277,6 @@ local function clearFlightKeys()
 	end
 end
 
-local MENU_SECTIONS = {
-	{
-		title = "COMBAT",
-		toggles = {
-			{ key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-			{ key = "Teamcheck", label = "Team Check", hud = "Team Check" },
-			{ key = "NoRecoil", label = "No Recoil", hud = "No Recoil" },
-			{ key = "StableAim", label = "Stable Aim", hud = "Stable Aim" },
-			{ key = "BulletTP", label = "Bullet TP", hud = "Bullet TP" },
-		},
-	},
-	{
-		title = "WEAPON",
-		toggles = {
-			{ key = "RapidFire", label = "Rapid Fire", hud = "Rapid Fire" },
-			{ key = "InfiniteAmmo", label = "Inf Ammo", hud = "Inf Ammo" },
-			{ key = "NoJam", label = "No Jam", hud = "No Jam" },
-			{ key = "NoOverheat", label = "No Heat", hud = "No Heat" },
-			{ key = "GrenadeSpam", label = "Grenade", hud = "Grenade" },
-			{ key = "RocketSpam", label = "Rocket", hud = "Rocket" },
-		},
-	},
-	{
-		title = "MOVEMENT",
-		toggles = {
-			{ key = "Flight", label = "Flight", hud = "Flight" },
-			{ key = "SpeedBoost", label = "Speed", hud = "Speed" },
-			{ key = "InfiniteStamina", label = "Stamina", hud = "Stamina" },
-		},
-	},
-	{
-		title = "VISUAL",
-		toggles = {
-			{ key = "ESP", label = "ESP", hud = "ESP" },
-			{ key = "ESPAllies", label = "ESP Allies", hud = "ESP Allies" },
-			{ key = "Tracer", label = "Tracer", hud = "Tracer" },
-			{ key = "FOVCircle", label = "FOV Circle", hud = "FOV Circle" },
-			{ key = "ThermalESP", label = "Thermal", hud = "Thermal" },
-			{ key = "HitMarkers", label = "Hit Markers", hud = "Hit Markers" },
-			{ key = "ZoomBoost", label = "Zoom", hud = "Zoom" },
-		},
-	},
-	{
-		title = "CLIENT",
-		toggles = {
-			{ key = "NVG", label = "NVG", hud = "NVG" },
-			{ key = "FishEye", label = "FishEye", hud = "FishEye" },
-			{ key = "Comtacs", label = "Comtacs", hud = "Comtacs" },
-			{ key = "NoSuppression", label = "No Suppress", hud = "No Suppress" },
-			{ key = "StripShield", label = "Strip Shield", hud = "Strip Shield" },
-			{ key = "FullBright", label = "Full Bright", hud = "Full Bright" },
-			{ key = "ShowHUD", label = "Module HUD", hud = nil },
-		},
-	},
-}
-
 local UILib = shared.__MicroHubUILib
 if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
 	error("MicroHub UI library not loaded — run hub/loader.lua", 0)
@@ -331,45 +285,119 @@ end
 local HubUI = UILib.create({
 	title = "WARFARE",
 	config = Config,
-	sections = MENU_SECTIONS,
+	pages = {
+		{
+			label = "Combat",
+			sections = {
+				{
+					title = "AIM",
+					items = {
+						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
+						{ type = "toggle", key = "Teamcheck", label = "Team Check", hud = "Team Check" },
+						{ type = "toggle", key = "NoRecoil", label = "No Recoil", hud = "No Recoil" },
+						{ type = "toggle", key = "StableAim", label = "Stable Aim", hud = "Stable Aim" },
+						{ type = "toggle", key = "BulletTP", label = "Bullet TP", hud = "Bullet TP" },
+						{
+							type = "select",
+							key = "AimPart",
+							label = "Aim Bone",
+							options = { "Head", "UpperTorso", "HumanoidRootPart", "LowerTorso" },
+						},
+						{ type = "slider", key = "FOV", label = "Silent FOV", min = 50, max = 600, step = 25, onChange = setFOV },
+					},
+				},
+				{
+					title = "WEAPON",
+					items = {
+						{ type = "toggle", key = "RapidFire", label = "Rapid Fire", hud = "Rapid Fire" },
+						{ type = "toggle", key = "InfiniteAmmo", label = "Inf Ammo", hud = "Inf Ammo" },
+						{ type = "toggle", key = "NoJam", label = "No Jam", hud = "No Jam" },
+						{ type = "toggle", key = "NoOverheat", label = "No Heat", hud = "No Heat" },
+						{ type = "toggle", key = "GrenadeSpam", label = "Grenade", hud = "Grenade" },
+						{ type = "toggle", key = "RocketSpam", label = "Rocket", hud = "Rocket" },
+					},
+				},
+			},
+		},
+		{
+			label = "Move",
+			sections = {
+				{
+					title = "MOVEMENT",
+					items = {
+						{ type = "toggle", key = "Flight", label = "Flight", hud = "Flight" },
+						{ type = "toggle", key = "SpeedBoost", label = "Speed", hud = "Speed" },
+						{ type = "toggle", key = "InfiniteStamina", label = "Stamina", hud = "Stamina" },
+						{ type = "hint", text = "Flight: WASD / Space / Ctrl / Shift" },
+					},
+				},
+			},
+		},
+		{
+			label = "Visual",
+			sections = {
+				{
+					title = "ESP",
+					items = {
+						{ type = "toggle", key = "ESP", label = "ESP", hud = "ESP" },
+						{ type = "toggle", key = "ESPAllies", label = "ESP Allies", hud = "ESP Allies" },
+						{ type = "toggle", key = "Tracer", label = "Tracer", hud = "Tracer" },
+						{ type = "toggle", key = "FOVCircle", label = "FOV Circle", hud = "FOV Circle" },
+						{ type = "toggle", key = "ThermalESP", label = "Thermal", hud = "Thermal" },
+						{ type = "toggle", key = "HitMarkers", label = "Hit Markers", hud = "Hit Markers" },
+						{ type = "toggle", key = "ZoomBoost", label = "Zoom", hud = "Zoom" },
+						{ type = "label", text = "ESP colors — tap swatch" },
+						{ type = "color", key = "ESPEnemyColor", label = "Enemy" },
+						{ type = "color", key = "ESPAllyColor", label = "Ally" },
+						{ type = "color", key = "ESPNeutralColor", label = "Neutral" },
+					},
+				},
+			},
+		},
+		{
+			label = "Client",
+			sections = {
+				{
+					title = "MISC",
+					items = {
+						{ type = "toggle", key = "NVG", label = "NVG", hud = "NVG" },
+						{ type = "toggle", key = "FishEye", label = "FishEye", hud = "FishEye" },
+						{ type = "toggle", key = "Comtacs", label = "Comtacs", hud = "Comtacs" },
+						{ type = "toggle", key = "NoSuppression", label = "No Suppress", hud = "No Suppress" },
+						{ type = "toggle", key = "StripShield", label = "Strip Shield", hud = "Strip Shield" },
+						{ type = "toggle", key = "FullBright", label = "Full Bright", hud = "Full Bright" },
+						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
+					},
+				},
+				{
+					title = "ACTIONS",
+					items = {
+						{
+							type = "button",
+							id = "killAll",
+							label = "Kill All",
+							getLabel = function()
+								return killAllRunning and "Kill All (running...)" or "Kill All"
+							end,
+							canClick = function()
+								return not killAllRunning
+							end,
+							onClick = function()
+								if runKillAll then
+									task.spawn(runKillAll)
+								end
+							end,
+						},
+					},
+				},
+			},
+		},
+	},
 	onMenuVisible = function(visible)
 		if visible and Config.Flight then
 			clearFlightKeys()
 		end
 	end,
-	footer = {
-		items = {
-			{
-				type = "slider",
-				key = "FOV",
-				label = "Silent FOV",
-				step = 25,
-				min = 50,
-				max = 600,
-				onChange = setFOV,
-			},
-			{
-				type = "button",
-				id = "killAll",
-				label = "Kill All",
-				getLabel = function()
-					return killAllRunning and "Kill All (running...)" or "Kill All"
-				end,
-				canClick = function()
-					return not killAllRunning
-				end,
-				onClick = function()
-					if runKillAll then
-						task.spawn(runKillAll)
-					end
-				end,
-			},
-			{
-				type = "hint",
-				text = "Flight: WASD / Space / Ctrl / Shift",
-			},
-		},
-	},
 	hud = { showKey = "ShowHUD" },
 })
 
@@ -782,7 +810,7 @@ local function drawPlayerEsp(player, character, humanoid)
 		return
 	end
 
-	local color = TeamColors[relation]
+	local color = getTeamColor(relation)
 	local topLeft, boxSize = getBoundingBox2D(character)
 	if not topLeft then
 		local entry = espCache[player]
@@ -899,7 +927,7 @@ local function updateDroneESP()
 			continue
 		end
 
-		local color = TeamColors[relation]
+		local color = getTeamColor(relation)
 		local topLeft, boxSize = getBoundingBox2D(model)
 		if not topLeft then
 			local entry = droneEspCache[model]
@@ -991,7 +1019,7 @@ local function buildTargetFromPlayer(player)
 		return nil
 	end
 
-	local part = character:FindFirstChild(AimPart) or character:FindFirstChild("HumanoidRootPart")
+	local part = character:FindFirstChild(getAimPartName()) or character:FindFirstChild("HumanoidRootPart")
 	if not part then
 		return nil
 	end
@@ -1239,7 +1267,7 @@ local function getClosestTarget()
 		end
 
 		local character = player.Character
-		local part = character:FindFirstChild(AimPart) or character:FindFirstChild("HumanoidRootPart")
+		local part = character:FindFirstChild(getAimPartName()) or character:FindFirstChild("HumanoidRootPart")
 		if not part then
 			continue
 		end

@@ -33,9 +33,42 @@ hub/
 ├── runtime.lua     # Fetch + module lifecycle (__MicroHub)
 ├── config.lua      # Hub version
 ├── manifest.lua    # PlaceId → game module
-├── lib/ui.lua      # Shared Drawing UI
+├── lib/ui.lua      # Shared Drawing UI v2 (tabs, sliders, selects, colors)
 ├── tools/          # Optional modules (AC debug)
 └── games/          # Per-game scripts
+```
+
+## UI v2 (`lib/ui.lua`)
+
+- **PC:** RightShift toggles menu, drag header, mouse wheel scroll, click/drag sliders
+- **Mobile:** ☰ floating button, touch input, larger controls, single-column layout
+- **Tabs:** `pages = { { label = "Combat", sections = { ... } } }`
+- **Items:** `toggle`, `slider`, `select`, `color`, `number`, `button`, `hint`, `label`, `separator`
+- **Legacy:** `sections` + `toggles` + `footer` still work (auto-converted)
+
+```lua
+UILib.create({
+  title = "MY GAME",
+  config = Config,
+  pages = {
+    {
+      label = "Visual",
+      sections = {
+        {
+          title = "ESP",
+          items = {
+            { type = "toggle", key = "ESP", label = "ESP", hud = "ESP" },
+            { type = "color", key = "ESPEnemyColor", label = "Enemy" },
+            { type = "select", key = "AimPart", label = "Bone", options = { "Head", "Torso" } },
+            { type = "slider", key = "FOV", label = "FOV", min = 50, max = 400, step = 10 },
+          },
+        },
+      },
+    },
+  },
+  onToggle = function(key, value) end,
+  onChange = function(key, value, itemType) end,
+})
 ```
 
 ## Add a game

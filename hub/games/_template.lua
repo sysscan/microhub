@@ -11,24 +11,30 @@ end
 
 local Config = {
 	ExampleFeature = false,
+	ExampleMode = "A",
+	ExampleValue = 50,
+	ExampleColor = Color3.fromRGB(99, 102, 241),
 	ShowHUD = true,
 }
 
 local HubUI = UILib.create({
 	title = "MY GAME",
 	config = Config,
-	sections = {
+	pages = {
 		{
-			title = "FEATURES",
-			toggles = {
-				{ key = "ExampleFeature", label = "Example", hud = "Example" },
-				{ key = "ShowHUD", label = "Module HUD", hud = nil },
+			label = "Main",
+			sections = {
+				{
+					title = "FEATURES",
+					items = {
+						{ type = "toggle", key = "ExampleFeature", label = "Example", hud = "Example" },
+						{ type = "select", key = "ExampleMode", label = "Mode", options = { "A", "B", "C" } },
+						{ type = "slider", key = "ExampleValue", label = "Power", min = 0, max = 100, step = 5 },
+						{ type = "color", key = "ExampleColor", label = "Accent" },
+						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
+					},
+				},
 			},
-		},
-	},
-	footer = {
-		items = {
-			{ type = "hint", text = "RightShift toggles menu" },
 		},
 	},
 	hud = { showKey = "ShowHUD" },
@@ -39,4 +45,4 @@ local HubUI = UILib.create({
 	end,
 })
 
-print("[MicroHub] template loaded — replace Config, sections, and onToggle with your game logic")
+print("[MicroHub] template loaded — replace pages, Config, and callbacks with your game logic")
