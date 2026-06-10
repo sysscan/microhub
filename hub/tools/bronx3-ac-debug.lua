@@ -300,7 +300,8 @@ local function installKickHook()
 		return
 	end
 
-	local original = hookfunction(
+	local originalKick
+	originalKick = hookfunction(
 		kickFn,
 		newcclosure(function(self, ...)
 			if self == LocalPlayer then
@@ -310,10 +311,10 @@ local function installKickHook()
 					snapshot = getCharacterSnapshot(),
 				})
 			end
-			return original(self, ...)
+			return originalKick(self, ...)
 		end, "Bronx3ACDebug.Kick")
 	)
-	session.hooks.kick = original
+	session.hooks.kick = originalKick
 	push("HOOK", "LocalPlayer.Kick hooked")
 end
 
@@ -334,7 +335,8 @@ local function installNamecallHook()
 		push("HOOK", "game metatable unavailable")
 		return
 	end
-	local original = hookfunction(
+	local originalNamecall
+	originalNamecall = hookfunction(
 		mt.__namecall,
 		newcclosure(function(self, ...)
 			local method = getnamecallmethod()
@@ -344,7 +346,7 @@ local function installNamecallHook()
 					caller = callerHint(),
 					snapshot = getCharacterSnapshot(),
 				})
-			elseif method == "FireServer" and self:IsA("RemoteEvent") then
+			elseif method == "FireServer" and typeof(self.IsA) == "function" and self:IsA("RemoteEvent") then
 				local name = self.Name
 				if shouldLogRemote(name, self:GetFullName()) then
 					push("REMOTE", "FireServer " .. self:GetFullName(), {
@@ -352,7 +354,7 @@ local function installNamecallHook()
 						caller = callerHint(),
 					})
 				end
-			elseif method == "InvokeServer" and self:IsA("RemoteFunction") then
+			elseif method == "InvokeServer" and typeof(self.IsA) == "function" and self:IsA("RemoteFunction") then
 				local name = self.Name
 				if shouldLogRemote(name, self:GetFullName()) then
 					push("REMOTE", "InvokeServer " .. self:GetFullName(), {
@@ -361,10 +363,10 @@ local function installNamecallHook()
 					})
 				end
 			end
-			return original(self, ...)
+			return originalNamecall(self, ...)
 		end, "Bronx3ACDebug.Namecall")
 	)
-	session.hooks.namecall = original
+	session.hooks.namecall = originalNamecall
 	push("HOOK", "__namecall hooked")
 end
 
