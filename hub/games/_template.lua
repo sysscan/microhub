@@ -1,6 +1,6 @@
 --[[
 	1. Copy to games/your-game.lua
-	2. Add entry in manifest.lua with placeIds
+	2. Add entry in loader.lua GAMES with placeIds
 	3. print(game.PlaceId) in the target game to get the id
 ]]
 
