@@ -31,6 +31,7 @@ local Config = {
 	NoFallRagdoll = false,
 	FullRagdoll = false,
 	StudioFarm = false,
+	ACDebug = false,
 	ShowHUD = true,
 	WalkSpeed = 32,
 	JumpPower = 60,
@@ -293,6 +294,115 @@ local function readLastAcStatus()
 end
 
 -- ---------------------------------------------------------------------------
+-- AC debug logger (hub/tools/bronx3-ac-debug.lua → Volt workspace file)
+-- ---------------------------------------------------------------------------
+
+local acDebugModule = nil
+
+local function getAcDebugContext()
+	return {
+		fly = Config.Fly == true,
+		acBypass = Config.MovementBypass == true,
+		speedBoost = Config.SpeedBoost == true,
+		flySpeed = Config.FlySpeed,
+		walkSpeed = Config.WalkSpeed,
+	}
+end
+
+local function loadAcDebugModule()
+	if acDebugModule then
+		return acDebugModule
+	end
+	local genv = getgenv and getgenv() or _G
+	if typeof(genv.__Bronx3ACDebug) == "table" then
+		acDebugModule = genv.__Bronx3ACDebug
+		return acDebugModule
+	end
+
+	local function compileAndRun(source)
+		local ok, fn = pcall(loadstring, source, "bronx3-ac-debug")
+		if not ok or typeof(fn) ~= "function" then
+			return nil, fn
+		end
+		local runOk, result = pcall(fn)
+		if not runOk then
+			return nil, result
+		end
+		return genv.__Bronx3ACDebug or result
+	end
+
+	local root = genv.HUB_LOCAL_ROOT or "hub"
+	local path = root .. "/tools/bronx3-ac-debug.lua"
+	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(path) then
+		acDebugModule = compileAndRun(readfile(path))
+		if acDebugModule then
+			return acDebugModule
+		end
+	end
+
+	if typeof(request) == "function" then
+		local base = genv.HUB_BASE or "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
+		local res = request({
+			Url = base .. "/tools/bronx3-ac-debug.lua?t=" .. tostring(os.time()),
+			Method = "GET",
+		})
+		if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
+			acDebugModule = compileAndRun(res.Body)
+			if acDebugModule then
+				return acDebugModule
+			end
+		end
+	end
+
+	warn("[ThaBronx3] AC debug script unavailable (local + remote fetch failed)")
+	return nil
+end
+
+local function acDebugMark(tag, detail)
+	if not Config.ACDebug then
+		return
+	end
+	local mod = loadAcDebugModule()
+	if mod and typeof(mod.mark) == "function" then
+		mod.mark(tag, detail)
+	end
+end
+
+local function applyAcDebug()
+	local mod = loadAcDebugModule()
+	if not mod then
+		if Config.ACDebug then
+			notify("AC debug script not found in Volt workspace (hub/tools/).", "AC Debug", 6)
+			Config.ACDebug = false
+		end
+		return
+	end
+	if Config.ACDebug then
+		if typeof(mod.start) == "function" then
+			mod.start(getAcDebugContext())
+		end
+		local logPath = typeof(mod.getLogPath) == "function" and mod.getLogPath() or nil
+		if logPath then
+			notify("Logging to " .. logPath, "AC Debug", 8)
+		end
+	else
+		if typeof(mod.stop) == "function" then
+			mod.stop()
+		end
+	end
+end
+
+local function syncAcDebugContext()
+	if not Config.ACDebug then
+		return
+	end
+	local mod = loadAcDebugModule()
+	if mod and typeof(mod.setContext) == "function" then
+		mod.setContext(getAcDebugContext())
+	end
+end
+
+-- ---------------------------------------------------------------------------
 -- Movement bypass (Movement Disabler.luau)
 -- ---------------------------------------------------------------------------
 
@@ -361,6 +471,7 @@ local function applyMovementBypass(character)
 		if root.Anchored then
 			root.Anchored = false
 		end
+		acDebugMark("bypass_pre", { anchored = root.Anchored })
 	end)
 
 	bypassSession.postConn = RunService.PostSimulation:Connect(function()
@@ -377,6 +488,7 @@ local function applyMovementBypass(character)
 		if not root.Anchored then
 			root.Anchored = true
 		end
+		acDebugMark("bypass_post", { anchored = root.Anchored })
 	end)
 end
 
@@ -1215,6 +1327,13 @@ local function applyFly(deltaTime)
 		root.CFrame += move.Unit * Config.FlySpeed * deltaTime
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
+		acDebugMark("fly_move", {
+			speed = Config.FlySpeed,
+			delta = deltaTime,
+			move = move.Magnitude,
+			pos = root.Position,
+			anchored = root.Anchored,
+		})
 	end
 end
 
@@ -1437,6 +1556,7 @@ local HubUI = UILib.create({
 			title = "UTILITIES",
 			toggles = {
 				{ key = "InstantPrompts", label = "Inst Prompts", hud = "Inst Prompts" },
+				{ key = "ACDebug", label = "AC Debug", hud = "AC Debug" },
 				{ key = "ShowHUD", label = "Module HUD", hud = nil },
 			},
 		},
@@ -1585,6 +1705,10 @@ local HubUI = UILib.create({
 			},
 			{
 				type = "hint",
+				text = "AC Debug → hub/tools/bronx3-ac-debug/logs/",
+			},
+			{
+				type = "hint",
 				text = "WASD+Space/Ctrl fly | Shift sprint",
 			},
 			{
@@ -1625,6 +1749,8 @@ local HubUI = UILib.create({
 			applyNoInjuredHook()
 		elseif key == "StudioFarm" then
 			applyStudioFarm()
+		elseif key == "ACDebug" then
+			applyAcDebug()
 		end
 	end,
 })
@@ -1646,6 +1772,7 @@ LocalPlayer.PlayerGui.ChildAdded:Connect(function(child)
 end)
 
 RunService.Heartbeat:Connect(function(deltaTime)
+	syncAcDebugContext()
 	applySurvivalBypasses()
 	applyMovementBoosts()
 	applyAlwaysSprint()

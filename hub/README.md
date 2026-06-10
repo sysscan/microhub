@@ -58,6 +58,23 @@ The loader pulls from GitHub by default. If you added a game locally but have no
 
 The loader also has a built-in fallback entry for Tha Bronx 3 (`16472538603`), but the game script file must still exist locally or on GitHub.
 
+## Tha Bronx 3 AC debug
+
+When fly/movement kicks you, enable **AC Debug** in the Tha Bronx 3 hub menu (UTILITIES). It logs to the [Volt workspace](https://docs.voltbz.net/docs/filesystem) via `appendfile`:
+
+```
+hub/tools/bronx3-ac-debug/logs/session-YYYYMMDD-HHMMSS.log
+```
+
+Standalone (before hub):
+
+```lua
+getgenv().__Bronx3ACDebugAutoStart = true
+dofile("hub/tools/bronx3-ac-debug.lua")
+```
+
+Look for `KICK`, `REMOTE`, `ATTR! LastACPos`, `ROOT Large CFrame delta`, and `MARK fly_move` / `bypass_pre` / `bypass_post` lines right before a kick.
+
 ## Add a game
 
 1. Add `games/my-game.lua`
