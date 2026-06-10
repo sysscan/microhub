@@ -6,74 +6,65 @@ Loads game scripts by `game.PlaceId`.
 
 ```
 hub/
-├── loader.lua      # Entry point — fetches config, manifest, UI lib, game script
-├── config.lua      # Hub name + GitHub raw base URL
+├── loader.lua      # Entry point
+├── runtime.lua     # Remote fetch, version checks, module lifecycle (__MicroHub)
+├── config.lua      # Hub version + module version markers
 ├── manifest.lua    # PlaceId → game module mapping
-├── lib/ui.lua      # Shared Drawing UI library (loaded into shared.__MicroHubUILib)
+├── lib/ui.lua      # Shared Drawing UI (shared.__MicroHubUILib)
+├── tools/          # Optional modules (AC debug, etc.)
 └── games/          # Per-game scripts
 ```
 
-Game scripts use the shared UI via `shared.__MicroHubUILib.create({ ... })`. See `games/_template.lua`.
+## Loader (Volt) — use this
 
-## Loader (Volt)
-
-Per [Volt docs](https://docs.voltbz.net/docs/miscellaneous), use `request` for HTTP:
+**Default: remote-first.** Stale `hub/` files in your Volt workspace are ignored unless you opt into local dev mode.
 
 ```lua
-local function stripBom(s)
-	while #s >= 3 and s:byte(1) == 0xEF and s:byte(2) == 0xBB and s:byte(3) == 0xBF do
-		s = s:sub(4)
-	end
-	return s
-end
-
 local r = request({
 	Url = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua?t=" .. os.time(),
 	Method = "GET",
 })
 assert(r.Success, r.StatusMessage or "download failed")
-local fn = loadstring(stripBom(r.Body), "MicroHub.Loader")
-assert(fn, "compile failed")
-fn()
+loadstring(r.Body, "MicroHub.Loader")()
 ```
 
-Or run `load.lua` from the repo root if your workspace is set to this project.
+Re-run that snippet anytime to reload — old modules (including AC debug Heartbeats) are stopped first.
 
-If you still see `U+feff` errors, your executor is loading a stale local copy via `readfile`. Either delete `hub/games/warfare.lua` from the executor workspace, or set `getgenv().HUB_FORCE_REMOTE = true` before running the loader.
+### Flags
 
-### Unsupported PlaceId
+| Flag | Effect |
+|------|--------|
+| *(none)* | Fetch all hub files from GitHub; update local cache after fetch |
+| `getgenv().HUB_FORCE_REMOTE = true` | Same as default; ignores stale local copies |
+| `getgenv().HUB_USE_LOCAL = true` | Dev mode: read from executor workspace `hub/` folder |
+| `getgenv().HUB_LOCAL_ROOT = "path"` | Workspace path to hub folder (default `hub`) |
 
-The loader pulls from GitHub by default. If you added a game locally but have not pushed yet, either:
+### Local development
 
-1. **Use local files** — copy the whole `hub/` folder into your executor workspace and run `load.lua` from the repo root, or set:
-   ```lua
-   getgenv().HUB_USE_LOCAL = true
-   getgenv().HUB_LOCAL_ROOT = "Warfare/hub" -- path to hub folder in workspace
-   ```
-2. **Use remote (default)** — `load.lua` now pulls the latest loader from GitHub automatically. If you still see unsupported PlaceId, stale local `hub/manifest.lua` may be overriding remote. Force remote:
-   ```lua
-   getgenv().HUB_FORCE_REMOTE = true
-   ```
-3. **Push to GitHub** — commit and push `hub/manifest.lua`, `hub/loader.lua`, and `hub/games/tha-bronx3.lua` so the remote loader can fetch them.
+Copy `hub/` into your executor workspace, then either:
 
-The loader also has a built-in fallback entry for Tha Bronx 3 (`16472538603`), but the game script file must still exist locally or on GitHub.
+```lua
+getgenv().HUB_USE_LOCAL = true
+dofile("load.lua")  -- from repo root
+```
+
+or set `HUB_USE_LOCAL` and run the remote loader snippet (loader still bootstraps from GitHub unless local is set).
+
+## Versioning
+
+Pinned module versions live in `config.lua` → `ModuleVersions`. The runtime refuses stale local files missing the version marker and always refetches from GitHub when in doubt.
+
+When you change a tool script (e.g. AC debug), bump its `DEBUG_VERSION` string **and** the matching entry in `config.lua`.
 
 ## Tha Bronx 3 AC debug
 
-When fly/movement kicks you, enable **AC Debug** in the Tha Bronx 3 hub menu (UTILITIES). It logs to the [Volt workspace](https://docs.voltbz.net/docs/filesystem) via `appendfile`:
+Enable **AC Debug** in UTILITIES. Logs go to:
 
 ```
 hub/tools/bronx3-ac-debug/logs/session-YYYYMMDD-HHMMSS.log
 ```
 
-Standalone (before hub):
-
-```lua
-getgenv().__Bronx3ACDebugAutoStart = true
-dofile("hub/tools/bronx3-ac-debug.lua")
-```
-
-Look for `KICK`, `REMOTE`, `ATTR! LastACPos`, `ROOT Large CFrame delta`, and `MARK fly_move` / `bypass_pre` / `bypass_post` lines right before a kick.
+Loaded via `__MicroHub.loadModule` — no separate fetch logic in the game script.
 
 ## Add a game
 
@@ -88,4 +79,4 @@ Look for `KICK`, `REMOTE`, `ATTR! LastACPos`, `ROOT Large CFrame delta`, and `MA
 },
 ```
 
-3. Get PlaceId in-game: `print(game.PlaceId)`
+3. Push to GitHub — remote loader picks it up automatically.

@@ -34,7 +34,7 @@ do
 end
 
 local LOG_ROOT = "hub/tools/bronx3-ac-debug/logs"
-local DEBUG_VERSION = "5-orphan-stop"
+local DEBUG_VERSION = "6-inline-flush"
 local FLUSH_INTERVAL = 1.25
 local SAMPLE_INTERVAL = 0.5
 local MARK_COOLDOWN = 0.08
@@ -206,26 +206,6 @@ local function formatLine(entry)
 	)
 end
 
-local function flushLines(lines)
-	if not canWriteFiles() or #lines == 0 then
-		return false
-	end
-	ensureLogDir()
-	local payload = {}
-	for _, entry in ipairs(lines) do
-		table.insert(payload, formatLine(entry))
-	end
-	local text = table.concat(payload)
-	local ok = pcall(function()
-		if session.logPath and typeof(isfile) == "function" and isfile(session.logPath) then
-			appendfile(session.logPath, text)
-		else
-			writefile(session.logPath, text)
-		end
-	end)
-	return ok
-end
-
 local function flushLog(force)
 	if not canWriteFiles() or #session.queue == 0 then
 		return true
@@ -236,7 +216,19 @@ local function flushLog(force)
 	end
 	local batch = session.queue
 	session.queue = {}
-	local ok = flushLines(batch)
+	ensureLogDir()
+	local payload = {}
+	for _, entry in ipairs(batch) do
+		table.insert(payload, formatLine(entry))
+	end
+	local text = table.concat(payload)
+	local ok = pcall(function()
+		if session.logPath and typeof(isfile) == "function" and isfile(session.logPath) then
+			appendfile(session.logPath, text)
+		else
+			writefile(session.logPath, text)
+		end
+	end)
 	session.lastFlush = now
 	if not ok then
 		for i = #batch, 1, -1 do
@@ -510,7 +502,7 @@ function Bronx3ACDebug.start(ctx)
 		return Bronx3ACDebug
 	end
 
-	warn("[Bronx3ACDebug] starting version", DEBUG_VERSION)
+	warn("[Bronx3ACDebug] build", DEBUG_VERSION)
 
 	ensureLogDir()
 	session.logPath = LOG_ROOT .. "/session-" .. os.date("%Y%m%d-%H%M%S") .. ".log"

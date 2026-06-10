@@ -1,10 +1,17 @@
 --[[
 	MicroHub loader
 	Docs: https://docs.voltbz.net/docs/miscellaneous (request)
+
+	Remote-first by default. Stale executor workspace copies are ignored unless:
+	  getgenv().HUB_USE_LOCAL = true
+
+	Force refresh everything from GitHub:
+	  getgenv().HUB_FORCE_REMOTE = true
+
+	Re-run the loader anytime — previous hub modules are stopped first.
 ]]
 
-local HUB_VERSION = 3
-
+local LOADER_VERSION = 4
 local DEFAULT_BASE = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 local LOADED_KEY = "__MicroHubLoaded"
 local UI_LIB_KEY = "__MicroHubUILib"
@@ -46,15 +53,17 @@ local function useLocalFiles()
 	if getGenv().HUB_FORCE_REMOTE == true then
 		return false
 	end
-	return typeof(readfile) == "function" and typeof(isfile) == "function"
+	return getGenv().HUB_USE_LOCAL == true
+		and typeof(readfile) == "function"
+		and typeof(isfile) == "function"
 end
 
-local function notify(title, text)
+local function notify(title, text, duration)
 	pcall(function()
 		game:GetService("StarterGui"):SetCore("SendNotification", {
 			Title = title,
 			Text = text,
-			Duration = 5,
+			Duration = duration or 5,
 		})
 	end)
 end
@@ -81,35 +90,34 @@ local function fetchHttp(base, path)
 	local url = base .. "/" .. path .. "?t=" .. tostring(os.time())
 	local res = request({ Url = url, Method = "GET" })
 	if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
-		return res.Body
+		return sanitize(res.Body)
 	end
 	local msg = res and (res.StatusMessage or res.StatusCode) or "no response"
 	error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
 end
 
-local function fetch(base, path, forceRemote)
+local function bootstrapFetch(base, path)
 	local localPath = getLocalRoot() .. "/" .. path
 	local source
-	local usedLocal = false
 
-	if not forceRemote and useLocalFiles() and isfile(localPath) then
-		source = readfile(localPath)
-		usedLocal = true
+	if useLocalFiles() and isfile(localPath) then
+		source = sanitize(readfile(localPath))
+		if hasUtf8Bom(source) then
+			warn("[MicroHub] stale local file has BOM, using remote:", path)
+			source = fetchHttp(base, path)
+		end
 	else
 		source = fetchHttp(base, path)
 	end
 
-	source = sanitize(source)
-
-	if usedLocal and hasUtf8Bom(source) then
-		warn("[MicroHub] stale local file has BOM, using remote:", path)
-		source = sanitize(fetchHttp(base, path))
+	if typeof(writefile) == "function" and not useLocalFiles() then
+		pcall(writefile, localPath, source)
 	end
 
 	return source
 end
 
-local function compile(source, chunkName)
+local function bootstrapCompile(source, chunkName)
 	local fn, err = loadstring(sanitize(source), chunkName)
 	if not fn then
 		error("compile " .. chunkName .. ": " .. tostring(err), 0)
@@ -117,8 +125,8 @@ local function compile(source, chunkName)
 	return fn
 end
 
-local function loadTable(base, path, forceRemote)
-	local fn = compile(fetch(base, path, forceRemote), path)
+local function bootstrapLoadTable(base, path)
+	local fn = bootstrapCompile(bootstrapFetch(base, path), path)
 	local ok, result = pcall(fn)
 	if not ok then
 		error("run " .. path .. ": " .. tostring(result), 0)
@@ -127,23 +135,6 @@ local function loadTable(base, path, forceRemote)
 		error(path .. " must return a table", 0)
 	end
 	return result
-end
-
-local function ensureUILibrary(base)
-	if typeof(shared[UI_LIB_KEY]) == "table" and typeof(shared[UI_LIB_KEY].create) == "function" then
-		return shared[UI_LIB_KEY]
-	end
-	local lib = loadTable(base, "lib/ui.lua")
-	shared[UI_LIB_KEY] = lib
-	return lib
-end
-
-local function runScript(base, path)
-	local fn = compile(fetch(base, path), path)
-	local ok, runErr = pcall(fn)
-	if not ok then
-		error("run " .. path .. ": " .. tostring(runErr), 0)
-	end
 end
 
 local function normalizeId(value)
@@ -184,7 +175,6 @@ local function findGame(manifest, placeId)
 			return gameEntry
 		end
 	end
-
 	local normalized = normalizeId(placeId)
 	return KNOWN_GAMES_BY_ID[normalized] or KNOWN_GAMES_BY_ID[tostring(normalized)]
 end
@@ -232,42 +222,45 @@ local function mergeManifest(manifest)
 	return merged
 end
 
-local function loadManifest(base, placeId)
-	local manifest = mergeManifest(loadTable(base, "manifest.lua"))
-	if findGame(manifest, placeId) then
-		return manifest
+local function teardownPreviousHub(hubName)
+	local genv = getGenv()
+	local hub = genv.__MicroHub
+	if typeof(hub) == "table" and typeof(hub.unloadAll) == "function" then
+		pcall(hub.unloadAll)
 	end
+	shared[LOADED_KEY] = nil
+	shared[UI_LIB_KEY] = nil
+end
 
-	if useLocalFiles() then
-		warn("[MicroHub] PlaceId", placeId, "missing from local manifest — retrying remote manifest")
-		local genv = getGenv()
-		local previous = genv.HUB_FORCE_REMOTE
-		genv.HUB_FORCE_REMOTE = true
-		local ok, remoteManifest = pcall(function()
-			return mergeManifest(loadTable(base, "manifest.lua", true))
-		end)
-		genv.HUB_FORCE_REMOTE = previous
-		if ok and findGame(remoteManifest, placeId) then
-			return remoteManifest
-		end
+local function ensureUILibrary(hub)
+	if typeof(shared[UI_LIB_KEY]) == "table" and typeof(shared[UI_LIB_KEY].create) == "function" then
+		return shared[UI_LIB_KEY]
 	end
-
-	return manifest
+	local lib = hub.loadTable("lib/ui.lua")
+	shared[UI_LIB_KEY] = lib
+	return lib
 end
 
 local success, err = pcall(function()
 	local base = DEFAULT_BASE
-	local config = loadTable(base, "config.lua")
+	local config = bootstrapLoadTable(base, "config.lua")
 	base = config.Repository or base
-	local hubName = config.Name or "MicroHub"
 
-	if shared[LOADED_KEY] == hubName then
-		notify(hubName, "Already loaded")
-		return
+	local runtimeSource = bootstrapFetch(base, "runtime.lua")
+	local runtimeFn = bootstrapCompile(runtimeSource, "hub/runtime.lua")
+	local ok, Runtime = pcall(runtimeFn)
+	if not ok or typeof(Runtime) ~= "table" or typeof(Runtime.init) ~= "function" then
+		error("runtime.lua failed: " .. tostring(Runtime), 0)
 	end
 
+	local hubName = config.Name or "MicroHub"
+	local wasLoaded = shared[LOADED_KEY] == hubName
+
+	local hub = Runtime.init(config)
+	teardownPreviousHub(hubName)
+
 	local placeId = game.PlaceId
-	local manifest = loadManifest(base, placeId)
+	local manifest = mergeManifest(hub.loadTable("manifest.lua"))
 	local entry = findGame(manifest, placeId)
 
 	if not entry then
@@ -275,17 +268,16 @@ local success, err = pcall(function()
 		warn(
 			"[" .. hubName .. "] Unsupported PlaceId:",
 			placeId,
-			"(loader v" .. tostring(HUB_VERSION) .. ", GameId:",
-			game.GameId .. ")"
+			"(loader v" .. tostring(LOADER_VERSION) .. ", hub " .. tostring(config.Version) .. ")"
 		)
 		return
 	end
 
-	notify(hubName, "Loading " .. (entry.name or "script") .. "...")
-	ensureUILibrary(base)
-	runScript(base, entry.module)
+	notify(hubName, (wasLoaded and "Reloading " or "Loading ") .. (entry.name or "script") .. "...")
+	ensureUILibrary(hub)
+	hub.run(entry.module)
 	shared[LOADED_KEY] = hubName
-	notify(hubName, (entry.name or "Game") .. " loaded")
+	notify(hubName, (entry.name or "Game") .. " loaded (v" .. tostring(config.Version) .. ")")
 end)
 
 if not success then
