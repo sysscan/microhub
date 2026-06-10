@@ -273,6 +273,11 @@ local success, err = pcall(function()
 		return
 	end
 
+	warn(
+		"[MicroHub] loader v" .. tostring(LOADER_VERSION),
+		"hub v" .. tostring(config.Version),
+		wasLoaded and "(reload)" or "(fresh)"
+	)
 	notify(hubName, (wasLoaded and "Reloading " or "Loading ") .. (entry.name or "script") .. "...")
 	ensureUILibrary(hub)
 	hub.run(entry.module)

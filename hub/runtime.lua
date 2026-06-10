@@ -26,7 +26,29 @@ function Runtime.init(config)
 		Runtime._localRoot = root:gsub("/+$", "")
 	end
 	getGenv().__MicroHub = Runtime
+	Runtime.purgeStaleLocals()
 	return Runtime
+end
+
+function Runtime.purgeStaleLocals()
+	local versions = Runtime._config.ModuleVersions
+	if typeof(versions) ~= "table" then
+		return
+	end
+	for path, version in pairs(versions) do
+		if typeof(version) == "string" and version ~= "" then
+			local localPath = Runtime._localRoot .. "/" .. path
+			if typeof(isfile) == "function" and isfile(localPath) then
+				local localSource = Runtime.readLocal(path)
+				if localSource and not Runtime.sourceHasVersion(localSource, version) then
+					warn("[MicroHub] purging stale local cache:", localPath, "(need " .. version .. ")")
+					if typeof(delfile) == "function" then
+						pcall(delfile, localPath)
+					end
+				end
+			end
+		end
+	end
 end
 
 function Runtime.useLocal()
@@ -115,7 +137,9 @@ end
 function Runtime.fetch(path, opts)
 	opts = opts or {}
 	local version = opts.version or Runtime.expectedVersion(path)
-	local forceRemote = opts.forceRemote == true or getGenv().HUB_FORCE_REMOTE == true
+	local forceRemote = opts.forceRemote == true
+		or getGenv().HUB_FORCE_REMOTE == true
+		or (typeof(version) == "string" and version ~= "" and not Runtime.useLocal())
 
 	if not forceRemote and Runtime.useLocal() then
 		local localSource = Runtime.readLocal(path)
@@ -178,6 +202,9 @@ function Runtime.unloadModule(id)
 		pcall(mod.stop)
 	end
 	Runtime._modules[id] = nil
+	if id == "bronx3-ac-debug" then
+		getGenv().__Bronx3ACDebug = nil
+	end
 end
 
 function Runtime.unloadAll()
@@ -196,6 +223,11 @@ end
 function Runtime.loadModule(path, id, opts)
 	opts = opts or {}
 	id = id or path
+	local expected = opts.version or Runtime.expectedVersion(path)
+	if typeof(expected) == "string" and expected ~= "" then
+		opts.forceRemote = true
+		opts.version = expected
+	end
 	Runtime.unloadModule(id)
 
 	local source = Runtime.fetch(path, {
@@ -214,7 +246,6 @@ function Runtime.loadModule(path, id, opts)
 		error(path .. " must return a table module", 0)
 	end
 
-	local expected = opts.version or Runtime.expectedVersion(path)
 	if opts.validate and expected and typeof(mod.getVersion) == "function" then
 		if mod.getVersion() ~= expected then
 			error(path .. " version mismatch (got " .. tostring(mod.getVersion()) .. ", need " .. expected .. ")", 0)

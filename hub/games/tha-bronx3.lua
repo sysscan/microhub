@@ -329,7 +329,7 @@ local function loadAcDebugModule(forceRefresh)
 	end
 
 	local ok, mod = pcall(hub.loadModule, "tools/bronx3-ac-debug.lua", "bronx3-ac-debug", {
-		forceRemote = forceRefresh == true,
+		forceRemote = true,
 		validate = true,
 	})
 	if not ok then
@@ -376,12 +376,11 @@ local function applyAcDebug()
 end
 
 local function syncAcDebugContext()
-	if not Config.ACDebug then
+	if not Config.ACDebug or not acDebugModule then
 		return
 	end
-	local mod = loadAcDebugModule()
-	if mod and typeof(mod.setContext) == "function" then
-		mod.setContext(getAcDebugContext())
+	if typeof(acDebugModule.setContext) == "function" then
+		acDebugModule.setContext(getAcDebugContext())
 	end
 end
 

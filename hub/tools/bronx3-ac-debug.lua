@@ -34,7 +34,7 @@ do
 end
 
 local LOG_ROOT = "hub/tools/bronx3-ac-debug/logs"
-local DEBUG_VERSION = "6-inline-flush"
+local DEBUG_VERSION = "7-sync-fix"
 local FLUSH_INTERVAL = 1.25
 local SAMPLE_INTERVAL = 0.5
 local MARK_COOLDOWN = 0.08
