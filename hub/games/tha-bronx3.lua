@@ -42,8 +42,10 @@ local Config = {
 
 -- Server sets LocalPlayer._Y while tracking vertical movement; it chases upward during flight.
 -- Freeze acGroundY (never follow rising _Y) and hard-cap height to stay under AC tolerance.
-local FLY_AC_MAX_ABOVE_Y = 12
-local GAME_BUILD = "11-fly-y-freeze"
+local FLY_AC_MAX_ABOVE_Y = 10
+local FLY_BYPASS_MAX_SPEED = 26
+local FLY_AC_MAX_BELOW_Y = 2
+local GAME_BUILD = "12-fly-cframe-cap"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -406,6 +408,7 @@ local bypassSession = {
 
 local flyBypassState = {
 	acGroundY = LocalPlayer:GetAttribute("_Y"),
+	groundLatched = false,
 }
 
 local function getFlyAcCeiling()
@@ -428,6 +431,21 @@ local function syncAcGroundYFromAttr()
 end
 
 syncAcGroundYFromAttr()
+
+local function latchFlyGroundY(root)
+	local attrY = LocalPlayer:GetAttribute("_Y")
+	local y = typeof(attrY) == "number" and attrY or nil
+	if root and typeof(root.Position.Y) == "number" then
+		local rootY = root.Position.Y
+		if typeof(y) ~= "number" or rootY < y then
+			y = rootY
+		end
+	end
+	if typeof(y) == "number" then
+		flyBypassState.acGroundY = y
+		flyBypassState.groundLatched = true
+	end
+end
 
 local function getFlyMoveDirection(camera)
 	if not camera then
@@ -474,14 +492,28 @@ local function clampFlyMoveForAc(root, move)
 end
 
 local function enforceFlyHeightCap(root)
-	local ceiling = getFlyAcCeiling()
-	if not root or not ceiling or root.Position.Y <= ceiling then
+	if not root then
 		return
 	end
 	local pos = root.Position
-	root.CFrame = CFrame.new(pos.X, ceiling, pos.Z) * (root.CFrame - root.CFrame.Position)
+	local ceiling = getFlyAcCeiling()
+	local floorY = flyBypassState.acGroundY
+	if typeof(floorY) == "number" then
+		floorY = floorY - FLY_AC_MAX_BELOW_Y
+	end
+
+	local targetY = pos.Y
+	if typeof(ceiling) == "number" and targetY > ceiling then
+		targetY = ceiling
+	end
+	if typeof(floorY) == "number" and targetY < floorY then
+		targetY = floorY
+	end
+	if targetY ~= pos.Y then
+		root.CFrame = CFrame.new(pos.X, targetY, pos.Z) * (root.CFrame - root.CFrame.Position)
+	end
 	local vel = root.AssemblyLinearVelocity
-	if vel.Y > 0 then
+	if vel.Y ~= 0 then
 		root.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
 	end
 end
@@ -512,21 +544,32 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 	if withBypass then
 		enforceFlyHeightCap(root)
 		humanoid.PlatformStand = true
-		local velocity = direction * speed
+		local stepSpeed = math.min(speed, FLY_BYPASS_MAX_SPEED)
+		local step = direction * stepSpeed * dt
 		local ceiling = getFlyAcCeiling()
-		if ceiling and root.Position.Y >= ceiling - 0.25 and velocity.Y > 0 then
-			velocity = Vector3.new(velocity.X, 0, velocity.Z)
+		if ceiling and root.Position.Y >= ceiling - 0.25 and step.Y > 0 then
+			step = Vector3.new(step.X, 0, step.Z)
 		end
-		root.AssemblyLinearVelocity = velocity
+		local floorY = flyBypassState.acGroundY
+		if typeof(floorY) == "number" then
+			local minY = floorY - FLY_AC_MAX_BELOW_Y
+			if root.Position.Y + step.Y < minY then
+				step = Vector3.new(step.X, minY - root.Position.Y, step.Z)
+			end
+		end
+		root.CFrame += step
+		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
+		enforceFlyHeightCap(root)
 		acDebugMark("fly_move", {
-			mode = "bypass_velocity",
-			speed = speed,
+			mode = "bypass_cframe",
+			speed = stepSpeed,
 			delta = dt,
 			move = move.Magnitude,
 			pos = root.Position,
 			anchored = root.Anchored,
 			acY = flyBypassState.acGroundY,
+			ceiling = getFlyAcCeiling(),
 		})
 		return true
 	end
@@ -611,11 +654,13 @@ local function applyMovementBypass(character)
 	bypassSession.character = character
 	bypassSession.rootPart = rootPart
 
-	local attrY = LocalPlayer:GetAttribute("_Y")
-	if typeof(attrY) == "number" then
-		flyBypassState.acGroundY = attrY
-	elseif rootPart then
-		flyBypassState.acGroundY = rootPart.Position.Y
+	if Config.Fly then
+		latchFlyGroundY(rootPart)
+	elseif not flyBypassState.groundLatched then
+		syncAcGroundYFromAttr()
+		if typeof(flyBypassState.acGroundY) ~= "number" then
+			flyBypassState.acGroundY = rootPart.Position.Y
+		end
 	end
 
 	bypassSession.preConn = RunService.PreSimulation:Connect(function()
@@ -630,6 +675,9 @@ local function applyMovementBypass(character)
 		end
 		if root.Anchored then
 			root.Anchored = false
+		end
+		if Config.Fly then
+			enforceFlyHeightCap(root)
 		end
 		acDebugMark("bypass_pre", { anchored = root.Anchored })
 	end)
@@ -656,10 +704,8 @@ local function applyMovementBypass(character)
 			humanoid.PlatformStand = false
 		end
 
-		if flyActive or Config.Fly then
-			if Config.Fly then
-				enforceFlyHeightCap(root)
-			end
+		if flyActive then
+			enforceFlyHeightCap(root)
 			acDebugMark("bypass_post_fly", {
 				anchored = root.Anchored,
 				acY = flyBypassState.acGroundY,
@@ -1887,6 +1933,12 @@ local HubUI = UILib.create({
 		elseif key == "ACDebug" then
 			applyAcDebug()
 		elseif key == "Fly" then
+			if Config.Fly then
+				latchFlyGroundY(getRootPart())
+			else
+				flyBypassState.groundLatched = false
+				syncAcGroundYFromAttr()
+			end
 			refreshMovementBypass()
 		end
 	end,
