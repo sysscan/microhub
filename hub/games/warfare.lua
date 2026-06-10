@@ -1,4 +1,4 @@
-local Players = game:GetService("Players")
+﻿local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
@@ -74,10 +74,6 @@ local BULLET_TP_SNAP_DIST = 1.35
 local BULLET_TP_ROCKET_SNAP_DIST = 2.75
 local BULLET_TP_MIN_SPEED = 3500
 local BULLET_TP_ROCKET_MIN_SPEED = 4800
-local uiVisible = true
-local savedMouseBehavior = nil
-local UI_INPUT_BLOCK = "WarfareUIInputBlock"
-
 local applyCombatMods = function() end
 local updateThermalHighlights = function() end
 local updateHitMarkers = function() end
@@ -255,96 +251,23 @@ FOVCircle.Filled = false
 FOVCircle.Transparency = 0.5
 FOVCircle.Color = Color3.fromRGB(255, 255, 255)
 
-local UI = {
-	X = 16,
-	Y = 16,
-	Width = 318,
-	HeaderHeight = 36,
-	RowHeight = 20,
-	SectionGap = 6,
-	Padding = 12,
-	ColGap = 10,
-	Columns = 2,
-	Dragging = false,
-	DragOffset = Vector2.zero,
-	Objects = {},
+local flightKeys = {
+	[Enum.KeyCode.W] = false,
+	[Enum.KeyCode.A] = false,
+	[Enum.KeyCode.S] = false,
+	[Enum.KeyCode.D] = false,
+	[Enum.KeyCode.Space] = false,
+	[Enum.KeyCode.LeftControl] = false,
+	[Enum.KeyCode.RightControl] = false,
 }
 
-local HUD = {
-	Width = 148,
-	Padding = 10,
-	LineHeight = 15,
-	Objects = {},
-}
-
-local function createSquare(props)
-	local sq = Drawing.new("Square")
-	sq.Filled = props.Filled or false
-	sq.Thickness = props.Thickness or 1
-	sq.Color = props.Color or Color3.fromRGB(255, 255, 255)
-	sq.Visible = false
-	return sq
+local function clearFlightKeys()
+	for keyCode in pairs(flightKeys) do
+		flightKeys[keyCode] = false
+	end
 end
 
-local function createText(props)
-	local txt = Drawing.new("Text")
-	txt.Size = props.Size or 14
-	txt.Color = props.Color or Color3.fromRGB(255, 255, 255)
-	txt.Outline = true
-	txt.Center = props.Center or false
-	txt.Visible = false
-	return txt
-end
-
-local UI_THEME = {
-	bg = Color3.fromRGB(10, 12, 18),
-	header = Color3.fromRGB(24, 28, 46),
-	accent = Color3.fromRGB(99, 102, 241),
-	border = Color3.fromRGB(42, 48, 72),
-	section = Color3.fromRGB(128, 134, 168),
-	on = Color3.fromRGB(72, 220, 130),
-	off = Color3.fromRGB(52, 56, 72),
-	text = Color3.fromRGB(228, 232, 245),
-	muted = Color3.fromRGB(118, 124, 150),
-}
-
-UI.Objects.Background = createSquare({
-	Filled = true,
-	Color = UI_THEME.bg,
-	Thickness = 1,
-})
-UI.Objects.Background.Transparency = 0.05
-
-UI.Objects.ModalOverlay = createSquare({
-	Filled = true,
-	Color = Color3.fromRGB(0, 0, 0),
-	Thickness = 1,
-})
-UI.Objects.ModalOverlay.Transparency = 0.5
-
-UI.Objects.Border = createSquare({
-	Filled = false,
-	Color = UI_THEME.border,
-	Thickness = 1,
-})
-
-UI.Objects.Header = createSquare({
-	Filled = true,
-	Color = UI_THEME.header,
-	Thickness = 1,
-})
-UI.Objects.Header.Transparency = 0.1
-
-UI.Objects.AccentLine = createSquare({
-	Filled = true,
-	Color = UI_THEME.accent,
-	Thickness = 1,
-})
-
-UI.Objects.Title = createText({ Size = 16, Color = UI_THEME.text })
-UI.Objects.DragHint = createText({ Size = 11, Color = UI_THEME.muted })
-
-UI.Sections = {
+local MENU_SECTIONS = {
 	{
 		title = "COMBAT",
 		toggles = {
@@ -400,453 +323,55 @@ UI.Sections = {
 	},
 }
 
-UI.Toggles = {}
-for _, section in ipairs(UI.Sections) do
-	for _, toggle in ipairs(section.toggles) do
-		table.insert(UI.Toggles, toggle)
-	end
+local UILib = shared.__MicroHubUILib
+if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
+	error("MicroHub UI library not loaded — run hub/loader.lua", 0)
 end
 
-UI.Objects.SectionLabels = {}
-UI.Objects.SectionDots = {}
-UI.Objects.SectionLines = {}
-for sectionIndex in ipairs(UI.Sections) do
-	UI.Objects.SectionLabels[sectionIndex] = createText({ Size = 11, Color = UI_THEME.section })
-	UI.Objects.SectionDots[sectionIndex] = createSquare({
-		Filled = true,
-		Color = UI_THEME.accent,
-		Thickness = 1,
-	})
-	UI.Objects.SectionLines[sectionIndex] = createSquare({
-		Filled = true,
-		Color = UI_THEME.border,
-		Thickness = 1,
-	})
-end
-
-UI.Objects.ToggleIndicators = {}
-UI.Objects.ToggleLabels = {}
-for _, toggle in ipairs(UI.Toggles) do
-	UI.Objects.ToggleIndicators[toggle.key] = createSquare({ Filled = true, Thickness = 1 })
-	UI.Objects.ToggleLabels[toggle.key] = createText({ Size = 14 })
-end
-
-UI.Objects.FOVLabel = createText({ Size = 13, Color = UI_THEME.text })
-UI.Objects.FOVMinus = createSquare({ Filled = true, Color = UI_THEME.border })
-UI.Objects.FOVPlus = createSquare({ Filled = true, Color = UI_THEME.border })
-UI.Objects.FOVMinusText = createText({ Size = 15, Center = true, Color = UI_THEME.text })
-UI.Objects.FOVPlusText = createText({ Size = 15, Center = true, Color = UI_THEME.text })
-UI.Objects.Hint = createText({ Size = 10, Color = UI_THEME.muted })
-UI.Objects.KillAllButton = createSquare({ Filled = true, Color = Color3.fromRGB(150, 42, 52) })
-UI.Objects.KillAllText = createText({ Size = 13, Color = UI_THEME.text, Center = true })
-
-HUD.Objects.Background = createSquare({ Filled = true, Color = Color3.fromRGB(8, 10, 16) })
-HUD.Objects.Background.Transparency = 0.22
-HUD.Objects.Border = createSquare({ Filled = false, Color = Color3.fromRGB(40, 48, 68), Thickness = 1 })
-HUD.Objects.Accent = createSquare({ Filled = true, Color = Color3.fromRGB(72, 220, 130) })
-HUD.Objects.Title = createText({ Size = 12, Color = Color3.fromRGB(195, 200, 220) })
-HUD.Objects.Empty = createText({ Size = 12, Color = UI_THEME.muted })
-HUD.Objects.Lines = {}
-
-local function updateUIColor(indicator, enabled)
-	indicator.Color = enabled and UI_THEME.on or UI_THEME.off
-end
-
-local function getColumnWidth()
-	return (UI.Width - UI.Padding * 2 - UI.ColGap) / UI.Columns
-end
-
-local function getUIContentHeight()
-	local height = UI.HeaderHeight + UI.Padding
-	for _, section in ipairs(UI.Sections) do
-		height += 18 + math.ceil(#section.toggles / UI.Columns) * UI.RowHeight + UI.SectionGap
-	end
-	return height + 76
-end
-
-local function getToggleRowPositions()
-	local rows = {}
-	local cursorY = UI.Y + UI.HeaderHeight + UI.Padding
-	local colWidth = getColumnWidth()
-
-	for _, section in ipairs(UI.Sections) do
-		cursorY += 18
-		for index = 1, #section.toggles, UI.Columns do
-			local rowY = cursorY
-			local left = section.toggles[index]
-			local right = section.toggles[index + 1]
-
-			if left then
-				table.insert(rows, {
-					key = left.key,
-					y = rowY,
-					x = UI.X + UI.Padding,
-					width = colWidth,
-				})
-			end
-			if right then
-				table.insert(rows, {
-					key = right.key,
-					y = rowY,
-					x = UI.X + UI.Padding + colWidth + UI.ColGap,
-					width = colWidth,
-				})
-			end
-			cursorY += UI.RowHeight
+local HubUI = UILib.create({
+	title = "WARFARE",
+	config = Config,
+	sections = MENU_SECTIONS,
+	onMenuVisible = function(visible)
+		if visible and Config.Flight then
+			clearFlightKeys()
 		end
-		cursorY += UI.SectionGap
-	end
-	return rows
-end
-
-local function drawToggleAt(visible, toggle, posX, posY)
-	local indicator = UI.Objects.ToggleIndicators[toggle.key]
-	local label = UI.Objects.ToggleLabels[toggle.key]
-	local enabled = Config[toggle.key]
-
-	indicator.Position = Vector2.new(posX, posY + 2)
-	indicator.Size = Vector2.new(10, 10)
-	updateUIColor(indicator, enabled)
-	indicator.Visible = visible
-
-	label.Position = Vector2.new(posX + 14, posY)
-	label.Text = toggle.label
-	label.Color = enabled and UI_THEME.text or UI_THEME.muted
-	label.Visible = visible
-end
-
-local function pointInRect(point, pos, size)
-	return point.X >= pos.X and point.X <= pos.X + size.X and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
-end
-
-local flightKeys = {
-	[Enum.KeyCode.W] = false,
-	[Enum.KeyCode.A] = false,
-	[Enum.KeyCode.S] = false,
-	[Enum.KeyCode.D] = false,
-	[Enum.KeyCode.Space] = false,
-	[Enum.KeyCode.LeftControl] = false,
-	[Enum.KeyCode.RightControl] = false,
-}
-
-local function clearFlightKeys()
-	for keyCode in pairs(flightKeys) do
-		flightKeys[keyCode] = false
-	end
-end
-
-local uiBlockedInputs = {
-	Enum.UserInputType.MouseButton1,
-	Enum.UserInputType.MouseButton2,
-	Enum.UserInputType.MouseButton3,
-	Enum.UserInputType.MouseMovement,
-	Enum.UserInputType.MouseWheel,
-}
-for _, action in ipairs(Enum.PlayerActions:GetEnumItems()) do
-	table.insert(uiBlockedInputs, action)
-end
-
-local function uiInputSink()
-	return Enum.ContextActionResult.Sink
-end
-
-local function setUIInputBlocked(blocked)
-	if blocked then
-		ContextActionService:BindActionAtPriority(UI_INPUT_BLOCK, uiInputSink, false, 3000, table.unpack(uiBlockedInputs))
-	else
-		ContextActionService:UnbindAction(UI_INPUT_BLOCK)
-	end
-end
-
-local function setMenuVisible(visible)
-	uiVisible = visible
-	if visible then
-		clearFlightKeys()
-		UI.Dragging = false
-		savedMouseBehavior = UserInputService.MouseBehavior
-		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-		UserInputService.MouseIconEnabled = true
-		setUIInputBlocked(true)
-	else
-		setUIInputBlocked(false)
-		if savedMouseBehavior then
-			UserInputService.MouseBehavior = savedMouseBehavior
-			savedMouseBehavior = nil
-		end
-	end
-end
-
-local function isMouseOverMenu(mouse)
-	local height = getUIContentHeight()
-	return pointInRect(mouse, Vector2.new(UI.X, UI.Y), Vector2.new(UI.Width, height))
-end
-
-local function drawUI()
-	local visible = uiVisible
-	local x, y = UI.X, UI.Y
-	local height = getUIContentHeight()
-	local colWidth = getColumnWidth()
-	local leftX = x + UI.Padding
-	local rightX = leftX + colWidth + UI.ColGap
-	local viewport = Camera.ViewportSize
-
-	if visible then
-		UI.Objects.ModalOverlay.Position = Vector2.new(0, 0)
-		UI.Objects.ModalOverlay.Size = viewport
-		UI.Objects.ModalOverlay.Visible = true
-	else
-		UI.Objects.ModalOverlay.Visible = false
-	end
-
-	UI.Objects.Background.Position = Vector2.new(x, y)
-	UI.Objects.Background.Size = Vector2.new(UI.Width, height)
-	UI.Objects.Background.Visible = visible
-
-	UI.Objects.Border.Position = Vector2.new(x, y)
-	UI.Objects.Border.Size = Vector2.new(UI.Width, height)
-	UI.Objects.Border.Visible = visible
-
-	UI.Objects.Header.Position = Vector2.new(x, y)
-	UI.Objects.Header.Size = Vector2.new(UI.Width, UI.HeaderHeight)
-	UI.Objects.Header.Visible = visible
-
-	UI.Objects.AccentLine.Position = Vector2.new(x, y + UI.HeaderHeight - 2)
-	UI.Objects.AccentLine.Size = Vector2.new(UI.Width, 2)
-	UI.Objects.AccentLine.Visible = visible
-
-	UI.Objects.Title.Position = Vector2.new(x + UI.Padding, y + 9)
-	UI.Objects.Title.Text = "WARFARE"
-	UI.Objects.Title.Visible = visible
-
-	UI.Objects.DragHint.Position = Vector2.new(x + UI.Width - 78, y + 11)
-	UI.Objects.DragHint.Text = "RightShift"
-	UI.Objects.DragHint.Visible = visible
-
-	local cursorY = y + UI.HeaderHeight + UI.Padding
-	for sectionIndex, section in ipairs(UI.Sections) do
-		local sectionLabel = UI.Objects.SectionLabels[sectionIndex]
-		local sectionDot = UI.Objects.SectionDots[sectionIndex]
-		local sectionLine = UI.Objects.SectionLines[sectionIndex]
-
-		sectionDot.Position = Vector2.new(x + UI.Padding, cursorY + 3)
-		sectionDot.Size = Vector2.new(4, 4)
-		sectionDot.Visible = visible
-
-		sectionLabel.Position = Vector2.new(x + UI.Padding + 8, cursorY)
-		sectionLabel.Text = section.title
-		sectionLabel.Visible = visible
-
-		sectionLine.Position = Vector2.new(x + UI.Padding + 68, cursorY + 7)
-		sectionLine.Size = Vector2.new(UI.Width - UI.Padding * 2 - 68, 1)
-		sectionLine.Visible = visible
-
-		cursorY += 18
-
-		for index = 1, #section.toggles, UI.Columns do
-			local left = section.toggles[index]
-			local right = section.toggles[index + 1]
-			if left then
-				drawToggleAt(visible, left, leftX, cursorY)
-			end
-			if right then
-				drawToggleAt(visible, right, rightX, cursorY)
-			elseif left then
-				local label = UI.Objects.ToggleLabels[left.key]
-				label.Visible = visible
-			end
-			cursorY += UI.RowHeight
-		end
-
-		cursorY += UI.SectionGap
-	end
-
-	local fovY = cursorY + 2
-	UI.Objects.FOVLabel.Position = Vector2.new(x + UI.Padding, fovY)
-	UI.Objects.FOVLabel.Text = "Silent FOV: " .. Config.FOV
-	UI.Objects.FOVLabel.Visible = visible
-
-	UI.Objects.FOVMinus.Position = Vector2.new(x + UI.Width - 58, fovY - 2)
-	UI.Objects.FOVMinus.Size = Vector2.new(22, 18)
-	UI.Objects.FOVMinus.Visible = visible
-
-	UI.Objects.FOVMinusText.Position = Vector2.new(x + UI.Width - 47, fovY + 1)
-	UI.Objects.FOVMinusText.Text = "-"
-	UI.Objects.FOVMinusText.Visible = visible
-
-	UI.Objects.FOVPlus.Position = Vector2.new(x + UI.Width - 32, fovY - 2)
-	UI.Objects.FOVPlus.Size = Vector2.new(22, 18)
-	UI.Objects.FOVPlus.Visible = visible
-
-	UI.Objects.FOVPlusText.Position = Vector2.new(x + UI.Width - 21, fovY + 1)
-	UI.Objects.FOVPlusText.Text = "+"
-	UI.Objects.FOVPlusText.Visible = visible
-
-	local killAllY = fovY + 22
-	UI.Objects.KillAllButton.Position = Vector2.new(x + UI.Padding, killAllY)
-	UI.Objects.KillAllButton.Size = Vector2.new(UI.Width - UI.Padding * 2, 22)
-	UI.Objects.KillAllButton.Visible = visible
-
-	UI.Objects.KillAllText.Position = Vector2.new(x + UI.Width * 0.5, killAllY + 4)
-	UI.Objects.KillAllText.Text = killAllRunning and "Kill All (running...)" or "Kill All"
-	UI.Objects.KillAllText.Visible = visible
-
-	UI.Objects.Hint.Position = Vector2.new(x + UI.Padding, killAllY + 26)
-	UI.Objects.Hint.Text = "Flight: WASD / Space / Ctrl / Shift"
-	UI.Objects.Hint.Visible = visible
-end
-
-local function getFooterFovY()
-	return UI.Y + getUIContentHeight() - 74
-end
-
-local function getKillAllButtonRect()
-	local fovY = getFooterFovY()
-	return Vector2.new(UI.X + UI.Padding, fovY + 22), Vector2.new(UI.Width - UI.Padding * 2, 22)
-end
-
-local function getEnabledHudModules()
-	local modules = {}
-	for _, toggle in ipairs(UI.Toggles) do
-		if toggle.hud and Config[toggle.key] then
-			table.insert(modules, toggle.hud)
-		end
-	end
-	return modules
-end
-
-local function ensureHudLines(count)
-	while #HUD.Objects.Lines < count do
-		table.insert(HUD.Objects.Lines, createText({ Size = 13, Color = Color3.fromRGB(80, 255, 140) }))
-	end
-end
-
-local function setHudVisible(show)
-	HUD.Objects.Background.Visible = show
-	HUD.Objects.Border.Visible = show
-	HUD.Objects.Accent.Visible = show
-	HUD.Objects.Title.Visible = show
-	HUD.Objects.Empty.Visible = false
-	for _, line in ipairs(HUD.Objects.Lines) do
-		line.Visible = false
-	end
-end
-
-local function drawHUD()
-	if not Config.ShowHUD then
-		setHudVisible(false)
-		return
-	end
-
-	local modules = getEnabledHudModules()
-	ensureHudLines(#modules)
-
-	local viewport = Camera.ViewportSize
-	local moduleCount = math.max(#modules, 1)
-	local height = 24 + moduleCount * HUD.LineHeight + HUD.Padding
-	local hudX = viewport.X - HUD.Width - 14
-	local hudY = 14
-
-	HUD.Objects.Background.Position = Vector2.new(hudX, hudY)
-	HUD.Objects.Background.Size = Vector2.new(HUD.Width, height)
-	HUD.Objects.Background.Visible = true
-
-	HUD.Objects.Border.Position = Vector2.new(hudX, hudY)
-	HUD.Objects.Border.Size = Vector2.new(HUD.Width, height)
-	HUD.Objects.Border.Visible = true
-
-	HUD.Objects.Accent.Position = Vector2.new(hudX, hudY)
-	HUD.Objects.Accent.Size = Vector2.new(3, height)
-	HUD.Objects.Accent.Visible = true
-
-	HUD.Objects.Title.Position = Vector2.new(hudX + HUD.Padding + 4, hudY + 5)
-	HUD.Objects.Title.Text = "ACTIVE"
-	HUD.Objects.Title.Visible = true
-
-	if #modules == 0 then
-		HUD.Objects.Empty.Position = Vector2.new(hudX + HUD.Padding + 6, hudY + 22)
-		HUD.Objects.Empty.Text = "none"
-		HUD.Objects.Empty.Visible = true
-		for _, line in ipairs(HUD.Objects.Lines) do
-			line.Visible = false
-		end
-		return
-	end
-
-	HUD.Objects.Empty.Visible = false
-	for index, name in ipairs(modules) do
-		local line = HUD.Objects.Lines[index]
-		line.Position = Vector2.new(hudX + HUD.Padding + 6, hudY + 20 + (index - 1) * HUD.LineHeight)
-		line.Text = name
-		line.Visible = true
-	end
-	for index = #modules + 1, #HUD.Objects.Lines do
-		HUD.Objects.Lines[index].Visible = false
-	end
-end
-
-local function handleUIClick(mouse)
-	if not uiVisible or UI.Dragging then
-		return
-	end
-	if not isMouseOverMenu(mouse) then
-		return
-	end
-
-	local x = UI.X
-
-	for _, row in ipairs(getToggleRowPositions()) do
-		if pointInRect(mouse, Vector2.new(row.x, row.y - 2), Vector2.new(row.width, 16)) then
-			Config[row.key] = not Config[row.key]
-			return
-		end
-	end
-
-	local fovY = getFooterFovY()
-	if pointInRect(mouse, Vector2.new(x + UI.Width - 58, fovY - 2), Vector2.new(22, 18)) then
-		setFOV(Config.FOV - 25)
-	elseif pointInRect(mouse, Vector2.new(x + UI.Width - 32, fovY - 2), Vector2.new(22, 18)) then
-		setFOV(Config.FOV + 25)
-	end
-
-	local killAllPos, killAllSize = getKillAllButtonRect()
-	if pointInRect(mouse, killAllPos, killAllSize) and not killAllRunning then
-		task.spawn(runKillAll)
-	end
-end
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if input.KeyCode == Enum.KeyCode.RightShift then
-		setMenuVisible(not uiVisible)
-		return
-	end
-	if not uiVisible then
-		return
-	end
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local mouse = UserInputService:GetMouseLocation()
-		if pointInRect(mouse, Vector2.new(UI.X, UI.Y), Vector2.new(UI.Width, UI.HeaderHeight)) then
-			UI.Dragging = true
-			UI.DragOffset = mouse - Vector2.new(UI.X, UI.Y)
-			return
-		end
-		handleUIClick(mouse)
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		UI.Dragging = false
-	end
-end)
-
-RunService.RenderStepped:Connect(function()
-	if not UI.Dragging then
-		return
-	end
-	local mouse = UserInputService:GetMouseLocation()
-	UI.X = math.clamp(mouse.X - UI.DragOffset.X, 0, Camera.ViewportSize.X - UI.Width)
-	UI.Y = math.clamp(mouse.Y - UI.DragOffset.Y, 0, Camera.ViewportSize.Y - getUIContentHeight())
-end)
+	end,
+	footer = {
+		items = {
+			{
+				type = "slider",
+				key = "FOV",
+				label = "Silent FOV",
+				step = 25,
+				min = 50,
+				max = 600,
+				onChange = setFOV,
+			},
+			{
+				type = "button",
+				id = "killAll",
+				label = "Kill All",
+				getLabel = function()
+					return killAllRunning and "Kill All (running...)" or "Kill All"
+				end,
+				canClick = function()
+					return not killAllRunning
+				end,
+				onClick = function()
+					if runKillAll then
+						task.spawn(runKillAll)
+					end
+				end,
+			},
+			{
+				type = "hint",
+				text = "Flight: WASD / Space / Ctrl / Shift",
+			},
+		},
+	},
+	hud = { showKey = "ShowHUD" },
+})
 
 local flightSavedState = nil
 local flightLinearVelocity = nil
@@ -987,8 +512,8 @@ local function getFlightDirection()
 end
 
 local function updateFlight()
-	if not Config.Flight or uiVisible then
-		if uiVisible and Config.Flight then
+	if not Config.Flight or HubUI:isMenuVisible() then
+		if HubUI:isMenuVisible() and Config.Flight then
 			clearFlightKeys()
 		end
 		if not Config.Flight then
@@ -1035,7 +560,7 @@ local function updateFlight()
 end
 
 UserInputService.InputBegan:Connect(function(input)
-	if uiVisible then
+	if HubUI:isMenuVisible() then
 		return
 	end
 	if input.UserInputType == Enum.UserInputType.Keyboard then
@@ -1044,15 +569,13 @@ UserInputService.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-	if uiVisible then
+	if HubUI:isMenuVisible() then
 		return
 	end
 	if input.UserInputType == Enum.UserInputType.Keyboard then
 		setFlightKey(input.KeyCode, false)
 	end
 end)
-
-setMenuVisible(uiVisible)
 
 LocalPlayer.CharacterAdded:Connect(function(character)
 	flightSavedState = nil
@@ -1657,7 +1180,7 @@ runKillAll = function()
 	end
 
 	killAllRunning = true
-	setMenuVisible(false)
+	HubUI:setMenuVisible(false)
 	setKillAllNoclip(true)
 
 	local savedBulletTP = Config.BulletTP
@@ -1898,8 +1421,6 @@ end
 
 RunService.RenderStepped:Connect(function(dt)
 	currentTarget = getClosestTarget()
-	drawUI()
-	drawHUD()
 	applyClientVisuals()
 	applyStableAimMultipliers()
 	applyCombatMods()
