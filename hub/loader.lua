@@ -1,7 +1,7 @@
--- MicroHub loader v1.5.2 — remote only, no workspace files, no bootstrap.
+-- MicroHub loader v1.5.3 — remote only, no workspace files, no bootstrap.
 
-local VERSION = "1.5.2"
-local MIN_UI_VERSION = "2.0.2"
+local VERSION = "1.5.3"
+local MIN_UI_VERSION = "2.1.0"
 local BASE_URLS = {
 	"https://cdn.jsdelivr.net/gh/sysscan/microhub@main/hub",
 	"https://raw.githubusercontent.com/sysscan/microhub/main/hub",

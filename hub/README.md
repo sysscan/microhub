@@ -15,7 +15,7 @@ local urls = {
 local body
 for _, url in ipairs(urls) do
 	local r = request({ Url = url .. "?t=" .. bust, Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } })
-	if r.Success and r.Body:find('VERSION = "1.5.2"') then
+	if r.Success and r.Body:find('VERSION = "1.5.3"') then
 		body = r.Body
 		break
 	end
@@ -24,7 +24,7 @@ assert(body, "Stale loader — use the snippet above, not a saved script")
 loadstring(body, "MicroHub.Loader")()
 ```
 
-You should see `[MicroHub] v1.5.2` and `ready — UI 2.0.2`. Re-run anytime.
+You should see `[MicroHub] v1.5.3` and `ready — UI 2.1.0`. Re-run anytime.
 
 ## Layout
 
@@ -37,7 +37,7 @@ hub/
 
 ## UI v2 (`lib/ui.lua`)
 
-- **PC:** RightShift toggles menu, drag header, mouse wheel scroll, click/drag sliders
+- **PC:** RightShift toggles menu, drag title bar, mouse wheel scroll, click/drag sliders
 - **Mobile:** ☰ floating button, touch input, larger controls, single-column layout
 - **Tabs:** `pages = { { label = "Combat", sections = { ... } } }`
 - **Items:** `toggle`, `slider`, `select`, `color`, `number`, `button`, `hint`, `label`, `separator`

@@ -1,5 +1,5 @@
 --[[
-	MicroHub UI v2.0.2 — Drawing-based menu for PC + mobile.
+	MicroHub UI v2.1.0 — Drawing-based menu for PC + mobile.
 	Loaded by hub/loader.lua into shared.__MicroHubUILib
 
 	Item types (per section.items or legacy section.toggles):
@@ -10,7 +10,6 @@
 
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local ContextActionService = game:GetService("ContextActionService")
 local Camera = workspace.CurrentCamera
 
 local THEME = {
@@ -49,13 +48,23 @@ local COLOR_PRESETS = {
 	Color3.fromRGB(255, 255, 255),
 }
 
+local function clearTable(tbl)
+	if table.clear then
+		table.clear(tbl)
+		return
+	end
+	for key in pairs(tbl) do
+		tbl[key] = nil
+	end
+end
+
 local function sq(props)
 	local d = Drawing.new("Square")
 	d.Filled = props.Filled ~= false
 	d.Thickness = props.Thickness or 1
 	d.Color = props.Color or THEME.text
 	d.Visible = false
-	d.Transparency = props.Transparency or 0
+	d.Transparency = props.Transparency or 1
 	return d
 end
 
@@ -66,6 +75,7 @@ local function txt(props)
 	d.Outline = true
 	d.Center = props.Center or false
 	d.Visible = false
+	d.Transparency = props.Transparency or 1
 	return d
 end
 
@@ -164,11 +174,6 @@ local function buildPages(options)
 	return { { label = "Menu", sections = sections } }
 end
 
-local uiBlockedInputs = {}
-for _, action in ipairs(Enum.PlayerActions:GetEnumItems()) do
-	table.insert(uiBlockedInputs, action)
-end
-
 local HubUI = {}
 HubUI.__index = HubUI
 
@@ -185,6 +190,7 @@ function HubUI.new(options)
 	self.onChange = options.onChange
 	self.onMenuVisible = options.onMenuVisible
 	self.hudShowKey = (options.hud and options.hud.showKey) or "ShowHUD"
+	self.hudEnabled = options.hud and options.hud.enabled == true
 
 	self.menuVisible = options.startVisible ~= false
 	self.activePage = 1
@@ -210,7 +216,7 @@ function HubUI.new(options)
 	self.draggingSlider = nil
 	self.scrollTouch = nil
 	self.savedMouseBehavior = nil
-	self.inputBlockName = "MicroHubUI_" .. self.title:gsub("%s+", "")
+	self._inputConns = {}
 
 	self.toggles = {}
 	for _, page in ipairs(self.pages) do
@@ -293,7 +299,7 @@ function HubUI:_pageContentHeight(page)
 	local h = self.Padding
 	for _, section in ipairs(page.sections) do
 		if section.title and section.title ~= "" then
-			h += self.SectionHeader
+			h = h + self.SectionHeader
 		end
 		local toggles, others = {}, {}
 		for _, item in ipairs(section.items) do
@@ -304,14 +310,14 @@ function HubUI:_pageContentHeight(page)
 			end
 		end
 		if self.Columns > 1 then
-			h += math.ceil(#toggles / self.Columns) * self.RowHeight
+			h = h + math.ceil(#toggles / self.Columns) * self.RowHeight
 		else
-			h += #toggles * self.RowHeight
+			h = h + #toggles * self.RowHeight
 		end
 		for _, item in ipairs(others) do
-			h += self:_itemHeight(item)
+			h = h + self:_itemHeight(item)
 		end
-		h += self.SectionGap
+		h = h + self.SectionGap
 	end
 	return h
 end
@@ -338,7 +344,7 @@ function HubUI:_getToggleSlots(page)
 	local cursorY = 0
 	for _, section in ipairs(page.sections) do
 		if section.title and section.title ~= "" then
-			cursorY += self.SectionHeader
+			cursorY = cursorY + self.SectionHeader
 		end
 		local toggles = {}
 		for _, item in ipairs(section.items) do
@@ -361,30 +367,20 @@ function HubUI:_getToggleSlots(page)
 					})
 				end
 			end
-			cursorY += self.RowHeight
+			cursorY = cursorY + self.RowHeight
 		end
 		for _, item in ipairs(section.items) do
 			if item.type ~= "toggle" then
-				cursorY += self:_itemHeight(item)
+				cursorY = cursorY + self:_itemHeight(item)
 			end
 		end
-		cursorY += self.SectionGap
+		cursorY = cursorY + self.SectionGap
 	end
 	return slots
 end
 
 function HubUI:_layout()
 	-- dynamic layout cache rebuilt each frame in _draw body
-end
-
-function HubUI:_setBlocked(blocked)
-	if blocked then
-		ContextActionService:BindActionAtPriority(self.inputBlockName, function()
-			return Enum.ContextActionResult.Sink
-		end, false, 3000, table.unpack(uiBlockedInputs))
-	else
-		ContextActionService:UnbindAction(self.inputBlockName)
-	end
 end
 
 function HubUI:setMenuVisible(visible)
@@ -395,10 +391,9 @@ function HubUI:setMenuVisible(visible)
 		self.savedMouseBehavior = UserInputService.MouseBehavior
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 		UserInputService.MouseIconEnabled = true
-		self:_setBlocked(true)
 	else
-		self:_setBlocked(false)
 		self:_hideMenuDrawings()
+		self:_hideHud()
 		self:_clearDynamic()
 		if self.savedMouseBehavior then
 			UserInputService.MouseBehavior = self.savedMouseBehavior
@@ -419,24 +414,25 @@ function HubUI:destroy()
 		self._renderConn:Disconnect()
 		self._renderConn = nil
 	end
-	self:_setBlocked(false)
+	for _, conn in ipairs(self._inputConns or {}) do
+		pcall(function()
+			conn:Disconnect()
+		end)
+	end
+	clearTable(self._inputConns)
 	local function rm(d)
 		if typeof(d) == "userdata" then
 			d:Remove()
-		end
-	end
-	for _, v in pairs(self.drawings) do
-		if typeof(v) == "userdata" then
-			rm(v)
-		elseif typeof(v) == "table" then
-			for _, n in pairs(v) do
-				rm(n)
+		elseif typeof(d) == "table" then
+			for _, child in pairs(d) do
+				rm(child)
 			end
 		end
 	end
-	for _, d in ipairs(self.drawings.dynamic) do
-		rm(d)
+	for _, v in pairs(self.drawings) do
+		rm(v)
 	end
+	clearTable(self.drawings.dynamic)
 end
 
 function HubUI:_notifyChange(item, value)
@@ -521,7 +517,7 @@ function HubUI:_hitTest(pointer)
 	local cursorY = bodyY + self.Padding - self.scrollY
 
 	for _, section in ipairs(page.sections) do
-		cursorY += section.title and section.title ~= "" and self.SectionHeader or 0
+		cursorY = cursorY + (section.title and section.title ~= "" and self.SectionHeader or 0)
 
 		local toggles = {}
 		for _, item in ipairs(section.items) do
@@ -541,7 +537,7 @@ function HubUI:_hitTest(pointer)
 					end
 				end
 			end
-			cursorY += self.RowHeight
+			cursorY = cursorY + self.RowHeight
 		end
 
 		for _, item in ipairs(section.items) do
@@ -554,10 +550,10 @@ function HubUI:_hitTest(pointer)
 				if inRect(pointer, Vector2.new(ix, cursorY), Vector2.new(iw, ih)) then
 					return { kind = item.type, item = item, rect = { x = ix, y = cursorY, w = iw, h = ih } }
 				end
-				cursorY += ih
+				cursorY = cursorY + ih
 			end
 		end
-		cursorY += self.SectionGap
+		cursorY = cursorY + self.SectionGap
 	end
 
 	return { kind = "body" }
@@ -653,7 +649,7 @@ function HubUI:_handlePointerDown(pointer)
 				self:_notifyChange(hit.item, val)
 				return
 			end
-			offsetX += pw + 6
+			offsetX = offsetX + pw + 6
 		end
 		local current = self.config[hit.item.key]
 		local nextIndex = 1
@@ -730,12 +726,12 @@ function HubUI:_shouldIgnoreProcessed(input, processed)
 end
 
 function HubUI:_bindInput()
-	UserInputService.InputBegan:Connect(function(input, processed)
-		if self:_shouldIgnoreProcessed(input, processed) then
-			return
-		end
+	table.insert(self._inputConns, UserInputService.InputBegan:Connect(function(input, processed)
 		if input.KeyCode == self.toggleKey or input.KeyCode == self.mobileToggleKey then
 			self:setMenuVisible(not self.menuVisible)
+			return
+		end
+		if self:_shouldIgnoreProcessed(input, processed) then
 			return
 		end
 		if not self.menuVisible and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -744,17 +740,17 @@ function HubUI:_bindInput()
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			self:_handlePointerDown(pointerPos(input))
 		end
-	end)
+	end))
 
-	UserInputService.InputEnded:Connect(function(input)
+	table.insert(self._inputConns, UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			self.Dragging = false
 			self.draggingSlider = nil
 			self.scrollTouch = nil
 		end
-	end)
+	end))
 
-	UserInputService.InputChanged:Connect(function(input)
+	table.insert(self._inputConns, UserInputService.InputChanged:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseMovement then
 			if self.Dragging or self.draggingSlider then
 				self:_handlePointerMove(UserInputService:GetMouseLocation())
@@ -770,7 +766,7 @@ function HubUI:_bindInput()
 		elseif input.UserInputType == Enum.UserInputType.MouseWheel and self.menuVisible then
 			self.scrollY = math.clamp(self.scrollY - input.Position.Z * 24, 0, self.maxScroll)
 		end
-	end)
+	end))
 end
 
 function HubUI:_clearDynamic()
@@ -779,7 +775,7 @@ function HubUI:_clearDynamic()
 			d:Remove()
 		end
 	end
-	table.clear(self.drawings.dynamic)
+	clearTable(self.drawings.dynamic)
 end
 
 function HubUI:_dynSquare(props)
@@ -805,17 +801,21 @@ function HubUI:_hideMenuDrawings()
 	self.drawings.scrollThumb.Visible = false
 end
 
+function HubUI:_hideHud()
+	local hud = self.drawings.hud
+	hud.bg.Visible = false
+	hud.border.Visible = false
+	hud.accent.Visible = false
+	hud.title.Visible = false
+	hud.empty.Visible = false
+	for _, line in ipairs(hud.lines) do
+		line.Visible = false
+	end
+end
+
 function HubUI:_drawHud()
-	if self.menuVisible then
-		local hud = self.drawings.hud
-		hud.bg.Visible = false
-		hud.border.Visible = false
-		hud.accent.Visible = false
-		hud.title.Visible = false
-		hud.empty.Visible = false
-		for _, line in ipairs(hud.lines) do
-			line.Visible = false
-		end
+	if not self.hudEnabled or self.menuVisible then
+		self:_hideHud()
 		return
 	end
 
@@ -830,14 +830,7 @@ function HubUI:_drawHud()
 		table.insert(hud.lines, txt({ Size = 13, Color = THEME.hudLine }))
 	end
 	if not self.config[self.hudShowKey] or #modules == 0 then
-		hud.bg.Visible = false
-		hud.border.Visible = false
-		hud.accent.Visible = false
-		hud.title.Visible = false
-		hud.empty.Visible = false
-		for _, line in ipairs(hud.lines) do
-			line.Visible = false
-		end
+		self:_hideHud()
 		return
 	end
 	local count = #modules
@@ -952,7 +945,7 @@ function HubUI:_draw()
 			line.Position = Vector2.new(x + self.Padding + 64, cursorY + 7)
 			line.Size = Vector2.new(self.Width - self.Padding * 2 - 64, 1)
 			line.Visible = label.Visible
-			cursorY += self.SectionHeader
+			cursorY = cursorY + self.SectionHeader
 		end
 
 		local toggles = {}
@@ -994,7 +987,7 @@ function HubUI:_draw()
 				label.Visible = visible and onScreen
 				end
 			end
-			cursorY += self.RowHeight
+			cursorY = cursorY + self.RowHeight
 		end
 
 		for _, item in ipairs(others) do
@@ -1060,7 +1053,7 @@ function HubUI:_draw()
 					pt.Position = pill.Position + pill.Size * 0.5
 					pt.Text = name
 					pt.Visible = pill.Visible
-					offsetX += pw + 6
+					offsetX = offsetX + pw + 6
 				end
 			elseif item.type == "color" then
 				local color = self.config[item.key]
@@ -1111,9 +1104,9 @@ function HubUI:_draw()
 				label.Text = item.text or ""
 				label.Visible = visible and onScreen
 			end
-			cursorY += ih
+			cursorY = cursorY + ih
 		end
-		cursorY += self.SectionGap
+		cursorY = cursorY + self.SectionGap
 	end
 
 	if self.maxScroll > 0 and visible then
@@ -1133,7 +1126,7 @@ function HubUI:_draw()
 end
 
 return {
-	version = "2.0.2",
+	version = "2.1.0",
 	create = function(options)
 		return HubUI.new(options)
 	end,
