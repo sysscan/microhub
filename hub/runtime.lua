@@ -25,9 +25,20 @@ function Runtime.useLocal()
 		and typeof(isfile) == "function"
 end
 
+local function basesFromConfig(config)
+	if typeof(config.Mirrors) == "table" and #config.Mirrors > 0 then
+		return config.Mirrors
+	end
+	if typeof(config.Repository) == "string" and config.Repository ~= "" then
+		return { config.Repository:gsub("/+$", "") }
+	end
+	return { "https://cdn.jsdelivr.net/gh/sysscan/microhub@v1.4.3/hub" }
+end
+
 function Runtime.init(config)
 	Runtime._config = config or {}
-	Runtime._base = Runtime._config.Repository or "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
+	Runtime._bases = basesFromConfig(Runtime._config)
+	Runtime._base = Runtime._bases[1]
 	local root = getGenv().HUB_LOCAL_ROOT
 	if typeof(root) == "string" and root ~= "" then
 		Runtime._localRoot = root:gsub("/+$", "")
@@ -54,17 +65,23 @@ function Runtime.fetchHttp(path)
 	if typeof(request) ~= "function" then
 		error("request() unavailable — cannot fetch " .. path, 0)
 	end
-	local url = Runtime._base .. "/" .. path .. "?t=" .. cacheBust()
-	local res = request({
-		Url = url,
-		Method = "GET",
-		Headers = { ["Cache-Control"] = "no-cache, no-store" },
-	})
-	if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
-		return Runtime.sanitize(res.Body)
+	local failures = {}
+	for _, base in ipairs(Runtime._bases or { Runtime._base }) do
+		local url = base .. "/" .. path .. "?t=" .. cacheBust()
+		local ok, res = pcall(function()
+			return request({
+				Url = url,
+				Method = "GET",
+				Headers = { ["Cache-Control"] = "no-cache, no-store" },
+			})
+		end)
+		if ok and res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
+			return Runtime.sanitize(res.Body)
+		end
+		local msg = ok and res and (res.StatusMessage or res.StatusCode) or tostring(res)
+		table.insert(failures, base .. " (" .. tostring(msg) .. ")")
 	end
-	local msg = res and (res.StatusMessage or res.StatusCode) or "no response"
-	error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
+	error("HTTP failed for " .. path .. ": " .. table.concat(failures, "; "), 0)
 end
 
 function Runtime.readLocal(path)

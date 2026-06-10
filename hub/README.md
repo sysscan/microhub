@@ -4,21 +4,29 @@ Loads game scripts by `game.PlaceId`.
 
 ## Loader (Volt)
 
-**Paste this every time** (do not save/reuse an old loader body — you will stay stuck on an old version).
+**Paste `bootstrap.lua` below** — not `loader.lua`, not a saved script. Volt often caches or redirects `raw.githubusercontent.com` to a stale workspace `hub/` folder.
 
 ```lua
 getgenv().HUB_USE_LOCAL = false
+getgenv().HUB_UI_LOCAL = false
+local RELEASE, MIN_LOADER = "v1.4.3", 9
 local bust = os.time() .. "_" .. math.random(1e5, 1e9)
-local r = request({
-	Url = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua?t=" .. bust,
-	Method = "GET",
-	Headers = { ["Cache-Control"] = "no-cache, no-store" },
-})
-assert(r.Success, r.StatusMessage or "download failed")
-loadstring(r.Body, "MicroHub.Loader")()
+local mirrors = {
+	"https://cdn.jsdelivr.net/gh/sysscan/microhub@" .. RELEASE .. "/hub/loader.lua",
+}
+local body
+for _, url in ipairs(mirrors) do
+	local r = request({ Url = url .. "?t=" .. bust, Method = "GET" })
+	if r.Success and r.Body:match("LOADER_VERSION%s*=%s*(%d+)") and tonumber(r.Body:match("LOADER_VERSION%s*=%s*(%d+)")) >= MIN_LOADER and not r.Body:find("TouchTap", 1, true) then
+		body = r.Body
+		break
+	end
+end
+assert(body, "Stale loader — delete workspace hub/ and retry")
+loadstring(body, "MicroHub.Loader")()
 ```
 
-You should see `boot loader v8` and `UI remote v2.0.1` in the output. If you still see `loader v6`, you are not running the snippet above.
+You should see `boot loader v9` and `UI remote v2.0.1`. If you still see `loader v6`, delete the workspace `hub/` folder (Volt is serving old files).
 
 Re-run anytime — previous modules are stopped first. Every file is fetched from GitHub; nothing is written to your workspace unless you opt into local dev mode.
 
