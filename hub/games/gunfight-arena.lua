@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "21-sa-debug-gc"
+local GAME_BUILD = "22-sa-debug-combat"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -489,7 +489,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "21-sa-debug-gc"
+local DBG_HOOK_BUILD = "22-sa-debug-combat"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -591,17 +591,19 @@ local function dbgMaybeDecode(value: any): any
 end
 
 local function dbgRecordNetworkEvent(eventName: any, payload: { any })
-	if typeof(eventName) == "string" and eventName == "Fire" and dbg.lastFire then
+	if typeof(eventName) ~= "string" then
+		return
+	end
+	if eventName ~= "Fire" and eventName ~= "Hitcheck" then
+		return
+	end
+	if eventName == "Fire" and dbg.lastFire then
 		if os.clock() - dbg.lastFire.at < 0.02 then
 			return
 		end
 	end
-	dbg.netCount += 1
-	if typeof(eventName) ~= "string" then
-		dbg.lastEvent = dbgShortVal(eventName)
-		return
-	end
 
+	dbg.netCount += 1
 	dbg.lastEvent = eventName
 
 	if eventName == "Fire" then
@@ -639,8 +641,6 @@ local function dbgRecordNetworkEvent(eventName: any, payload: { any })
 			),
 			2
 		)
-	else
-		dbgLog("Net", string.format("%s (net #%d)", eventName, dbg.netCount), 3)
 	end
 end
 
@@ -693,9 +693,22 @@ local function dbgNetworkReady(): boolean
 	return LocalPlayer:GetAttribute("ClockOffset") ~= nil
 end
 
+local function dbgIsCombatRemote(remote: RemoteEvent): boolean
+	if remote:GetFullName():find(LocalPlayer.Name, 1, true) then
+		return true
+	end
+	if remote:IsDescendantOf(LocalPlayer) then
+		return true
+	end
+	local record = Players:FindFirstChild(LocalPlayer.Name)
+	if record and remote:IsDescendantOf(record) then
+		return true
+	end
+	return remote:FindFirstAncestorWhichIsA("Player") == LocalPlayer
+end
+
 local function dbgIsBadRemote(remote: RemoteEvent): boolean
-	local path = remote:GetFullName()
-	return path:find("LocalizationService", 1, true) ~= nil
+	return not dbgIsCombatRemote(remote)
 end
 
 local function dbgIsNetworkApi(tbl: any): boolean
@@ -705,12 +718,17 @@ local function dbgIsNetworkApi(tbl: any): boolean
 	if typeof(dbgTblGet(tbl, "FireServer")) ~= "function" then
 		return false
 	end
-	local re = dbgTblGet(tbl, "RE")
-	if typeof(re) == "Instance" and re:IsA("RemoteEvent") then
-		return not dbgIsBadRemote(re)
+	if typeof(dbgTblGet(tbl, "OnEvent")) ~= "function" then
+		return false
 	end
-	return typeof(dbgTblGet(tbl, "OnEvent")) == "function"
-		or typeof(dbgTblGet(tbl, "EncodeData")) == "function"
+	if typeof(dbgTblGet(tbl, "EncodeData")) ~= "function" then
+		return false
+	end
+	if typeof(dbgTblGet(tbl, "DecodeData")) ~= "function" then
+		return false
+	end
+	local re = dbgTblGet(tbl, "RE")
+	return typeof(re) == "Instance" and re:IsA("RemoteEvent") and dbgIsCombatRemote(re)
 end
 
 local function dbgAcceptCombatRemote(remote: Instance?): RemoteEvent?
@@ -808,22 +826,16 @@ local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
 			return false
 		end
 		local remote = dbgTblGet(tbl, "RE")
-		if typeof(remote) == "Instance" and remote:IsA("RemoteEvent") then
-			local score = dbgRemoteScore(remote)
-			if score <= 0 and not dbgIsBadRemote(remote) then
-				score = 80
-			end
-			if score > 0 then
-				candidateCount += 1
-				if score > bestScore then
-					bestApi, bestRemote, bestScore = tbl, remote, score
-				end
-			end
+		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
+			return false
+		end
+		local score = dbgRemoteScore(remote)
+		if score <= 0 then
 			return false
 		end
 		candidateCount += 1
-		if 70 > bestScore then
-			bestApi, bestRemote, bestScore = tbl, nil, 70
+		if score > bestScore then
+			bestApi, bestRemote, bestScore = tbl, remote, score
 		end
 		return false
 	end
@@ -862,8 +874,7 @@ local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
 		end
 	end
 
-	local minScore = if candidateCount == 1 then 1 else 70
-	if bestApi and bestScore >= minScore then
+	if bestApi and bestRemote and bestScore >= 90 then
 		if bestRemote then
 			dbgAcceptCombatRemote(bestRemote)
 		end
@@ -881,7 +892,6 @@ local function dbgFindFireServerFunction(): ((...any) -> ...any)?
 	local queries = {
 		{ Constants = { "Client is disconnected from the network" } },
 		{ Constants = { "disconnected from the network" } },
-		{ Name = "FireServer" },
 	}
 	for _, query in queries do
 		local opts: { [string]: any } = { IgnoreExecutor = true }
@@ -917,24 +927,45 @@ local function dbgFindNetworkApi(): (any, RemoteEvent?)
 	end
 	dbgNextGcScan = now + DBG_GC_SCAN_INTERVAL
 
+	local fireFn = dbgFindFireServerFunction()
+
 	local foundApi: any = nil
 	local foundRemote: RemoteEvent? = nil
 	dbgScanNetworkTables(function(api, remote)
 		foundApi, foundRemote = api, remote
 		return true
 	end)
-	if foundApi then
-		dbgGcCachedApi = foundApi
-		dbgGcCachedRemote = foundRemote
-		return foundApi, foundRemote
+	if foundApi and foundRemote then
+		local tableFn = dbgTblGet(foundApi, "FireServer")
+		if fireFn and typeof(tableFn) == "function" and tableFn ~= fireFn then
+			foundApi, foundRemote = nil, nil
+		else
+			dbgGcCachedApi = foundApi
+			dbgGcCachedRemote = foundRemote
+			if fireFn then
+				dbgGcCachedFireFn = fireFn
+			end
+			return foundApi, foundRemote
+		end
 	end
 
-	local fireFn = dbgFindFireServerFunction()
 	if fireFn then
 		dbgGcCachedApi = { FireServer = fireFn }
+		dbgGcCachedFireFn = fireFn
 		return dbgGcCachedApi, dbgGcCachedRemote
 	end
 	return nil, nil
+end
+
+local function dbgMaybeBindRemote(self: any)
+	if typeof(self) ~= "table" then
+		return
+	end
+	local re = dbgTblGet(self, "RE")
+	if typeof(re) == "Instance" and re:IsA("RemoteEvent") and dbgIsCombatRemote(re) then
+		dbgAcceptCombatRemote(re)
+		dbg.remotePath = re:GetFullName()
+	end
 end
 
 local function dbgPrintInit(label: string, path: string)
@@ -986,6 +1017,7 @@ local function dbgHookNetworkApi()
 	local ok = pcall(function()
 		original = voltHookfunction(target, dbgWrapHook(function(self, eventName, ...)
 			if Config.AimDebugger and dbgFromGame() then
+				dbgMaybeBindRemote(self)
 				dbgRecordNetworkEvent(eventName, { ... })
 			end
 			return original(self, eventName, ...)
