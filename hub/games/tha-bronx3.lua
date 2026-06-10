@@ -333,7 +333,8 @@ local function loadAcDebugModule()
 
 	local root = genv.HUB_LOCAL_ROOT or "hub"
 	local path = root .. "/tools/bronx3-ac-debug.lua"
-	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(path) then
+	local forceRemote = genv.HUB_FORCE_REMOTE == true
+	if not forceRemote and typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(path) then
 		acDebugModule = compileAndRun(readfile(path))
 		if acDebugModule then
 			return acDebugModule
