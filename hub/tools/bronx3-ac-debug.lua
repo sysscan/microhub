@@ -172,6 +172,26 @@ local function callerHint()
 	return "unknown"
 end
 
+local function flushLog(force)
+	if not canWriteFiles() or #session.queue == 0 then
+		return true
+	end
+	local now = os.clock()
+	if not force and now - session.lastFlush < FLUSH_INTERVAL then
+		return true
+	end
+	local batch = session.queue
+	session.queue = {}
+	local ok = flushLines(batch)
+	session.lastFlush = now
+	if not ok then
+		for i = #batch, 1, -1 do
+			table.insert(session.queue, 1, batch[i])
+		end
+	end
+	return ok
+end
+
 local function push(kind, message, data)
 	session.seq += 1
 	local line = {
@@ -186,7 +206,7 @@ local function push(kind, message, data)
 	table.insert(session.queue, line)
 	warn("[Bronx3ACDebug]", kind, message, data and encodeValue(data) or "")
 	if #session.queue >= 64 then
-		Bronx3ACDebug.flush(true)
+		flushLog(true)
 	end
 end
 
@@ -285,6 +305,8 @@ local function summarizeArgs(...)
 	return table.concat(parts, " | ")
 end
 
+local namecallDepth = 0
+
 local function installKickHook()
 	if typeof(hookfunction) ~= "function" or typeof(newcclosure) ~= "function" then
 		push("HOOK", "kick hook unavailable")
@@ -305,69 +327,112 @@ local function installKickHook()
 		kickFn,
 		newcclosure(function(self, ...)
 			if self == LocalPlayer then
-				push("KICK", "LocalPlayer:Kick called", {
-					args = summarizeArgs(...),
-					caller = callerHint(),
-					snapshot = getCharacterSnapshot(),
-				})
+				local args = table.pack(...)
+				task.defer(function()
+					push("KICK", "LocalPlayer:Kick called", {
+						args = summarizeArgs(table.unpack(args, 1, args.n)),
+						caller = callerHint(),
+						snapshot = getCharacterSnapshot(),
+					})
+				end)
+			end
+			if typeof(originalKick) ~= "function" then
+				return
 			end
 			return originalKick(self, ...)
 		end, "Bronx3ACDebug.Kick")
 	)
+	if typeof(originalKick) ~= "function" then
+		push("HOOK", "Kick hook failed - original missing")
+		return
+	end
 	session.hooks.kick = originalKick
 	push("HOOK", "LocalPlayer.Kick hooked")
 end
 
 local function installNamecallHook()
-	if typeof(hookfunction) ~= "function" or typeof(newcclosure) ~= "function" then
-		return
-	end
-	if typeof(getrawmetatable) ~= "function" or typeof(getnamecallmethod) ~= "function" then
-		push("HOOK", "namecall hook unavailable")
+	if typeof(getnamecallmethod) ~= "function" then
+		push("HOOK", "namecall hook unavailable (getnamecallmethod)")
 		return
 	end
 	if session.hooks.namecall then
 		return
 	end
 
-	local mt = getrawmetatable(game)
-	if not mt then
-		push("HOOK", "game metatable unavailable")
-		return
-	end
-	local originalNamecall
-	originalNamecall = hookfunction(
-		mt.__namecall,
-		newcclosure(function(self, ...)
-			local method = getnamecallmethod()
-			if method == "Kick" and self == LocalPlayer then
+	local oldNamecall
+	local function onNamecall(self, ...)
+		if namecallDepth > 0 then
+			return oldNamecall(self, ...)
+		end
+		if typeof(oldNamecall) ~= "function" then
+			return
+		end
+
+		namecallDepth += 1
+		local method = getnamecallmethod()
+		local packed = table.pack(...)
+
+		if method == "Kick" and self == LocalPlayer then
+			task.defer(function()
 				push("KICK", "__namecall Kick", {
-					args = summarizeArgs(...),
+					args = summarizeArgs(table.unpack(packed, 1, packed.n)),
 					caller = callerHint(),
 					snapshot = getCharacterSnapshot(),
 				})
-			elseif method == "FireServer" and typeof(self.IsA) == "function" and self:IsA("RemoteEvent") then
-				local name = self.Name
-				if shouldLogRemote(name, self:GetFullName()) then
-					push("REMOTE", "FireServer " .. self:GetFullName(), {
-						args = summarizeArgs(...),
+			end)
+		elseif method == "FireServer" or method == "InvokeServer" then
+			local target = self
+			task.defer(function()
+				if typeof(target) ~= "Instance" then
+					return
+				end
+				local isEvent = method == "FireServer" and target:IsA("RemoteEvent")
+				local isFunction = method == "InvokeServer" and target:IsA("RemoteFunction")
+				if not isEvent and not isFunction then
+					return
+				end
+				if shouldLogRemote(target.Name, target:GetFullName()) then
+					push("REMOTE", method .. " " .. target:GetFullName(), {
+						args = summarizeArgs(table.unpack(packed, 1, packed.n)),
 						caller = callerHint(),
 					})
 				end
-			elseif method == "InvokeServer" and typeof(self.IsA) == "function" and self:IsA("RemoteFunction") then
-				local name = self.Name
-				if shouldLogRemote(name, self:GetFullName()) then
-					push("REMOTE", "InvokeServer " .. self:GetFullName(), {
-						args = summarizeArgs(...),
-						caller = callerHint(),
-					})
-				end
-			end
-			return originalNamecall(self, ...)
-		end, "Bronx3ACDebug.Namecall")
+			end)
+		end
+
+		local results = table.pack(oldNamecall(self, ...))
+		namecallDepth -= 1
+		return table.unpack(results, 1, results.n)
+	end
+
+	local hookFn = typeof(newcclosure) == "function"
+		and newcclosure(onNamecall, "Bronx3ACDebug.Namecall")
+		or onNamecall
+
+	if typeof(hookmetamethod) == "function" then
+		oldNamecall = hookmetamethod(game, "__namecall", hookFn)
+	elseif typeof(hookfunction) == "function" and typeof(getrawmetatable) == "function" then
+		local mt = getrawmetatable(game)
+		if not mt or typeof(mt.__namecall) ~= "function" then
+			push("HOOK", "game __namecall unavailable")
+			return
+		end
+		oldNamecall = hookfunction(mt.__namecall, hookFn)
+	else
+		push("HOOK", "namecall hook unavailable")
+		return
+	end
+
+	if typeof(oldNamecall) ~= "function" then
+		push("HOOK", "namecall hook failed - original missing")
+		return
+	end
+
+	session.hooks.namecall = oldNamecall
+	push(
+		"HOOK",
+		"__namecall hooked via " .. (typeof(hookmetamethod) == "function" and "hookmetamethod" or "hookfunction")
 	)
-	session.hooks.namecall = originalNamecall
-	push("HOOK", "__namecall hooked")
 end
 
 local function bindCharacter(character)
@@ -430,26 +495,7 @@ function Bronx3ACDebug.mark(tag, detail)
 end
 
 function Bronx3ACDebug.flush(force)
-	if not canWriteFiles() then
-		return false
-	end
-	if #session.queue == 0 then
-		return true
-	end
-	local now = os.clock()
-	if not force and now - session.lastFlush < FLUSH_INTERVAL then
-		return true
-	end
-	local batch = session.queue
-	session.queue = {}
-	local ok = flushLines(batch)
-	session.lastFlush = now
-	if not ok then
-		for i = #batch, 1, -1 do
-			table.insert(session.queue, 1, batch[i])
-		end
-	end
-	return ok
+	return flushLog(force)
 end
 
 function Bronx3ACDebug.start(ctx)
