@@ -340,17 +340,11 @@ local function loadAcDebugModule(forceRefresh)
 		return nil
 	end
 
-	if not forceRefresh and acDebugModule and typeof(acDebugModule.getVersion) == "function" then
-		local expected = hub.expectedVersion and hub.expectedVersion("tools/bronx3-ac-debug.lua")
-		if expected and acDebugModule.getVersion() == expected then
-			return acDebugModule
-		end
+	if not forceRefresh and acDebugModule then
+		return acDebugModule
 	end
 
-	local ok, mod = pcall(hub.loadModule, "tools/bronx3-ac-debug.lua", "bronx3-ac-debug", {
-		forceRemote = true,
-		validate = true,
-	})
+	local ok, mod = pcall(hub.loadModule, "tools/bronx3-ac-debug.lua", "bronx3-ac-debug")
 	if not ok then
 		warn("[ThaBronx3] AC debug load failed:", mod)
 		return nil

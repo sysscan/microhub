@@ -1,6 +1,6 @@
 --[[
-	MicroHub runtime — shared fetch/load/registry for loader and game scripts.
-	Loaded once by loader.lua into getgenv().__MicroHub.
+	MicroHub runtime — fetch, load, and unload hub modules.
+	Default: always HTTP from GitHub. Set HUB_USE_LOCAL = true to read workspace files.
 ]]
 
 local Runtime = {
@@ -18,6 +18,13 @@ function Runtime.getGenv()
 	return getGenv()
 end
 
+function Runtime.useLocal()
+	local genv = getGenv()
+	return genv.HUB_USE_LOCAL == true
+		and typeof(readfile) == "function"
+		and typeof(isfile) == "function"
+end
+
 function Runtime.init(config)
 	Runtime._config = config or {}
 	Runtime._base = Runtime._config.Repository or "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
@@ -26,93 +33,17 @@ function Runtime.init(config)
 		Runtime._localRoot = root:gsub("/+$", "")
 	end
 	getGenv().__MicroHub = Runtime
-	Runtime.purgeStaleLocals()
 	return Runtime
-end
-
-function Runtime.purgeStaleLocals()
-	local hubVersion = Runtime._config and Runtime._config.Version
-	if typeof(hubVersion) == "string" and hubVersion ~= "" then
-		local localConfig = Runtime.readLocal("config.lua")
-		if localConfig and not Runtime.sourceHasVersion(localConfig, hubVersion) then
-			local localPath = Runtime._localRoot .. "/config.lua"
-			warn("[MicroHub] purging stale local cache:", localPath, "(need v" .. hubVersion .. ")")
-			if typeof(delfile) == "function" then
-				pcall(delfile, localPath)
-			end
-		end
-	end
-
-	local versions = Runtime._config.ModuleVersions
-	if typeof(versions) ~= "table" then
-		return
-	end
-	for path, version in pairs(versions) do
-		if typeof(version) == "string" and version ~= "" then
-			local localPath = Runtime._localRoot .. "/" .. path
-			if typeof(isfile) == "function" and isfile(localPath) then
-				local localSource = Runtime.readLocal(path)
-				if localSource and not Runtime.sourceHasVersion(localSource, version) then
-					warn("[MicroHub] purging stale local cache:", localPath, "(need " .. version .. ")")
-					if typeof(delfile) == "function" then
-						pcall(delfile, localPath)
-					end
-				end
-			end
-		end
-	end
-end
-
-function Runtime.useLocal()
-	local genv = getGenv()
-	return genv.HUB_USE_LOCAL == true and genv.HUB_FORCE_REMOTE ~= true
-end
-
-function Runtime.hasUtf8Bom(source)
-	return typeof(source) == "string"
-		and #source >= 3
-		and source:byte(1) == 0xEF
-		and source:byte(2) == 0xBB
-		and source:byte(3) == 0xBF
 end
 
 function Runtime.sanitize(source)
 	if typeof(source) ~= "string" then
 		return source
 	end
-	while Runtime.hasUtf8Bom(source) do
+	while #source >= 3 and source:byte(1) == 0xEF and source:byte(2) == 0xBB and source:byte(3) == 0xBF do
 		source = source:sub(4)
 	end
 	return source
-end
-
-function Runtime.expectedVersion(path)
-	local versions = Runtime._config and Runtime._config.ModuleVersions
-	if typeof(versions) ~= "table" then
-		return nil
-	end
-	return versions[path]
-end
-
-function Runtime.sourceHasVersion(source, version)
-	return typeof(version) == "string"
-		and version ~= ""
-		and typeof(source) == "string"
-		and source:find(version, 1, true) ~= nil
-end
-
-function Runtime.ensureParentDirs(filePath)
-	if typeof(isfolder) ~= "function" or typeof(makefolder) ~= "function" then
-		return
-	end
-	local acc = ""
-	for part in string.gmatch(filePath, "[^/]+") do
-		local nextPath = acc == "" and part or (acc .. "/" .. part)
-		if nextPath ~= filePath and not isfolder(nextPath) then
-			pcall(makefolder, nextPath)
-		end
-		acc = nextPath
-	end
 end
 
 function Runtime.fetchHttp(path)
@@ -130,51 +61,21 @@ end
 
 function Runtime.readLocal(path)
 	local localPath = Runtime._localRoot .. "/" .. path
-	if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" or not isfile(localPath) then
+	if not isfile(localPath) then
 		return nil
 	end
 	return Runtime.sanitize(readfile(localPath))
 end
 
-function Runtime.writeLocal(path, source)
-	if typeof(writefile) ~= "function" then
-		return false
-	end
-	local localPath = Runtime._localRoot .. "/" .. path
-	Runtime.ensureParentDirs(localPath)
-	local ok = pcall(writefile, localPath, source)
-	return ok
-end
-
-function Runtime.fetch(path, opts)
-	opts = opts or {}
-	local version = opts.version or Runtime.expectedVersion(path)
-	local forceRemote = opts.forceRemote == true
-		or getGenv().HUB_FORCE_REMOTE == true
-		or (typeof(version) == "string" and version ~= "" and not Runtime.useLocal())
-
-	if not forceRemote and Runtime.useLocal() then
-		local localSource = Runtime.readLocal(path)
-		if localSource then
-			if Runtime.hasUtf8Bom(localSource) then
-				warn("[MicroHub] BOM in local file, refetching:", path)
-			elseif not version or Runtime.sourceHasVersion(localSource, version) then
-				return localSource, "local"
-			else
-				warn("[MicroHub] stale local file (need " .. version .. "):", path)
-			end
+function Runtime.fetch(path)
+	if Runtime.useLocal() then
+		local source = Runtime.readLocal(path)
+		if source then
+			return source, "local"
 		end
+		error("local file missing: " .. Runtime._localRoot .. "/" .. path, 0)
 	end
-
-	local source = Runtime.fetchHttp(path)
-	if version and not Runtime.sourceHasVersion(source, version) then
-		error(path .. " from remote is missing version marker " .. version, 0)
-	end
-
-	if opts.cache ~= false then
-		Runtime.writeLocal(path, source)
-	end
-	return source, "remote"
+	return Runtime.fetchHttp(path), "remote"
 end
 
 function Runtime.compile(source, chunkName)
@@ -185,14 +86,8 @@ function Runtime.compile(source, chunkName)
 	return fn
 end
 
-function Runtime.run(path, opts)
-	opts = opts or {}
-	local expected = opts.version or Runtime.expectedVersion(path)
-	if typeof(expected) == "string" and expected ~= "" then
-		opts.forceRemote = opts.forceRemote ~= false
-		opts.version = expected
-	end
-	local source, origin = Runtime.fetch(path, opts)
+function Runtime.run(path)
+	local source, origin = Runtime.fetch(path)
 	local fn = Runtime.compile(source, path)
 	local ok, runErr = pcall(fn)
 	if not ok then
@@ -201,8 +96,8 @@ function Runtime.run(path, opts)
 	return origin
 end
 
-function Runtime.loadTable(path, opts)
-	local source = Runtime.fetch(path, opts)
+function Runtime.loadTable(path)
+	local source = Runtime.fetch(path)
 	local fn = Runtime.compile(source, path)
 	local ok, result = pcall(fn)
 	if not ok then
@@ -211,7 +106,7 @@ function Runtime.loadTable(path, opts)
 	if typeof(result) ~= "table" then
 		error(path .. " must return a table", 0)
 	end
-	return result, source
+	return result
 end
 
 function Runtime.unloadModule(id)
@@ -247,21 +142,11 @@ function Runtime.unloadAll()
 	genv.__ThaBronx3FlyStep = nil
 end
 
-function Runtime.loadModule(path, id, opts)
-	opts = opts or {}
+function Runtime.loadModule(path, id)
 	id = id or path
-	local expected = opts.version or Runtime.expectedVersion(path)
-	if typeof(expected) == "string" and expected ~= "" then
-		opts.forceRemote = true
-		opts.version = expected
-	end
 	Runtime.unloadModule(id)
 
-	local source = Runtime.fetch(path, {
-		version = opts.version,
-		forceRemote = opts.forceRemote,
-		cache = opts.cache,
-	})
+	local source = Runtime.fetch(path)
 	local fn = Runtime.compile(source, path)
 	local ok, result = pcall(fn)
 	if not ok then
@@ -271,12 +156,6 @@ function Runtime.loadModule(path, id, opts)
 	local mod = getGenv().__Bronx3ACDebug or result
 	if typeof(mod) ~= "table" then
 		error(path .. " must return a table module", 0)
-	end
-
-	if opts.validate and expected and typeof(mod.getVersion) == "function" then
-		if mod.getVersion() ~= expected then
-			error(path .. " version mismatch (got " .. tostring(mod.getVersion()) .. ", need " .. expected .. ")", 0)
-		end
 	end
 
 	Runtime._modules[id] = mod
