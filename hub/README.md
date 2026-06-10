@@ -8,7 +8,7 @@ Paste this. It asks GitHub for the latest `main` commit SHA first, then download
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.15"
+local MIN_LOADER = "1.6.16"
 
 local function okStatus(res)
 	if typeof(res) ~= "table" then
@@ -64,7 +64,7 @@ assert(body:find('VERSION = "' .. MIN_LOADER .. '"', 1, true), "stale loader bod
 loadstring(body, "MicroHub.Loader")()
 ```
 
-You should see `[MicroHub] v1.6.15 @ <commit> -> ...` and `ready — UI 3.0.0`. Re-run anytime.
+You should see `[MicroHub] v1.6.16 @ <commit> -> ...` and `ready — UI 3.0.0`. Re-run anytime.
 
 ## Layout
 

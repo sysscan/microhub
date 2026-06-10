@@ -90,6 +90,10 @@ local vortexHooksInstalled = false
 local hookedVortexFire = false
 local hookedVortexINVK = false
 local hookedVortexMoveAction = false
+local oldVortexMoveAction = nil
+local oldVortexFire = nil
+local oldVortexINVK = nil
+local moveActionHookBusy = false
 
 local VORTEX_UPVALUE_NAMES = {
 	mag = { "v44" },
@@ -895,9 +899,13 @@ local function ensureVortexHooks()
 
 	if Config.InfiniteAmmo and typeof(env.MoveAction) == "function" and not hookedVortexMoveAction then
 		hookedVortexMoveAction = true
-		local original = env.MoveAction
-		hookfunction(original, wrapClosure(function(...)
-			local results = { original(...) }
+		oldVortexMoveAction = hookfunction(env.MoveAction, wrapClosure(function(...)
+			if moveActionHookBusy then
+				return oldVortexMoveAction(...)
+			end
+			moveActionHookBusy = true
+			local results = { oldVortexMoveAction(...) }
+			moveActionHookBusy = false
 			if Config.InfiniteAmmo then
 				maintainInfiniteAmmo(true)
 				debugCounters.moveActionRestores = debugCounters.moveActionRestores + 1
@@ -909,8 +917,7 @@ local function ensureVortexHooks()
 
 	if typeof(env.Fire) == "function" and not hookedVortexFire then
 		hookedVortexFire = true
-		local original = env.Fire
-		hookfunction(original, wrapClosure(function(...)
+		oldVortexFire = hookfunction(env.Fire, wrapClosure(function(...)
 			if Config.InfiniteAmmo then
 				maintainInfiniteAmmo(true)
 			end
@@ -918,25 +925,24 @@ local function ensureVortexHooks()
 				pushSilentAimMouseSpot()
 				applyFireUpvalues()
 			end
-			return original(...)
+			return oldVortexFire(...)
 		end))
 		debugEvent("hooked Vortex Fire")
 	end
 
 	if typeof(env.INVK) == "function" and not hookedVortexINVK then
 		hookedVortexINVK = true
-		local original = env.INVK
-		hookfunction(original, wrapClosure(function(action, ...)
+		oldVortexINVK = hookfunction(env.INVK, wrapClosure(function(action, ...)
 			local args = { ... }
 			if Config.SilentAim and action == "Fire" and typeof(args[3]) == "CFrame" then
 				local rewritten = rewriteSilentAimCFrame(args[3])
 				if rewritten then
 					args[3] = rewritten
 					debugEvent("INVK Fire redirected")
-					return original(action, unpack(args))
+					return oldVortexINVK(action, unpack(args))
 				end
 			end
-			return original(action, ...)
+			return oldVortexINVK(action, ...)
 		end))
 		debugEvent("hooked Vortex INVK")
 	end
