@@ -5,7 +5,7 @@
 	  loadstring(readfile("load.lua"))()
 
 	Public:
-	  loadstring(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua"))()
+	  load(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/run.lua"))()
 ]]
 
 local function compile(source, chunkName)
@@ -40,10 +40,10 @@ if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile("h
 	runSource(readfile("hub/dev.lua"), "MicroHub.Dev")
 else
 	local ok, source = pcall(function()
-		return game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua")
+		return game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/run.lua")
 	end)
 	if not ok or typeof(source) ~= "string" or #source == 0 then
-		error("[MicroHub] Could not download main.lua: " .. tostring(source))
+		error("[MicroHub] Could not download run.lua: " .. tostring(source))
 	end
-	runSource(source, "MicroHub.Main")
+	runSource(source, "MicroHub.Run")
 end

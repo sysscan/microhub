@@ -63,8 +63,10 @@ Warfare is currently registered as `83902709332473` (from the Roblox URL). Confi
 ### 5. Share this loader line
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua"))()
+load(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/run.lua"))()
 ```
+
+If `load` is unavailable, use your executor's **Execute from URL** on `hub/loader.lua`.
 
 ## Adding a new game
 

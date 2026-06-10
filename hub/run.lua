@@ -1,29 +1,39 @@
 --[[
-	MicroHub entry (fetches loader.lua).
-
-	Prefer hub/run.lua instead — use this one-liner:
+	MicroHub bootstrap — use THIS with the public one-liner:
 
 	load(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/run.lua"))()
+
+	If that fails, try your executor's "Execute from URL" on loader.lua directly.
 ]]
 
-local REPO = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
-local LOADER_URL = REPO .. "/loader.lua"
+local LOADER_URL = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua"
 
-local function compile(source, chunkName)
+local function getCompile()
 	if typeof(loadstring) == "function" then
-		local fn, err = loadstring(source, chunkName)
-		if fn then
-			return fn, nil
-		end
-		if typeof(load) == "function" then
-			return load(source, chunkName)
-		end
-		return nil, err
+		return loadstring
 	end
 	if typeof(load) == "function" then
-		return load(source, chunkName)
+		return load
 	end
-	return nil, "executor missing loadstring/load"
+	if getgenv then
+		local g = getgenv()
+		if typeof(g.loadstring) == "function" then
+			return g.loadstring
+		end
+		if typeof(g.load) == "function" then
+			return g.load
+		end
+	end
+	if getrenv then
+		local r = getrenv()
+		if typeof(r.loadstring) == "function" then
+			return r.loadstring
+		end
+		if typeof(r.load) == "function" then
+			return r.load
+		end
+	end
+	return nil
 end
 
 local function httpGet(url)
@@ -55,17 +65,22 @@ local function httpGet(url)
 	return nil, tostring(result)
 end
 
+local compile = getCompile()
+if not compile then
+	return warn("[MicroHub] No loadstring or load found — use your executor's URL runner on loader.lua")
+end
+
 local source, fetchError = httpGet(LOADER_URL)
 if not source then
-	return warn("[MicroHub] Could not download loader:", fetchError)
+	return warn("[MicroHub] Download failed:", fetchError)
 end
 
 local fn, compileError = compile(source, "MicroHub.Loader")
 if not fn then
-	return warn("[MicroHub] Loader compile failed:", compileError)
+	return warn("[MicroHub] Compile failed:", compileError)
 end
 
 local runOk, runError = pcall(fn)
 if not runOk then
-	warn("[MicroHub] Loader runtime error:", runError)
+	warn("[MicroHub] Runtime error:", runError)
 end
