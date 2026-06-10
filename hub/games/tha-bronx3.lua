@@ -46,7 +46,7 @@ local FLY_AC_MAX_ABOVE_Y = 10
 local FLY_BYPASS_MAX_SPEED = 16
 local FLY_BYPASS_MAX_STEP = 0.32
 local FLY_AC_MAX_BELOW_Y = 2
-local GAME_BUILD = "13-fly-latch-lock"
+local GAME_BUILD = "14-fly-idle-anchor"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -410,7 +410,18 @@ local bypassSession = {
 local flyBypassState = {
 	acGroundY = LocalPlayer:GetAttribute("_Y"),
 	groundLatched = false,
+	lastFlyActive = false,
 }
+
+local function syncAntiGlide(character)
+	if not character then
+		return
+	end
+	local antiGlide = character:FindFirstChild("Anti-Glide")
+	if antiGlide and antiGlide:IsA("LocalScript") then
+		antiGlide.Disabled = Config.Fly == true
+	end
+end
 
 local function getFlyAcCeiling()
 	local acY = flyBypassState.acGroundY
@@ -546,8 +557,13 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 	local speed = Config.FlySpeed
 
 	if withBypass then
+		if root.Anchored then
+			root.Anchored = false
+		end
+		if humanoid.PlatformStand then
+			humanoid.PlatformStand = false
+		end
 		enforceFlyHeightCap(root)
-		humanoid.PlatformStand = true
 		local stepSpeed = math.min(speed, FLY_BYPASS_MAX_SPEED)
 		local step = direction * stepSpeed * dt
 		local ceiling = getFlyAcCeiling()
@@ -631,6 +647,7 @@ local function teardownMovementBypass()
 	bypassSession.rootPart = nil
 	bypassSession.character = nil
 	bypassSession.flyStep = nil
+	flyBypassState.lastFlyActive = false
 end
 
 local sessionConns = {}
@@ -642,8 +659,22 @@ local function disconnectSessionConns()
 	table.clear(sessionConns)
 end
 
-genv.__ThaBronx3Unload = function()
+local function teardownAllFeatures()
 	teardownMovementBypass()
+	teardownInstantPrompts()
+	teardownGunPatches()
+	teardownNoFallRagdoll()
+	teardownFullRagdoll()
+	stopStudioFarmThreads()
+	Config.StudioFarm = false
+	Config.ACDebug = false
+	applyAcDebug()
+	flyBypassState.groundLatched = false
+	flyBypassState.lastFlyActive = false
+end
+
+genv.__ThaBronx3Unload = function()
+	teardownAllFeatures()
 	disconnectSessionConns()
 end
 
@@ -691,13 +722,14 @@ local function applyMovementBypass(character)
 		if humanoid and humanoid.Health <= 0 then
 			return
 		end
-		if root.Anchored then
+		local idleFlyHover = Config.Fly and not flyBypassState.lastFlyActive
+		if not idleFlyHover and root.Anchored then
 			root.Anchored = false
 		end
 		if Config.Fly then
 			enforceFlyHeightCap(root)
 		end
-		acDebugMark("bypass_pre", { anchored = root.Anchored })
+		acDebugMark("bypass_pre", { anchored = root.Anchored, idleFly = idleFlyHover })
 	end)
 
 	bypassSession.postConn = RunService.PostSimulation:Connect(function(deltaTime)
@@ -723,12 +755,20 @@ local function applyMovementBypass(character)
 		end
 
 		if Config.Fly then
-			if not flyActive and humanoid.PlatformStand then
+			if humanoid.PlatformStand then
 				humanoid.PlatformStand = false
 			end
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
 			enforceFlyHeightCap(root)
+			flyBypassState.lastFlyActive = flyActive
+			if flyActive then
+				if root.Anchored then
+					root.Anchored = false
+				end
+			elseif not root.Anchored then
+				root.Anchored = true
+			end
 			acDebugMark(flyActive and "bypass_post_fly" or "bypass_post_idle", {
 				anchored = root.Anchored,
 				acY = flyBypassState.acGroundY,
@@ -737,6 +777,8 @@ local function applyMovementBypass(character)
 			})
 			return
 		end
+
+		flyBypassState.lastFlyActive = false
 
 		if not root.Anchored then
 			root.Anchored = true
@@ -1686,6 +1728,7 @@ local function bindCharacter(character)
 	else
 		teardownMovementBypass()
 	end
+	syncAntiGlide(character)
 	if Config.NoFallRagdoll or Config.FullRagdoll then
 		applyNoFallRagdoll(character)
 	end
@@ -1924,6 +1967,17 @@ local HubUI = UILib.create({
 	hud = { showKey = "ShowHUD" },
 	onToggle = function(key, value)
 		if key == "MovementBypass" then
+			if not value and Config.Fly then
+				Config.Fly = false
+				flyBypassState.groundLatched = false
+				flyBypassState.lastFlyActive = false
+				syncAntiGlide(LocalPlayer.Character)
+				notify("Fly disabled — requires AC Bypass.", "Movement", 4)
+			end
+			if not value then
+				flyBypassState.groundLatched = false
+				flyBypassState.lastFlyActive = false
+			end
 			refreshMovementBypass()
 		elseif key == "InstantPrompts" then
 			applyInstantPrompts()
@@ -1957,11 +2011,17 @@ local HubUI = UILib.create({
 			applyAcDebug()
 		elseif key == "Fly" then
 			if Config.Fly then
+				if not Config.MovementBypass then
+					Config.MovementBypass = true
+					notify("AC Bypass enabled for fly.", "Fly", 3)
+				end
 				latchFlyGroundY(getRootPart())
 			else
 				flyBypassState.groundLatched = false
+				flyBypassState.lastFlyActive = false
 				syncAcGroundYFromAttr()
 			end
+			syncAntiGlide(LocalPlayer.Character)
 			refreshMovementBypass()
 		end
 	end,
