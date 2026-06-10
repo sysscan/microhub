@@ -106,7 +106,7 @@ local AgentDebugger = {
 	namecallStats = {
 		sync_fire_total = 0,
 		sync_shootEvent_shape = 0,
-		sync_vortex_shape = 0,
+		sync_replication_shape = 0,
 		sync_unclassified = 0,
 		fireserver_total = 0,
 		fireserver_fire = 0,
@@ -205,14 +205,14 @@ function AgentDebugger.recordNamecall(method, selfObject, packed)
 		AgentDebugger.namecallStats.sync_fire_total += 1
 		if packed[2] == "ShootEvent" and typeof(packed[4]) == "CFrame" then
 			AgentDebugger.namecallStats.sync_shootEvent_shape += 1
-		elseif packed[1] == LocalPlayer and typeof(packed[2]) == "Instance" and typeof(packed[4]) == "CFrame" then
-			AgentDebugger.namecallStats.sync_vortex_shape += 1
+		elseif typeof(packed[3]) == "string" and typeof(packed[4]) == "CFrame" and typeof(packed[6]) == "string" then
+			AgentDebugger.namecallStats.sync_replication_shape += 1
 		else
 			AgentDebugger.namecallStats.sync_unclassified += 1
 		end
 	elseif method == "FireServer" then
 		AgentDebugger.namecallStats.fireserver_total += 1
-		if packed[1] == "Fire" and typeof(packed[2]) == "Instance" and typeof(packed[4]) == "CFrame" then
+		if packed[1] == "Fire" and typeof(packed[2]) == "string" and typeof(packed[3]) == "number" and typeof(packed[4]) == "CFrame" then
 			AgentDebugger.namecallStats.fireserver_fire += 1
 		else
 			AgentDebugger.namecallStats.fireserver_other += 1
@@ -565,6 +565,17 @@ local function aimCFrameAtTarget(originalCFrame, targetPart, usePartCFrame)
 	return CFrame.new(originalCFrame.Position, targetPos)
 end
 
+local function isShootEventSync(packed)
+	return packed[2] == "ShootEvent" and isLocalSyncShooter(packed[1]) and typeof(packed[4]) == "CFrame"
+end
+
+local function isFireServerShot(packed)
+	return packed[1] == "Fire"
+		and typeof(packed[2]) == "string"
+		and typeof(packed[3]) == "number"
+		and typeof(packed[4]) == "CFrame"
+end
+
 local function tryRedirectSilentAim(packed)
 	local tracing = AgentDebugger.shouldTrace()
 	if not Config.EnableSilentAim then
@@ -589,7 +600,7 @@ local function tryRedirectSilentAim(packed)
 	syncMouseHitSpot(targetPart)
 
 	-- Actor Sync: Fire(caller, "ShootEvent", ammo, cframe, id, weapon, projectile, ...)
-	if packed[2] == "ShootEvent" and isLocalSyncShooter(packed[1]) and typeof(packed[4]) == "CFrame" then
+	if isShootEventSync(packed) then
 		local redirected = aimCFrameAtTarget(packed[4], targetPart, true)
 		if redirected then
 			packed[4] = redirected
@@ -601,25 +612,11 @@ local function tryRedirectSilentAim(packed)
 		if tracing then
 			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
 		end
+		return false
 	end
 
-	-- Vortex Sync:Fire(LocalPlayer, actorRef, cartridge, shotCFrame, velocity, weapon, hitables, extra)
-	if packed[1] == LocalPlayer and typeof(packed[2]) == "Instance" and typeof(packed[4]) == "CFrame" then
-		local redirected = aimCFrameAtTarget(packed[4], targetPart, false)
-		if redirected then
-			packed[4] = redirected
-			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
-			AgentDebugger.recordRedirectOutcome("VortexSync")
-			debugEvent("Sync Vortex shot redirected")
-			return true
-		end
-		if tracing then
-			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
-		end
-	end
-
-	-- Network:FireServer("Fire", weapon, clock, aimCFrame, suppressor, thirdPerson)
-	if packed[1] == "Fire" and typeof(packed[2]) == "Instance" and typeof(packed[4]) == "CFrame" then
+	-- INVK("Fire", weaponName, clock, aimCFrame, suppressor, thirdPerson)
+	if isFireServerShot(packed) then
 		local redirected = aimCFrameAtTarget(packed[4], targetPart, false)
 		if redirected then
 			packed[4] = redirected
@@ -631,6 +628,7 @@ local function tryRedirectSilentAim(packed)
 		if tracing then
 			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
 		end
+		return false
 	end
 
 	if tracing then
@@ -1147,12 +1145,19 @@ local function buildFeatureVerdicts(report)
 			"no Sync/FireServer samples — fire weapons during trace",
 			"Re-run agent diagnostic while shooting; match live arg layout"
 		)
-	elseif report.runtime.namecallStats.sync_unclassified > 0 and report.runtime.redirectStats.shootEvent + report.runtime.redirectStats.vortexSync + report.runtime.redirectStats.fireServer == 0 then
+	elseif report.runtime.namecallStats.sync_unclassified > 0 and report.runtime.redirectStats.shootEvent + report.runtime.redirectStats.fireServer == 0 then
 		add(
 			"EnableSilentAim",
 			"REWRITE",
-			"unclassified Sync:Fire arg shapes in samples",
-			"Add handler for sampled signatures in tryRedirectSilentAim"
+			"unclassified Sync/FireServer arg shapes in samples",
+			"Match live INVK Fire signature in tryRedirectSilentAim"
+		)
+	elseif report.runtime.namecallStats.fireserver_fire == 0 and report.runtime.namecallStats.sync_shootEvent_shape == 0 then
+		add(
+			"EnableSilentAim",
+			"REWRITE",
+			"no FireServer Fire samples during trace",
+			"Confirm INVK Fire hook fires while shooting"
 		)
 	elseif report.target.inFov == 0 then
 		add("EnableSilentAim", "DISABLE_UNTIL_REWRITE", "no valid targets inside FOV", "Fix target scan filters or raise FOVRadius")
@@ -1398,17 +1403,34 @@ ensureNamecallHook = function()
 				return oldNamecall(self, ...)
 			end
 			local method = getnamecallmethod()
-			local packed = table.pack(...)
 			if method == "Fire" and typeof(self) == "Instance" and self.Name == "Sync" then
-				AgentDebugger.recordNamecall(method, self, packed)
-				if Config.EnableSilentAim and tryRedirectSilentAim(packed) then
-					return oldNamecall(self, table.unpack(packed, 1, packed.n))
+				local packed = table.pack(...)
+				local tracing = AgentDebugger.shouldTrace()
+				local shootEvent = isShootEventSync(packed)
+				if not tracing and not (Config.EnableSilentAim and shootEvent) then
+					return oldNamecall(self, ...)
 				end
+				if tracing then
+					AgentDebugger.recordNamecall(method, self, packed)
+				end
+				if Config.EnableSilentAim and shootEvent then
+					tryRedirectSilentAim(packed)
+				end
+				return oldNamecall(self, table.unpack(packed, 1, packed.n))
 			elseif method == "FireServer" then
-				AgentDebugger.recordNamecall(method, self, packed)
-				if Config.EnableSilentAim and tryRedirectSilentAim(packed) then
-					return oldNamecall(self, table.unpack(packed, 1, packed.n))
+				local packed = table.pack(...)
+				local tracing = AgentDebugger.shouldTrace()
+				local fireShot = isFireServerShot(packed)
+				if not tracing and not (Config.EnableSilentAim and fireShot) then
+					return oldNamecall(self, ...)
 				end
+				if tracing then
+					AgentDebugger.recordNamecall(method, self, packed)
+				end
+				if Config.EnableSilentAim and fireShot then
+					tryRedirectSilentAim(packed)
+				end
+				return oldNamecall(self, table.unpack(packed, 1, packed.n))
 			end
 			return oldNamecall(self, ...)
 		end)
