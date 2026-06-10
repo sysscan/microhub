@@ -667,8 +667,12 @@ local Library = {
  end
 
  Library.Round = function(Self, Number, Float)
- local Multiplier = 1 / (Float or 1)
- return math.floor(Number * Multiplier) / Multiplier
+ if typeof(Number) ~= "number" or Number ~= Number then
+ return 0
+ end
+ Float = math.max(0, math.floor(Float or 0))
+ local Multiplier = 10 ^ Float
+ return math.floor(Number * Multiplier + 0.5) / Multiplier
  end
 
  Library.GetConfig = function(Self)
@@ -3416,7 +3420,7 @@ local Library = {
  Min = Params.Min or Params.min or 0,
  Max = Params.Max or Params.max or 100,
  Callback = Params.Callback or Params.callback or function() end,
- Decimals = Params.Decimals or Params.decimals or 1,
+ Decimals = Params.Decimals ~= nil and Params.Decimals or (Params.decimals ~= nil and Params.decimals or 1),
  Suffix = Params.Suffix or Params.suffix or "",
 
  Window = Self.Window,
@@ -3548,6 +3552,14 @@ local Library = {
  end)
 
  function Slider:Set(Value)
+ Value = tonumber(Value)
+ if Value == nil or Value ~= Value then
+ Value = Slider.Default
+ if Value == nil or Value ~= Value then
+ Value = Slider.Min
+ end
+ end
+
  Slider.Value = Library:Round(math.clamp(Value, Slider.Min, Slider.Max), Slider.Decimals)
 
  Items["Accent"]:Tween({Size = UDim2.new((Slider.Value - Slider.Min) / (Slider.Max - Slider.Min), 0, 1, 0)}, TweenInfo.new(Library.Animation.Time, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out))

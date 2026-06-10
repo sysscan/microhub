@@ -8,10 +8,9 @@
 	https://github.com/sametexe001/juanitahaxx (Library.lua vendored in lib/juanita/).
 ]]
 
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local VERSION = "4.0.0"
+local VERSION = "4.0.1"
 local JUANITA_SOURCE = "lib/juanita/Library.lua"
 
 local COLOR_PRESETS = {
@@ -148,6 +147,23 @@ local function snap(value, minV, maxV, step)
 	return clamp(value, minV, maxV)
 end
 
+local function sanitizeNumber(value, minV, maxV, step)
+	local number = tonumber(value)
+	if number == nil or number ~= number then
+		number = minV
+	end
+	return snap(number, minV, maxV, step)
+end
+
+local function normalizeSliderRange(minV, maxV)
+	minV = tonumber(minV) or 0
+	maxV = tonumber(maxV) or minV + 1
+	if maxV <= minV then
+		maxV = minV + 1
+	end
+	return minV, maxV
+end
+
 local function stepDecimals(step)
 	step = step or 1
 	local text = tostring(step)
@@ -167,6 +183,88 @@ local function colorIndex(color, presets)
 	return 1
 end
 
+local function createCompactHud(title, accent)
+	local gethuiFn = gethui or function()
+		return game:GetService("CoreGui")
+	end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "\0"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Enabled = false
+	gui.Parent = gethuiFn()
+
+	local frame = Instance.new("Frame")
+	frame.Name = "\0"
+	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+	frame.BackgroundTransparency = 0.15
+	frame.BorderSizePixel = 0
+	frame.AnchorPoint = Vector2.new(1, 0)
+	frame.Position = UDim2.new(1, -8, 0, 8)
+	frame.AutomaticSize = Enum.AutomaticSize.XY
+	frame.Parent = gui
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(40, 40, 40)
+	stroke.Thickness = 1
+	stroke.Parent = frame
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 3)
+	padding.PaddingBottom = UDim.new(0, 3)
+	padding.PaddingLeft = UDim.new(0, 5)
+	padding.PaddingRight = UDim.new(0, 5)
+	padding.Parent = frame
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 1)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = frame
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Name = "\0"
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Font = Enum.Font.GothamMedium
+	titleLabel.TextSize = 10
+	titleLabel.TextColor3 = accent or Color3.fromRGB(176, 176, 209)
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.Text = title
+	titleLabel.AutomaticSize = Enum.AutomaticSize.XY
+	titleLabel.Parent = frame
+
+	local statusLabel = Instance.new("TextLabel")
+	statusLabel.Name = "\0"
+	statusLabel.BackgroundTransparency = 1
+	statusLabel.Font = Enum.Font.Gotham
+	statusLabel.TextSize = 9
+	statusLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
+	statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+	statusLabel.Text = "idle"
+	statusLabel.AutomaticSize = Enum.AutomaticSize.XY
+	statusLabel.Parent = frame
+
+	local hud = {
+		gui = gui,
+		statusLabel = statusLabel,
+	}
+
+	function hud:SetVisibility(visible)
+		gui.Enabled = visible == true
+	end
+
+	function hud:SetStatus(text)
+		statusLabel.Text = tostring(text)
+	end
+
+	function hud:Destroy()
+		gui:Destroy()
+	end
+
+	return hud
+end
+
 local HubUI = {}
 HubUI.__index = HubUI
 
@@ -181,7 +279,7 @@ function HubUI:_notify(item, value)
 		self.onToggle(item.key, value)
 	end
 	if item.type == "toggle" and self._refreshHud then
-		self:_refreshHud()
+		self:_refreshHud(item.key)
 	end
 end
 
@@ -218,13 +316,15 @@ function HubUI:_addToggle(section, item)
 end
 
 function HubUI:_addSlider(section, item)
-	local minV = item.min or 0
-	local maxV = item.max or 100
-	local step = item.step or 1
-	local initial = snap(tonumber(self.config[item.key]) or minV, minV, maxV, step)
+	local minV, maxV = normalizeSliderRange(item.min, item.max)
+	local step = tonumber(item.step) or 1
+	if step <= 0 then
+		step = 1
+	end
+	local initial = sanitizeNumber(self.config[item.key], minV, maxV, step)
 	self.config[item.key] = initial
 
-	section:Slider({
+	local slider = section:Slider({
 		Name = item.label or item.key,
 		Flag = self:_flag(item),
 		Min = minV,
@@ -233,11 +333,12 @@ function HubUI:_addSlider(section, item)
 		Decimals = stepDecimals(step),
 		Suffix = item.suffix or "",
 		Callback = function(value)
-			local nextValue = snap(tonumber(value) or minV, minV, maxV, step)
+			local nextValue = sanitizeNumber(value, minV, maxV, step)
 			self.config[item.key] = nextValue
 			self:_notify(item, nextValue)
 		end,
 	})
+	slider:Set(initial)
 end
 
 function HubUI:_addNumber(section, item)
@@ -351,17 +452,23 @@ function HubUI:_addItem(section, item)
 end
 
 function HubUI:_setupHud()
-	if not self.watermark then
+	if not self.hud then
 		return
 	end
 
-	local showKey = (self.hudOptions and self.hudOptions.showKey) or "ShowHUD"
-	self.hudStatus = self.watermark:Add("")
+	self.hudShowKey = (self.hudOptions and self.hudOptions.showKey) or "ShowHUD"
+	self._hudShown = nil
 
-	function self:_refreshHud()
-		local show = self.config[showKey] ~= false
-		self.watermark:SetVisibility(show)
-		if not show or not self.hudStatus then
+	function self:_refreshHud(changedKey)
+		local showKey = self.hudShowKey
+		local show = self.config[showKey] == true
+
+		if changedKey == showKey or self._hudShown ~= show then
+			self._hudShown = show
+			self.hud:SetVisibility(show)
+		end
+
+		if not show then
 			return
 		end
 
@@ -373,13 +480,13 @@ function HubUI:_setupHud()
 		end
 
 		if #active == 0 then
-			self.hudStatus:SetText("idle")
+			self.hud:SetStatus("idle")
 		else
-			self.hudStatus:SetText(table.concat(active, " | "))
+			self.hud:SetStatus(table.concat(active, " | "))
 		end
 	end
 
-	self:_refreshHud()
+	self:_refreshHud(self.hudShowKey)
 end
 
 function HubUI:_build()
@@ -389,7 +496,13 @@ function HubUI:_build()
 	Library.MenuKeybind = tostring(self.toggleKey)
 
 	self.window = Library:Window({ Name = self.title })
-	self.watermark = self.window:Watermark({ Name = self.title })
+	-- Custom compact HUD — avoid juanita Watermark (settings tab fights ShowHUD visibility).
+	self.window.Watermark = false
+	self.hud = createCompactHud(self.title, Library.Theme and Library.Theme.Accent)
+	-- Init() toggles Self.KeybindList visibility; without this call the Window
+	-- metatable exposes Library.KeybindList (a function) and SetVisibility errors.
+	self.keybindList = self.window:KeybindList()
+	self.keybindList:SetVisibility(false)
 	self.hudEntries = {}
 
 	local builtPages = {}
@@ -457,7 +570,13 @@ function HubUI:destroy()
 	end
 
 	self.window = nil
-	self.watermark = nil
+	if self.hud then
+		pcall(function()
+			self.hud:Destroy()
+		end)
+	end
+	self.hud = nil
+	self.keybindList = nil
 	self.library = nil
 end
 
