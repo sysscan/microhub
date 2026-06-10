@@ -1,3 +1,4 @@
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -82,6 +83,181 @@ local debugLastSummaryAt = 0
 local debugLastEvents = {}
 local DEBUG_SUMMARY_INTERVAL = 2
 local MAX_DEBUG_EVENTS = 12
+local AGENT_TRACE_SECONDS = 12
+local AGENT_MAX_SAMPLES = 12
+
+--[[
+	AgentDebugger — structured diagnostics for rewriting unreliable features.
+	Uses only sUNC-documented APIs (https://docs.sunc.su/) plus Roblox natives.
+	Output is tagged [GFA_AGENT_REPORT] for agent consumption in F9 console.
+]]
+local AgentDebugger = {
+	traceUntil = nil,
+	samples = {},
+	redirectStats = {
+		shootEvent = 0,
+		vortexSync = 0,
+		fireServer = 0,
+		blocked_disabled = 0,
+		blocked_noTarget = 0,
+		blocked_hitchance = 0,
+		blocked_badArgs = 0,
+	},
+	namecallStats = {
+		sync_fire_total = 0,
+		sync_shootEvent_shape = 0,
+		sync_vortex_shape = 0,
+		sync_unclassified = 0,
+		fireserver_total = 0,
+		fireserver_fire = 0,
+		fireserver_other = 0,
+	},
+}
+
+local SUNC_API_GROUPS = {
+	silentAim = { "hookmetamethod", "getnamecallmethod", "checkcaller" },
+	infiniteAmmo = { "hookmetamethod", "getsenv", "debug.getupvalue", "debug.setupvalue" },
+	rapidFire = { "getsenv", "debug.getupvalue", "debug.setupvalue" },
+	combatModifiers = {},
+}
+
+local SUNC_API_CATALOG = {
+	"hookfunction",
+	"hookmetamethod",
+	"checkcaller",
+	"clonefunction",
+	"newcclosure",
+	"getnamecallmethod",
+	"getsenv",
+	"getscriptclosure",
+	"getgenv",
+	"identifyexecutor",
+	"getconnections",
+	"debug.getupvalue",
+	"debug.getupvalues",
+	"debug.setupvalue",
+	"debug.getconstants",
+}
+
+local function suncApiAvailable(apiName)
+	if apiName == "debug.getupvalue" then
+		return debug and typeof(debug.getupvalue) == "function"
+	end
+	if apiName == "debug.getupvalues" then
+		return debug and typeof(debug.getupvalues) == "function"
+	end
+	if apiName == "debug.setupvalue" then
+		return debug and typeof(debug.setupvalue) == "function"
+	end
+	if apiName == "debug.getconstants" then
+		return debug and typeof(debug.getconstants) == "function"
+	end
+	return typeof(_G[apiName]) == "function"
+end
+
+local function describeArg(value)
+	local kind = typeof(value)
+	if kind == "string" then
+		local text = value
+		if #text > 48 then
+			text = text:sub(1, 48) .. "..."
+		end
+		return "string:" .. text
+	end
+	if kind == "number" then
+		return "number:" .. tostring(value)
+	end
+	if kind == "boolean" then
+		return "boolean:" .. tostring(value)
+	end
+	if kind == "Instance" then
+		return "Instance:" .. value.ClassName .. ":" .. value.Name
+	end
+	if kind == "CFrame" then
+		return "CFrame"
+	end
+	if kind == "Vector3" then
+		return "Vector3"
+	end
+	if kind == "EnumItem" then
+		return "EnumItem:" .. tostring(value)
+	end
+	return kind
+end
+
+function AgentDebugger.shouldTrace()
+	if Config.EnableDebugLogs then
+		return true
+	end
+	return AgentDebugger.traceUntil ~= nil and os.clock() <= AgentDebugger.traceUntil
+end
+
+function AgentDebugger.beginTraceSession(seconds)
+	AgentDebugger.traceUntil = os.clock() + (seconds or AGENT_TRACE_SECONDS)
+end
+
+function AgentDebugger.recordNamecall(method, selfObject, args)
+	if not AgentDebugger.shouldTrace() then
+		return
+	end
+	if method == "Fire" and typeof(selfObject) == "Instance" and selfObject.Name == "Sync" then
+		AgentDebugger.namecallStats.sync_fire_total += 1
+		if args[2] == "ShootEvent" and typeof(args[4]) == "CFrame" then
+			AgentDebugger.namecallStats.sync_shootEvent_shape += 1
+		elseif args[1] == LocalPlayer and typeof(args[4]) == "CFrame" then
+			AgentDebugger.namecallStats.sync_vortex_shape += 1
+		else
+			AgentDebugger.namecallStats.sync_unclassified += 1
+		end
+	elseif method == "FireServer" then
+		AgentDebugger.namecallStats.fireserver_total += 1
+		if args[1] == "Fire" and typeof(args[4]) == "CFrame" then
+			AgentDebugger.namecallStats.fireserver_fire += 1
+		else
+			AgentDebugger.namecallStats.fireserver_other += 1
+		end
+	end
+
+	local sample = {
+		t = os.clock(),
+		method = method,
+		self = typeof(selfObject) == "Instance" and (selfObject.ClassName .. ":" .. selfObject.Name) or typeof(selfObject),
+		args = {},
+	}
+	for index = 1, math.min(#args, 8) do
+		sample.args[index] = describeArg(args[index])
+	end
+	table.insert(AgentDebugger.samples, 1, sample)
+	while #AgentDebugger.samples > AGENT_MAX_SAMPLES do
+		table.remove(AgentDebugger.samples)
+	end
+end
+
+function AgentDebugger.recordRedirectOutcome(path, blockedReason)
+	if blockedReason == "disabled" then
+		AgentDebugger.redirectStats.blocked_disabled += 1
+		return
+	end
+	if blockedReason == "noTarget" then
+		AgentDebugger.redirectStats.blocked_noTarget += 1
+		return
+	end
+	if blockedReason == "hitchance" then
+		AgentDebugger.redirectStats.blocked_hitchance += 1
+		return
+	end
+	if blockedReason == "badArgs" then
+		AgentDebugger.redirectStats.blocked_badArgs += 1
+		return
+	end
+	if path == "ShootEvent" then
+		AgentDebugger.redirectStats.shootEvent += 1
+	elseif path == "VortexSync" then
+		AgentDebugger.redirectStats.vortexSync += 1
+	elseif path == "FireServer" then
+		AgentDebugger.redirectStats.fireServer += 1
+	end
+end
 
 local VORTEX_UPVALUE_NAMES = {
 	mag = { "v44" },
@@ -388,11 +564,24 @@ local function aimCFrameAtTarget(originalCFrame, targetPart, usePartCFrame)
 end
 
 local function tryRedirectSilentAim(args)
-	if not Config.EnableSilentAim or not inHitchance() then
+	local tracing = AgentDebugger.shouldTrace()
+	if not Config.EnableSilentAim then
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "disabled")
+		end
+		return nil
+	end
+	if not inHitchance() then
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "hitchance")
+		end
 		return nil
 	end
 	local targetPart = getSilentAimTargetPart()
 	if not targetPart then
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "noTarget")
+		end
 		return nil
 	end
 	syncMouseHitSpot(targetPart)
@@ -403,8 +592,12 @@ local function tryRedirectSilentAim(args)
 		if redirected then
 			args[4] = redirected
 			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+			AgentDebugger.recordRedirectOutcome("ShootEvent")
 			debugEvent("Sync ShootEvent redirected")
 			return args
+		end
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
 		end
 	end
 
@@ -414,8 +607,12 @@ local function tryRedirectSilentAim(args)
 		if redirected then
 			args[4] = redirected
 			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+			AgentDebugger.recordRedirectOutcome("VortexSync")
 			debugEvent("Sync Vortex shot redirected")
 			return args
+		end
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
 		end
 	end
 
@@ -425,11 +622,18 @@ local function tryRedirectSilentAim(args)
 		if redirected then
 			args[4] = redirected
 			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+			AgentDebugger.recordRedirectOutcome("FireServer")
 			debugEvent("FireServer Fire redirected")
 			return args
 		end
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
+		end
 	end
 
+	if tracing then
+		AgentDebugger.recordRedirectOutcome(nil, "badArgs")
+	end
 	return nil
 end
 
@@ -800,68 +1004,319 @@ local function getAmmoDebugSnapshot()
 	}
 end
 
-local function dumpDebugReport()
-	local vortex = getVortex()
-	local env = getVortexEnv()
-	local lines = {
-		"--- Gunfight Arena debug report ---",
-		"getsenv=" .. tostring(hasGetsenv()),
-		"setupvalue=" .. tostring(hasSetupvalue()),
-		"hookmetamethod=" .. tostring(hasHookMetamethod()),
-		"hookfunction=" .. tostring(hasHookFunction()),
-		"namecall=" .. tostring(hasNamecallHook()),
-		"vortex=" .. tostring(vortex ~= nil) .. " enabled=" .. tostring(vortex and vortex.Enabled),
-		"vortexEnv=" .. tostring(env ~= nil),
-		"indexHook=" .. tostring(installedIndexHook),
-		"namecallHook=" .. tostring(installedNamecallHook),
-		"enableSilentAim=" .. tostring(Config.EnableSilentAim) .. " enableInfiniteAmmo=" .. tostring(Config.EnableInfiniteAmmo),
-		"target=" .. tostring(closestTarget and closestTarget.Name or "none"),
-		"targetPos=" .. tostring(cachedTargetPosition),
-		"fireRewrites=" .. tostring(debugCounters.fireRewrites),
-		"restockCalls=" .. tostring(debugCounters.restockCalls),
-		"ammoFailures=" .. tostring(debugCounters.ammoFailures),
-	}
-	local ammo = getAmmoDebugSnapshot()
-	if ammo then
-		table.insert(lines, string.format(
-			"ammo mag=%s reserve=%s chamber=%s clip=%s weapon=%s heuristic=%s",
-			tostring(ammo.mag),
-			tostring(ammo.reserve),
-			tostring(ammo.chamber),
-			tostring(ammo.clip),
-			tostring(ammo.weapon),
-			tostring(ammo.heuristic)
-		))
-	else
-		table.insert(lines, "ammo snapshot unavailable")
+local function probeSuncCapabilities()
+	local catalog = {}
+	for _, apiName in ipairs(SUNC_API_CATALOG) do
+		catalog[apiName] = suncApiAvailable(apiName)
 	end
-	if env and typeof(env.Fire) == "function" and hasSetupvalue() then
-		table.insert(lines, "Fire upvalues:")
-		for _, entry in ipairs(collectUpvalues(env.Fire)) do
-			local valueText = entry.type
-			if entry.type == "number" or entry.type == "boolean" or entry.type == "string" then
-				valueText = tostring(entry.value)
-			elseif entry.type == "Instance" then
-				valueText = entry.value.ClassName .. ":" .. entry.value:GetFullName()
+	local groups = {}
+	for groupName, apis in pairs(SUNC_API_GROUPS) do
+		groups[groupName] = { ready = true, missing = {} }
+		for _, apiName in ipairs(apis) do
+			if not suncApiAvailable(apiName) then
+				groups[groupName].ready = false
+				table.insert(groups[groupName].missing, apiName)
 			end
-			table.insert(lines, string.format("  [%d] %s (%s) = %s", entry.index, entry.name, entry.type, valueText))
 		end
 	end
-	if #debugLastEvents > 0 then
-		table.insert(lines, "recent events:")
-		for _, entry in ipairs(debugLastEvents) do
-			table.insert(lines, "  " .. entry)
+	local executor = "unknown"
+	if suncApiAvailable("identifyexecutor") then
+		local ok, name = pcall(identifyexecutor)
+		if ok then
+			executor = tostring(name)
 		end
 	end
-	for _, line in ipairs(lines) do
-		warn("[GunfightArena:Debug]", line)
+	return {
+		executor = executor,
+		catalog = catalog,
+		groups = groups,
+		drawing = typeof(Drawing) == "table" and typeof(Drawing.new) == "function",
+	}
+end
+
+local function probeVortexInventory()
+	local vortex = getVortex()
+	local sync = vortex and vortex:FindFirstChild("Sync")
+	local modifiers = vortex and vortex:FindFirstChild("Modifiers")
+	local env = getVortexEnv()
+	local envKeys = {}
+	if env then
+		for key, value in pairs(env) do
+			if typeof(value) == "function" then
+				table.insert(envKeys, tostring(key))
+			end
+		end
+		table.sort(envKeys)
 	end
-	notify("Debug report printed to console (F9).", "Debug", 5)
+	return {
+		found = vortex ~= nil,
+		enabled = vortex and vortex.Enabled or false,
+		path = vortex and vortex:GetFullName() or nil,
+		sync = sync ~= nil,
+		syncClass = sync and sync.ClassName or nil,
+		modifiers = modifiers ~= nil,
+		env = env ~= nil,
+		envFunctions = envKeys,
+		hasRestock = env ~= nil and typeof(env.Restock) == "function",
+		hasFire = env ~= nil and typeof(env.Fire) == "function",
+	}
+end
+
+local function probeTargetPipeline()
+	local origin = getAimOrigin()
+	local scanned = 0
+	local valid = 0
+	local inFov = 0
+	local radiusSq = Config.FOVRadius * Config.FOVRadius
+	iterCharacters(function(character)
+		scanned += 1
+		if not isValidTarget(character) then
+			return
+		end
+		valid += 1
+		local part = getTargetPart(character)
+		if not part then
+			return
+		end
+		local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+		if onScreen and screenDistanceSq(screenPos.X, screenPos.Y, origin) <= radiusSq then
+			inFov += 1
+		end
+	end)
+	return {
+		scanned = scanned,
+		valid = valid,
+		inFov = inFov,
+		closest = closestTarget and closestTarget.Name or nil,
+		hitPart = Config.HitPart,
+		fovRadius = Config.FOVRadius,
+		hitchance = Config.Hitchance,
+		prediction = Config.EnableAimPrediction,
+		filterTeammates = Config.FilterTeammates,
+		hasTargetPart = cachedTargetPart ~= nil,
+	}
+end
+
+local function probeStoredAmmoRead()
+	if not suncApiAvailable("hookmetamethod") then
+		return { testable = false, reason = "hookmetamethod unavailable" }
+	end
+	local env = getVortexEnv()
+	if not env or typeof(env.Fire) ~= "function" or not hasSetupvalue() then
+		return { testable = false, reason = "vortex env or debug.getupvalue unavailable" }
+	end
+	for _, entry in ipairs(collectUpvalues(env.Fire)) do
+		if entry.type == "Instance" and entry.value:IsA("NumberValue") and entry.value.Name == "StoredAmmo" then
+			local ok, value = pcall(function()
+				return entry.value.Value
+			end)
+			return {
+				testable = true,
+				found = true,
+				readOk = ok,
+				value = ok and value or nil,
+				path = entry.value:GetFullName(),
+			}
+		end
+	end
+	return { testable = true, found = false, reason = "StoredAmmo NumberValue not in Fire upvalues" }
+end
+
+local function buildFeatureVerdicts(report)
+	local verdicts = {}
+
+	local function add(feature, status, reason, action)
+		table.insert(verdicts, { feature = feature, status = status, reason = reason, action = action })
+	end
+
+	if not report.sunc.groups.silentAim.ready then
+		add(
+			"EnableSilentAim",
+			"REMOVE",
+			"missing sUNC: " .. table.concat(report.sunc.groups.silentAim.missing, ", "),
+			"Remove silent aim or gate behind capability check"
+		)
+	elseif not report.vortex.sync then
+		add("EnableSilentAim", "REWRITE", "Vortex Sync missing", "Locate current shot RemoteEvent/Bindable and re-hook")
+	elseif report.runtime.namecallStats.sync_fire_total == 0 and report.runtime.namecallStats.fireserver_total == 0 then
+		add(
+			"EnableSilentAim",
+			"REWRITE",
+			"no Sync/FireServer samples — fire weapons during trace",
+			"Re-run agent diagnostic while shooting; match live arg layout"
+		)
+	elseif report.runtime.namecallStats.sync_unclassified > 0 and report.runtime.redirectStats.shootEvent + report.runtime.redirectStats.vortexSync + report.runtime.redirectStats.fireServer == 0 then
+		add(
+			"EnableSilentAim",
+			"REWRITE",
+			"unclassified Sync:Fire arg shapes in samples",
+			"Add handler for sampled signatures in tryRedirectSilentAim"
+		)
+	elseif report.target.inFov == 0 then
+		add("EnableSilentAim", "DISABLE_UNTIL_REWRITE", "no valid targets inside FOV", "Fix target scan filters or raise FOVRadius")
+	else
+		add("EnableSilentAim", "KEEP", "sUNC + Sync present; verify rewrites increment when firing", "Keep namecall redirect paths")
+	end
+
+	if not report.sunc.groups.infiniteAmmo.ready then
+		add(
+			"EnableInfiniteAmmo",
+			"REMOVE",
+			"missing sUNC: " .. table.concat(report.sunc.groups.infiniteAmmo.missing, ", "),
+			"Remove StoredAmmo spoof + Restock loop"
+		)
+	elseif not report.vortex.hasRestock then
+		add("EnableInfiniteAmmo", "REWRITE", "getsenv Restock missing", "Find new reserve refill entry point")
+	elseif not report.ammoSnapshot then
+		add("EnableInfiniteAmmo", "REWRITE", "ammo upvalues unresolved", "Re-resolve mag/reserve upvalues on Vortex Fire/Restock")
+	elseif report.runtime.ammoFailures > report.runtime.restockCalls then
+		add("EnableInfiniteAmmo", "REWRITE", "Restock failing more than succeeding", "Inspect Restock preconditions / weapon state")
+	else
+		add("EnableInfiniteAmmo", "KEEP", "Restock + upvalue snapshot available", "Keep __index StoredAmmo spoof + Restock")
+	end
+
+	if not report.sunc.groups.rapidFire.ready then
+		add("EnableRapidFire", "REMOVE", "missing debug.setupvalue/getsenv", "Remove rapid fire upvalue writes")
+	elseif not report.vortex.hasFire then
+		add("EnableRapidFire", "REWRITE", "Vortex Fire missing", "Re-resolve fire-rate upvalue on new Fire closure")
+	else
+		add("EnableRapidFire", "KEEP", "Fire closure readable", "Keep v85 last-fire upvalue write if still valid")
+	end
+
+	if not report.sunc.drawing then
+		add("ShowEsp*", "REMOVE", "Drawing API not sUNC — non-portable", "Remove Drawing ESP or gate behind capability flag")
+	end
+
+	if report.vortex.modifiers then
+		add("DisableWeaponRecoil", "KEEP", "Vortex Modifiers folder present", "Keep Steadiness/Impulse resets")
+	else
+		add("DisableWeaponRecoil", "REWRITE", "Modifiers folder missing", "Find new recoil state location")
+	end
+
+	return verdicts
+end
+
+local function sanitizeUpvalueList(fn)
+	if typeof(fn) ~= "function" or not hasSetupvalue() then
+		return nil
+	end
+	local out = {}
+	for _, entry in ipairs(collectUpvalues(fn)) do
+		table.insert(out, {
+			index = entry.index,
+			name = entry.name,
+			type = entry.type,
+			value = describeArg(entry.value),
+		})
+	end
+	return out
+end
+
+local function buildAgentReport()
+	local vortexProbe = probeVortexInventory()
+	local env = getVortexEnv()
+	local report = {
+		meta = {
+			game = "Gunfight Arena",
+			placeId = game.PlaceId,
+			build = "agent-debugger-v1",
+			timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		},
+		sunc = probeSuncCapabilities(),
+		vortex = vortexProbe,
+		target = probeTargetPipeline(),
+		storedAmmo = probeStoredAmmoRead(),
+		fireUpvalues = env and typeof(env.Fire) == "function" and sanitizeUpvalueList(env.Fire) or nil,
+		hooks = {
+			indexHook = installedIndexHook,
+			namecallHook = installedNamecallHook,
+			aimHooksReady = aimHooksReady,
+		},
+		config = {
+			enableSilentAim = Config.EnableSilentAim,
+			enableInfiniteAmmo = Config.EnableInfiniteAmmo,
+			enableRapidFire = Config.EnableRapidFire,
+			enableDebugLogs = Config.EnableDebugLogs,
+		},
+		runtime = {
+			fireRewrites = debugCounters.fireRewrites,
+			restockCalls = debugCounters.restockCalls,
+			ammoFailures = debugCounters.ammoFailures,
+			namecallStats = AgentDebugger.namecallStats,
+			redirectStats = AgentDebugger.redirectStats,
+			samples = AgentDebugger.samples,
+			recentEvents = debugLastEvents,
+		},
+		ammoSnapshot = getAmmoDebugSnapshot(),
+	}
+	report.verdicts = buildFeatureVerdicts(report)
+	return report
+end
+
+local function printAgentReport(report)
+	local jsonOk, jsonBody = pcall(function()
+		return HttpService:JSONEncode(report)
+	end)
+	warn("[GFA_AGENT_REPORT]")
+	if jsonOk then
+		warn(jsonBody)
+	else
+		warn("json_encode_failed=" .. tostring(jsonBody))
+	end
+	warn("[/GFA_AGENT_REPORT]")
+
+	warn("[GFA_AGENT_SUMMARY]")
+	warn("executor=" .. tostring(report.sunc.executor))
+	warn(string.format(
+		"silentAim_sunc=%s vortex_sync=%s target_inFov=%d rewrites=%d",
+		tostring(report.sunc.groups.silentAim.ready),
+		tostring(report.vortex.sync),
+		report.target.inFov,
+		report.runtime.fireRewrites
+	))
+	warn(string.format(
+		"namecall sync=%d unclassified=%d fireServer=%d",
+		report.runtime.namecallStats.sync_fire_total,
+		report.runtime.namecallStats.sync_unclassified,
+		report.runtime.namecallStats.fireserver_total
+	))
+	for _, verdict in ipairs(report.verdicts) do
+		warn(string.format("[%s] %s — %s | action: %s", verdict.status, verdict.feature, verdict.reason, verdict.action))
+	end
+	if #report.runtime.samples > 0 then
+		warn("latest_namecall_sample=" .. HttpService:JSONEncode(report.runtime.samples[1]))
+	end
+	warn("[/GFA_AGENT_SUMMARY]")
+end
+
+local function dumpDebugReport()
+	local report = buildAgentReport()
+	printAgentReport(report)
+	notify("Agent report in F9 console ([GFA_AGENT_REPORT] JSON).", "Agent Debug", 6)
+end
+
+local function runAgentDiagnostic()
+	AgentDebugger.beginTraceSession(AGENT_TRACE_SECONDS)
+	ensureNamecallHook()
+	notify(
+		"Tracing "
+			.. tostring(AGENT_TRACE_SECONDS)
+			.. "s — enable Silent Aim, fire weapons, then wait for auto-report.",
+		"Agent Debug",
+		7
+	)
+	task.delay(AGENT_TRACE_SECONDS, function()
+		AgentDebugger.traceUntil = nil
+		dumpDebugReport()
+	end)
 end
 
 local function runDebugSummary()
 	if not Config.EnableDebugLogs then
 		return
+	end
+	if not installedNamecallHook then
+		ensureNamecallHook()
 	end
 	local now = os.clock()
 	if now - debugLastSummaryAt < DEBUG_SUMMARY_INTERVAL then
@@ -931,7 +1386,7 @@ ensureNamecallHook = function()
 	if installedNamecallHook or not hasHookMetamethod() or not hasNamecallHook() then
 		return
 	end
-	if not Config.EnableSilentAim then
+	if not Config.EnableSilentAim and not AgentDebugger.shouldTrace() then
 		return
 	end
 	installedNamecallHook = true
@@ -940,16 +1395,19 @@ ensureNamecallHook = function()
 			if isExecutorCall() then
 				return oldNamecall(self, ...)
 			end
-			if Config.EnableSilentAim then
-				local method = getnamecallmethod()
-				if method == "Fire" and typeof(self) == "Instance" and self.Name == "Sync" then
-					local args = { ... }
+			local method = getnamecallmethod()
+			local args = { ... }
+			if method == "Fire" and typeof(self) == "Instance" and self.Name == "Sync" then
+				AgentDebugger.recordNamecall(method, self, args)
+				if Config.EnableSilentAim then
 					local rewritten = tryRedirectSilentAim(args)
 					if rewritten then
 						return oldNamecall(self, unpack(rewritten))
 					end
-				elseif method == "FireServer" then
-					local args = { ... }
+				end
+			elseif method == "FireServer" then
+				AgentDebugger.recordNamecall(method, self, args)
+				if Config.EnableSilentAim then
 					local rewritten = tryRedirectSilentAim(args)
 					if rewritten then
 						return oldNamecall(self, unpack(rewritten))
@@ -1341,7 +1799,13 @@ UILib.create({
 						{ type = "slider", key = "Hitchance", label = "Hitchance", min = 0, max = 100, step = 5 },
 						{ type = "slider", key = "ProjectileSpeed", label = "Projectile Speed", min = 100, max = 3000, step = 100 },
 						{ type = "toggle", key = "EnableDebugLogs", label = "Debug Logging", hud = "Debug Logs" },
-						{ type = "button", id = "dumpDebug", label = "Dump Debug Report", onClick = dumpDebugReport },
+						{
+							type = "button",
+							id = "agentDiag",
+							label = "Agent Diagnostic (12s)",
+							onClick = runAgentDiagnostic,
+						},
+						{ type = "button", id = "dumpDebug", label = "Dump Agent Report", onClick = dumpDebugReport },
 					},
 				},
 			},
@@ -1460,8 +1924,12 @@ UILib.create({
 			end
 		elseif key == "EnableDebugLogs" then
 			if value then
-				notify("Debug enabled — status every 2s. Use Dump Debug Report for full details.", "Debug", 6)
-				dumpDebugReport()
+				ensureNamecallHook()
+				notify(
+					"Debug trace on. Use Agent Diagnostic while firing, or Dump Agent Report for instant snapshot.",
+					"Agent Debug",
+					7
+				)
 			end
 		elseif key == "EnableAutoReload" or key == "EnableRapidFire" then
 			applyCombatExtras()
