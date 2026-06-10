@@ -42,6 +42,7 @@ local Config = {
 
 -- Server sets LocalPlayer._Y while tracking vertical movement; flying far above it triggers removal.
 local FLY_AC_MAX_ABOVE_Y = 18
+local GAME_BUILD = "9-fly-before-bypass"
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
 local BOOST_JUMP_POWER = Config.JumpPower
@@ -405,7 +406,112 @@ local flyBypassState = {
 	acGroundY = LocalPlayer:GetAttribute("_Y"),
 }
 
-local applyFlyStep
+local function getFlyMoveDirection(camera)
+	if not camera then
+		return Vector3.zero
+	end
+
+	local move = Vector3.zero
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		move += camera.CFrame.LookVector
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+		move -= camera.CFrame.LookVector
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+		move += camera.CFrame.RightVector
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+		move -= camera.CFrame.RightVector
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+		move += Vector3.yAxis
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		move -= Vector3.yAxis
+	end
+	return move
+end
+
+local function clampFlyMoveForAc(root, move)
+	local acY = flyBypassState.acGroundY
+	if typeof(acY) ~= "number" or move.Magnitude <= 0 then
+		return move
+	end
+
+	local ceiling = acY + FLY_AC_MAX_ABOVE_Y
+	if root.Position.Y < ceiling or move.Y <= 0 then
+		return move
+	end
+
+	local flat = Vector3.new(move.X, 0, move.Z)
+	if flat.Magnitude > 0 then
+		return flat
+	end
+	return Vector3.zero
+end
+
+-- Returns true when fly input is actively driving movement this frame.
+local function applyFlyStep(root, humanoid, deltaTime, withBypass)
+	if not Config.Fly or not root or not humanoid or humanoid.Health <= 0 then
+		return false
+	end
+
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return false
+	end
+
+	local move = clampFlyMoveForAc(root, getFlyMoveDirection(camera))
+	if move.Magnitude <= 0 then
+		if withBypass and humanoid.PlatformStand then
+			humanoid.PlatformStand = false
+		end
+		return false
+	end
+
+	local dt = typeof(deltaTime) == "number" and deltaTime or (1 / 60)
+	local direction = move.Unit
+	local speed = Config.FlySpeed
+
+	if withBypass then
+		humanoid.PlatformStand = true
+		root.AssemblyLinearVelocity = direction * speed
+		root.AssemblyAngularVelocity = Vector3.zero
+		acDebugMark("fly_move", {
+			mode = "bypass_velocity",
+			speed = speed,
+			delta = dt,
+			move = move.Magnitude,
+			pos = root.Position,
+			anchored = root.Anchored,
+			acY = flyBypassState.acGroundY,
+		})
+		return true
+	end
+
+	root.CFrame += direction * speed * dt
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	acDebugMark("fly_move", {
+		mode = "cframe",
+		speed = speed,
+		delta = dt,
+		move = move.Magnitude,
+		pos = root.Position,
+		anchored = root.Anchored,
+	})
+	return true
+end
+
+local function applyFly(deltaTime)
+	if not Config.Fly or Config.MovementBypass then
+		return
+	end
+	local root = getRootPart()
+	local humanoid = getHumanoid()
+	applyFlyStep(root, humanoid, deltaTime, false)
+end
 
 local function releaseRootPart(rootPart)
 	if rootPart and rootPart.Parent then
@@ -1296,117 +1402,6 @@ local function applySurvivalBypasses()
 end
 
 -- ---------------------------------------------------------------------------
--- Fly (PostSimulation when AC bypass is on — avoids anchor/CFrame fight)
--- ---------------------------------------------------------------------------
-
-local function getFlyMoveDirection(camera)
-	if not camera then
-		return Vector3.zero
-	end
-
-	local move = Vector3.zero
-	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-		move += camera.CFrame.LookVector
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-		move -= camera.CFrame.LookVector
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-		move += camera.CFrame.RightVector
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-		move -= camera.CFrame.RightVector
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-		move += Vector3.yAxis
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-		move -= Vector3.yAxis
-	end
-	return move
-end
-
-local function clampFlyMoveForAc(root, move)
-	local acY = flyBypassState.acGroundY
-	if typeof(acY) ~= "number" or move.Magnitude <= 0 then
-		return move
-	end
-
-	local ceiling = acY + FLY_AC_MAX_ABOVE_Y
-	if root.Position.Y < ceiling or move.Y <= 0 then
-		return move
-	end
-
-	local flat = Vector3.new(move.X, 0, move.Z)
-	if flat.Magnitude > 0 then
-		return flat
-	end
-	return Vector3.zero
-end
-
--- Returns true when fly input is actively driving movement this frame.
-applyFlyStep = function(root, humanoid, deltaTime, withBypass)
-	if not Config.Fly or not root or not humanoid or humanoid.Health <= 0 then
-		return false
-	end
-
-	local camera = workspace.CurrentCamera
-	if not camera then
-		return false
-	end
-
-	local move = clampFlyMoveForAc(root, getFlyMoveDirection(camera))
-	if move.Magnitude <= 0 then
-		if withBypass and humanoid.PlatformStand then
-			humanoid.PlatformStand = false
-		end
-		return false
-	end
-
-	local dt = typeof(deltaTime) == "number" and deltaTime or (1 / 60)
-	local direction = move.Unit
-	local speed = Config.FlySpeed
-
-	if withBypass then
-		humanoid.PlatformStand = true
-		root.AssemblyLinearVelocity = direction * speed
-		root.AssemblyAngularVelocity = Vector3.zero
-		acDebugMark("fly_move", {
-			mode = "bypass_velocity",
-			speed = speed,
-			delta = dt,
-			move = move.Magnitude,
-			pos = root.Position,
-			anchored = root.Anchored,
-			acY = flyBypassState.acGroundY,
-		})
-		return true
-	end
-
-	root.CFrame += direction * speed * dt
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.AssemblyAngularVelocity = Vector3.zero
-	acDebugMark("fly_move", {
-		mode = "cframe",
-		speed = speed,
-		delta = dt,
-		move = move.Magnitude,
-		pos = root.Position,
-		anchored = root.Anchored,
-	})
-	return true
-end
-
-local function applyFly(deltaTime)
-	if not Config.Fly or Config.MovementBypass then
-		return
-	end
-	local root = getRootPart()
-	local humanoid = getHumanoid()
-	applyFlyStep(root, humanoid, deltaTime, false)
-end
-
--- ---------------------------------------------------------------------------
 -- Teleports + money utilities
 -- ---------------------------------------------------------------------------
 
@@ -1854,4 +1849,4 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	applyFly(typeof(deltaTime) == "number" and deltaTime or 1 / 60)
 end)
 
-print("[MicroHub] Tha Bronx 3 loaded — LastACPos:", readLastAcStatus())
+print("[MicroHub] Tha Bronx 3", GAME_BUILD, "— LastACPos:", readLastAcStatus())
