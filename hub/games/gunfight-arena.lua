@@ -8,7 +8,7 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "3-esp-enemy-fix"
+local GAME_BUILD = "4-esp-player-resolve"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -59,10 +59,16 @@ local function teamId(entity)
 	if not entity then
 		return nil
 	end
-	local id = entity:GetAttribute("Team")
-	if id == nil and entity:IsA("Player") and entity.Team then
-		id = entity.Team.Name
+	if entity:IsA("Player") then
+		local id = entity:GetAttribute("Team")
+		if id == nil and entity.Team then
+			id = entity.Team.Name
+		end
+		if id ~= nil then
+			return tonumber(id) or id
+		end
 	end
+	local id = entity:GetAttribute("Team")
 	if id == nil then
 		return nil
 	end
@@ -80,7 +86,33 @@ local function relation(player, char, localTeam)
 	return "Neutral"
 end
 
+local function resolvePlayer(model)
+	if not model then
+		return nil
+	end
+	local player = Players:GetPlayerFromCharacter(model)
+	if player then
+		return player
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Name == model.Name then
+			return p
+		end
+	end
+	return nil
+end
+
+local function playerLabel(player, char)
+	if player and player:IsA("Player") then
+		return player.DisplayName
+	end
+	return char and char.Name or "Unknown"
+end
+
 local function getChar(player)
+	if not player or not player:IsA("Player") then
+		return nil
+	end
 	local m = workspace:FindFirstChild(player.Name)
 	if m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") then
 		return m
@@ -246,7 +278,7 @@ local function drawPlayer(player, char, hum, root, localTeam, camPos, snapFrom)
 	entry.box.Visible = true
 
 	entry.name.Position = Vector2.new(cx, y - 15)
-	entry.name.Text = player.DisplayName
+	entry.name.Text = playerLabel(player, char)
 	entry.name.Color = WHITE
 	entry.name.Visible = true
 
@@ -311,10 +343,7 @@ local function updateESP()
 
 	for _, child in ipairs(workspace:GetChildren()) do
 		if child:IsA("Model") and child ~= LocalPlayer.Character then
-			local player = Players:GetPlayerFromCharacter(child)
-			if not player then
-				player = Players:FindFirstChild(child.Name)
-			end
+			local player = resolvePlayer(child)
 			if player and player ~= LocalPlayer and not seen[player] then
 				local hum = child:FindFirstChildOfClass("Humanoid")
 				local root = child.PrimaryPart or child:FindFirstChild("HumanoidRootPart")
