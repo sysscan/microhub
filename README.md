@@ -4,24 +4,34 @@ Script hub for Roblox — auto-loads the right script per game.
 
 ## Loader (Volt)
 
-Uses [`request`](https://docs.voltbz.net/docs/miscellaneous) per Volt documentation:
-
 ```lua
-local function stripBom(s)
-	while #s >= 3 and s:byte(1) == 0xEF and s:byte(2) == 0xBB and s:byte(3) == 0xBF do
-		s = s:sub(4)
-	end
-	return s
+local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
+local MIN_LOADER = "1.6.0"
+
+local function requestFunction()
+	return request or http_request or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request)
 end
 
-local r = request({
-	Url = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua?t=" .. os.time(),
-	Method = "GET",
-})
-assert(r.Success, r.StatusMessage or "download failed")
-local fn = loadstring(stripBom(r.Body), "MicroHub.Loader")
-assert(fn, "compile failed")
-fn()
+local function get(url)
+	local r = assert(requestFunction(), "request() unavailable")({
+		Url = url .. (url:find("?", 1, true) and "&" or "?") .. "t=" .. os.time() .. "_" .. math.random(1e5, 1e9),
+		Method = "GET",
+		Headers = {
+			["Accept"] = "application/json, text/plain",
+			["Cache-Control"] = "no-cache, no-store",
+			["Pragma"] = "no-cache",
+			["User-Agent"] = "MicroHub",
+		},
+	})
+	assert(r and (r.Success == true or tonumber(r.StatusCode) == 200), r and (r.StatusMessage or r.StatusCode) or "download failed")
+	return r.Body or r.body
+end
+
+local ref = get("https://api.github.com/repos/" .. OWNER .. "/" .. REPO .. "/commits/" .. BRANCH)
+local sha = assert(ref:match('"sha"%s*:%s*"([0-9a-fA-F]+)"'), "could not resolve latest commit")
+local body = get("https://raw.githubusercontent.com/" .. OWNER .. "/" .. REPO .. "/" .. sha .. "/hub/loader.lua")
+assert(body:find('VERSION = "' .. MIN_LOADER .. '"', 1, true), "stale loader body")
+loadstring(body, "MicroHub.Loader")()
 ```
 
 ## Supported games
