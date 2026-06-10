@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "18-sa-debug-volt"
+local GAME_BUILD = "19-sa-debug-remote"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -490,7 +490,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "18-sa-debug-volt"
+local DBG_HOOK_BUILD = "19-sa-debug-remote"
 local dbgNetworkHooked = false
 local dbgRemoteHooked = false
 local dbgNamecallHooked = false
@@ -520,6 +520,7 @@ local dbgNextOverlayAt = 0
 local dbgNextSyncScan = 0
 local dbgNextFlameScan = 0
 local dbgCachedFlame: BasePart? = nil
+local dbgCachedCombatRemote: RemoteEvent? = nil
 
 local function dbgShortCf(cf: any): string
 	if typeof(cf) ~= "CFrame" then
@@ -720,12 +721,63 @@ local function dbgIsNetworkApi(tbl: any): boolean
 		and typeof(rawget(tbl, "RE")) == "Instance"
 end
 
-local function dbgCombatRemote(): RemoteEvent?
-	local remote = LocalPlayer:FindFirstChild("RemoteEvent")
-	if remote and remote:IsA("RemoteEvent") then
+local function dbgIsBadRemote(remote: RemoteEvent): boolean
+	local path = remote:GetFullName()
+	return path:find("LocalizationService", 1, true) ~= nil
+end
+
+local function dbgAcceptCombatRemote(remote: Instance?): RemoteEvent?
+	if remote and remote:IsA("RemoteEvent") and not dbgIsBadRemote(remote) then
+		dbgCachedCombatRemote = remote
 		return remote
 	end
 	return nil
+end
+
+local function dbgCombatRemote(): RemoteEvent?
+	if dbgCachedCombatRemote and dbgCachedCombatRemote.Parent then
+		return dbgCachedCombatRemote
+	end
+
+	local direct = LocalPlayer:FindFirstChild("RemoteEvent")
+	if dbgAcceptCombatRemote(direct) then
+		return direct
+	end
+
+	for _, desc in LocalPlayer:GetDescendants() do
+		if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") then
+			return dbgAcceptCombatRemote(desc)
+		end
+	end
+
+	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+	if playerScripts then
+		for _, desc in playerScripts:GetDescendants() do
+			if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") then
+				return dbgAcceptCombatRemote(desc)
+			end
+		end
+	end
+
+	local record = Players:FindFirstChild(LocalPlayer.Name)
+	if record then
+		for _, desc in record:GetDescendants() do
+			if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") then
+				return dbgAcceptCombatRemote(desc)
+			end
+		end
+	end
+
+	local playerName = LocalPlayer.Name
+	for _, inst in game:GetDescendants() do
+		if inst:IsA("RemoteEvent") and inst.Name == "RemoteEvent" then
+			if inst:GetFullName():find(playerName, 1, true) then
+				return dbgAcceptCombatRemote(inst)
+			end
+		end
+	end
+
+	return dbgCachedCombatRemote
 end
 
 local function dbgPrintCaps()
@@ -750,40 +802,49 @@ local function dbgPrintCaps()
 end
 
 local function dbgRemoteScore(remote: RemoteEvent): number
-	local parent = remote.Parent
-	if parent == LocalPlayer then
+	if dbgIsBadRemote(remote) then
+		return 0
+	end
+	if remote:GetFullName():find(LocalPlayer.Name, 1, true) then
 		return 100
 	end
-	if parent and parent:IsA("Player") and parent == LocalPlayer then
+	if remote:IsDescendantOf(LocalPlayer) then
 		return 100
 	end
 	local playerAncestor = remote:FindFirstAncestorWhichIsA("Player")
 	if playerAncestor == LocalPlayer then
-		return 90
+		return 100
+	end
+	local record = Players:FindFirstChild(LocalPlayer.Name)
+	if record and remote:IsDescendantOf(record) then
+		return 100
 	end
 	return 0
 end
 
 local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
-	local combatRemote = dbgCombatRemote()
 	local bestApi: any = nil
 	local bestRemote: RemoteEvent? = nil
 	local bestScore = 0
+	local candidateCount = 0
 
-	local function consider(tbl: any)
+	local function consider(tbl: any): boolean
 		if not dbgIsNetworkApi(tbl) then
-			return
+			return false
 		end
 		local remote = rawget(tbl, "RE")
 		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
-			return
-		end
-		if combatRemote and remote == combatRemote then
-			if callback(tbl, combatRemote) then
-				return true
-			end
+			return false
 		end
 		local score = dbgRemoteScore(remote)
+		if score <= 0 and not dbgIsBadRemote(remote) then
+			-- SetupClient reparents RemoteEvent off LocalPlayer; trust Network.RE.
+			score = 80
+		end
+		if score <= 0 then
+			return false
+		end
+		candidateCount += 1
 		if score > bestScore then
 			bestApi, bestRemote, bestScore = tbl, remote, score
 		end
@@ -814,7 +875,9 @@ local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
 		end
 	end
 
-	if bestScore >= 90 and bestApi and bestRemote then
+	local minScore = if candidateCount == 1 then 1 else 90
+	if bestApi and bestRemote and bestScore >= minScore then
+		dbgAcceptCombatRemote(bestRemote)
 		callback(bestApi, bestRemote)
 	end
 end
@@ -843,7 +906,7 @@ local function dbgHookNetworkApi()
 	end
 
 	local api, remote = dbgFindNetworkApi()
-	if not api or not remote or dbgRemoteScore(remote) < 90 then
+	if not api or not remote or dbgRemoteScore(remote) <= 0 then
 		return
 	end
 
@@ -1023,14 +1086,12 @@ local function dbgStartHookWorker()
 			if dbgHooksActive() then
 				break
 			end
-			if dbgCombatRemote() then
-				if typeof(voltHookfunction) ~= "function" then
-					dbg.status = "hookfunction missing (Volt genv?)"
-				else
-					dbg.status = "waiting for Network API"
-				end
+			if typeof(voltHookfunction) ~= "function" then
+				dbg.status = "hookfunction missing (Volt genv?)"
+			elseif dbgCombatRemote() then
+				dbg.status = "waiting for Network API (gc)"
 			else
-				dbg.status = "waiting for player RemoteEvent"
+				dbg.status = "waiting for Network API + RemoteEvent"
 			end
 			if attempts == 5 and not dbgHooksActive() then
 				dbgLog("init-fail", dbg.status, 0)
