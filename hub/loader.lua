@@ -1,7 +1,11 @@
--- MicroHub simple loader. Remote-only, no workspace cache, no bootstrap, no runtime.
+-- MicroHub loader v1.5.2 — remote only, no workspace files, no bootstrap.
 
-local VERSION = "1.5.1"
-local BASE_URL = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
+local VERSION = "1.5.2"
+local MIN_UI_VERSION = "2.0.2"
+local BASE_URLS = {
+	"https://cdn.jsdelivr.net/gh/sysscan/microhub@main/hub",
+	"https://raw.githubusercontent.com/sysscan/microhub/main/hub",
+}
 local UI_KEY = "__MicroHubUILib"
 
 local GAMES = {
@@ -37,29 +41,37 @@ local function requestFn()
 	return request or http_request or (syn and syn.request)
 end
 
+local function cacheBust()
+	return tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999999))
+end
+
 local function fetch(path)
 	local http = requestFn()
 	if typeof(http) ~= "function" then
 		error("request() unavailable", 0)
 	end
 
-	local url = BASE_URL .. "/" .. path .. "?t=" .. tostring(os.time()) .. tostring(math.random(100000, 999999))
-	local ok, res = pcall(http, {
-		Url = url,
-		Method = "GET",
-		Headers = { ["Cache-Control"] = "no-cache" },
-	})
-	if not ok or not res then
-		error("fetch failed: " .. path .. " (" .. tostring(res) .. ")", 0)
+	local failures = {}
+	for _, base in ipairs(BASE_URLS) do
+		local url = base .. "/" .. path .. "?t=" .. cacheBust()
+		local ok, res = pcall(http, {
+			Url = url,
+			Method = "GET",
+			Headers = { ["Cache-Control"] = "no-cache, no-store" },
+		})
+		if ok and res then
+			local status = tonumber(res.StatusCode)
+			local success = res.Success == true or (status and status >= 200 and status < 300)
+			if success and typeof(res.Body) == "string" and #res.Body > 0 then
+				return sanitize(res.Body), base
+			end
+			table.insert(failures, base .. " (" .. tostring(res.StatusCode or res.StatusMessage or "empty") .. ")")
+		else
+			table.insert(failures, base .. " (" .. tostring(res) .. ")")
+		end
 	end
 
-	local status = tonumber(res.StatusCode)
-	local success = res.Success == true or (status and status >= 200 and status < 300)
-	if not success or typeof(res.Body) ~= "string" or #res.Body == 0 then
-		error("fetch failed: " .. path .. " (" .. tostring(res.StatusCode or res.StatusMessage or "no body") .. ")", 0)
-	end
-
-	return sanitize(res.Body)
+	error("fetch failed: " .. path .. " — " .. table.concat(failures, "; "), 0)
 end
 
 local function runSource(path)
@@ -104,18 +116,21 @@ local ok, err = pcall(function()
 		error("unsupported PlaceId: " .. tostring(game.PlaceId), 0)
 	end
 
-	warn("[MicroHub] loader v" .. VERSION .. " loading " .. entry.name)
-	notify("MicroHub", "Loading " .. entry.name .. "...")
+	warn("[MicroHub] v" .. VERSION .. " → " .. entry.name)
 
 	local ui = runSource("lib/ui.lua")
 	if typeof(ui) ~= "table" or typeof(ui.create) ~= "function" then
 		error("lib/ui.lua did not return a UI library", 0)
 	end
+	local uiVersion = tostring(ui.version or "?")
+	if uiVersion < MIN_UI_VERSION then
+		error("stale UI " .. uiVersion .. " (need " .. MIN_UI_VERSION .. "+) — re-run loader snippet", 0)
+	end
 	shared[UI_KEY] = ui
 
 	runSource(entry.path)
 
-	warn("[MicroHub] loaded " .. entry.name .. " v" .. VERSION)
+	warn("[MicroHub] ready — UI " .. uiVersion)
 	notify("MicroHub", entry.name .. " loaded")
 end)
 

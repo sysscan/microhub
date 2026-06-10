@@ -4,19 +4,27 @@ Loads game scripts by `game.PlaceId`.
 
 ## Loader (Volt)
 
-Paste this. That's it. The loader is remote-only and does not read or create workspace files.
+Paste this. That's it. Uses jsDelivr first so Volt cannot serve a stale cached copy.
 
 ```lua
-local r = request({
-	Url = "https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua?t=" .. os.time(),
-	Method = "GET",
-	Headers = { ["Cache-Control"] = "no-cache" },
-})
-assert(r.Success, r.StatusMessage or "MicroHub loader download failed")
-loadstring(r.Body, "MicroHub.Loader")()
+local bust = os.time() .. "_" .. math.random(1e5, 1e9)
+local urls = {
+	"https://cdn.jsdelivr.net/gh/sysscan/microhub@main/hub/loader.lua",
+	"https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua",
+}
+local body
+for _, url in ipairs(urls) do
+	local r = request({ Url = url .. "?t=" .. bust, Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } })
+	if r.Success and r.Body:find('VERSION = "1.5.2"') then
+		body = r.Body
+		break
+	end
+end
+assert(body, "Stale loader — use the snippet above, not a saved script")
+loadstring(body, "MicroHub.Loader")()
 ```
 
-Re-run anytime. Previous Tha Bronx 3 modules are stopped first. Every file is fetched from GitHub.
+You should see `[MicroHub] v1.5.2` and `ready — UI 2.0.2`. Re-run anytime.
 
 ## Layout
 
