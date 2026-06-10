@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "14-sa-debug-remote"
+local GAME_BUILD = "15-sa-debug-perf"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -445,6 +445,10 @@ end
 
 local DBG_CONSOLE_INTERVAL = 4
 local DBG_LINE_COUNT = 14
+local DBG_HOOK_RETRY = 2
+local DBG_OVERLAY_INTERVAL = 0.12
+local DBG_SYNC_SCAN_INTERVAL = 1
+local DBG_FLAME_CACHE_INTERVAL = 0.5
 
 type DbgShot = {
 	at: number,
@@ -488,6 +492,11 @@ local dbgNamecallHooked = false
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
+local dbgNextHookAttempt = 0
+local dbgNextOverlayAt = 0
+local dbgNextSyncScan = 0
+local dbgNextFlameScan = 0
+local dbgCachedFlame: BasePart? = nil
 
 local function dbgShortCf(cf: any): string
 	if typeof(cf) ~= "CFrame" then
@@ -654,14 +663,6 @@ local function dbgFindNetworkApi(): (any, RemoteEvent?)
 	end
 
 	local combatRemote = dbgCombatRemote()
-	if combatRemote then
-		for _, obj in getgc(true) do
-			if dbgIsNetworkApi(obj) and rawget(obj, "RE") == combatRemote then
-				return obj, combatRemote
-			end
-		end
-	end
-
 	local bestApi: any = nil
 	local bestRemote: RemoteEvent? = nil
 	local bestScore = 0
@@ -673,6 +674,9 @@ local function dbgFindNetworkApi(): (any, RemoteEvent?)
 		local remote = rawget(obj, "RE")
 		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
 			continue
+		end
+		if combatRemote and remote == combatRemote then
+			return obj, combatRemote
 		end
 		local score = dbgRemoteScore(remote)
 		if score > bestScore then
@@ -776,8 +780,20 @@ local function dbgHookNamecallFallback()
 end
 
 local function dbgInstallHooks()
+	if dbgNetworkHooked then
+		return
+	end
+
+	local now = os.clock()
+	if now < dbgNextHookAttempt then
+		return
+	end
+	dbgNextHookAttempt = now + DBG_HOOK_RETRY
+
 	dbgHookNetworkApi()
-	dbgHookNamecallFallback()
+	if not dbgNetworkHooked then
+		dbgHookNamecallFallback()
+	end
 end
 
 local function dbgOnSyncFire(args: { any })
@@ -799,9 +815,15 @@ local function dbgOnSyncFire(args: { any })
 end
 
 local function dbgHookSync()
-	if not Config.AimDebugger then
+	if not Config.AimDebugger or dbg.syncBound > 0 then
 		return
 	end
+
+	local now = os.clock()
+	if now < dbgNextSyncScan then
+		return
+	end
+	dbgNextSyncScan = now + DBG_SYNC_SCAN_INTERVAL
 
 	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
 	if not playerScripts then
@@ -821,15 +843,30 @@ local function dbgHookSync()
 end
 
 local function dbgViewModelFlame(): BasePart?
+	if dbgCachedFlame and dbgCachedFlame.Parent then
+		return dbgCachedFlame
+	end
+
+	local now = os.clock()
+	if now < dbgNextFlameScan then
+		return dbgCachedFlame
+	end
+	dbgNextFlameScan = now + DBG_FLAME_CACHE_INTERVAL
+
 	local vm = workspace:FindFirstChild("ViewModel")
 	if not vm or not vm:IsA("Model") then
+		dbgCachedFlame = nil
 		return nil
 	end
+
 	for _, desc in vm:GetDescendants() do
 		if desc.Name == "Flame" and desc:IsA("BasePart") then
+			dbgCachedFlame = desc
 			return desc
 		end
 	end
+
+	dbgCachedFlame = nil
 	return nil
 end
 
@@ -877,9 +914,15 @@ local function dbgUpdate()
 		return
 	end
 
+	dbgEnsureOverlay()
 	dbgInstallHooks()
 	dbgHookSync()
-	dbgEnsureOverlay()
+
+	local now = os.clock()
+	if now < dbgNextOverlayAt then
+		return
+	end
+	dbgNextOverlayAt = now + DBG_OVERLAY_INTERVAL
 
 	local origin = aimOrigin()
 	local part = closestAimPart(origin)
