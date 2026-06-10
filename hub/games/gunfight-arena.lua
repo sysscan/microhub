@@ -63,6 +63,7 @@ local ammoUpvalueCache = nil
 local fireRateCache = nil
 local ensureIndexHook
 local ensureNamecallHook
+local ensureInvkHook
 local STORED_AMMO_SPOOF = 1e36
 local AIM_SCAN_INTERVAL = 0.05
 
@@ -96,7 +97,7 @@ local AgentDebugger = {
 	samples = {},
 	redirectStats = {
 		shootEvent = 0,
-		vortexSync = 0,
+		invkFire = 0,
 		fireServer = 0,
 		blocked_disabled = 0,
 		blocked_noTarget = 0,
@@ -111,11 +112,13 @@ local AgentDebugger = {
 		fireserver_total = 0,
 		fireserver_fire = 0,
 		fireserver_other = 0,
+		invk_fire_total = 0,
+		invk_fire_shape = 0,
 	},
 }
 
 local SUNC_API_GROUPS = {
-	silentAim = { "hookmetamethod", "getnamecallmethod", "checkcaller" },
+	silentAim = { "getsenv", "debug.getupvalue", "debug.setupvalue" },
 	infiniteAmmo = { "hookmetamethod", "getsenv", "debug.getupvalue", "debug.setupvalue" },
 	rapidFire = { "getsenv", "debug.getupvalue", "debug.setupvalue" },
 	combatModifiers = {},
@@ -152,7 +155,14 @@ local function suncApiAvailable(apiName)
 	if apiName == "debug.getconstants" then
 		return debug and typeof(debug.getconstants) == "function"
 	end
-	return typeof(_G[apiName]) == "function"
+	local fn = rawget(_G, apiName)
+	if typeof(fn) ~= "function" and typeof(getgenv) == "function" then
+		local ok, env = pcall(getgenv)
+		if ok and typeof(env) == "table" then
+			fn = env[apiName]
+		end
+	end
+	return typeof(fn) == "function"
 end
 
 local function describeArg(value)
@@ -194,6 +204,31 @@ end
 
 function AgentDebugger.beginTraceSession(seconds)
 	AgentDebugger.traceUntil = os.clock() + (seconds or AGENT_TRACE_SECONDS)
+end
+
+function AgentDebugger.recordInvkFire(packed)
+	if not AgentDebugger.shouldTrace() then
+		return
+	end
+	local argCount = packed.n or #packed
+	AgentDebugger.namecallStats.invk_fire_total += 1
+	if typeof(packed[1]) == "string" and typeof(packed[2]) == "number" and typeof(packed[3]) == "CFrame" then
+		AgentDebugger.namecallStats.invk_fire_shape += 1
+	end
+	local sample = {
+		t = os.clock(),
+		method = "INVK:Fire",
+		self = "Vortex",
+		argCount = argCount,
+		args = {},
+	}
+	for index = 1, math.min(argCount, 8) do
+		sample.args[index] = describeArg(packed[index])
+	end
+	table.insert(AgentDebugger.samples, 1, sample)
+	while #AgentDebugger.samples > AGENT_MAX_SAMPLES do
+		table.remove(AgentDebugger.samples)
+	end
 end
 
 function AgentDebugger.recordNamecall(method, selfObject, packed)
@@ -254,8 +289,8 @@ function AgentDebugger.recordRedirectOutcome(path, blockedReason)
 	end
 	if path == "ShootEvent" then
 		AgentDebugger.redirectStats.shootEvent += 1
-	elseif path == "VortexSync" then
-		AgentDebugger.redirectStats.vortexSync += 1
+	elseif path == "InvkFire" then
+		AgentDebugger.redirectStats.invkFire += 1
 	elseif path == "FireServer" then
 		AgentDebugger.redirectStats.fireServer += 1
 	end
@@ -329,12 +364,24 @@ local function hasDrawing()
 	return typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
 end
 
+local function resolveExecutorGlobal(name)
+	local fn = rawget(_G, name)
+	if typeof(fn) == "function" then
+		return fn
+	end
+	local env = getGenv()
+	if typeof(env) == "table" and typeof(env[name]) == "function" then
+		return env[name]
+	end
+	return nil
+end
+
 local function hasHookMetamethod()
-	return typeof(hookmetamethod) == "function"
+	return resolveExecutorGlobal("hookmetamethod") ~= nil
 end
 
 local function hasGetsenv()
-	return typeof(getsenv) == "function"
+	return resolveExecutorGlobal("getsenv") ~= nil
 end
 
 local function clearAimSnapshot()
@@ -467,12 +514,13 @@ local function predictedPosition(character)
 end
 
 local function hasNamecallHook()
-	return typeof(getnamecallmethod) == "function"
-		and typeof(checkcaller) == "function"
+	return resolveExecutorGlobal("getnamecallmethod") ~= nil
+		and resolveExecutorGlobal("checkcaller") ~= nil
 end
 
 local function isExecutorCall()
-	return typeof(checkcaller) == "function" and checkcaller()
+	local checkcallerFn = resolveExecutorGlobal("checkcaller")
+	return typeof(checkcallerFn) == "function" and checkcallerFn()
 end
 
 local function getAimOrigin()
@@ -576,7 +624,13 @@ local function isFireServerShot(packed)
 		and typeof(packed[4]) == "CFrame"
 end
 
-local function tryRedirectSilentAim(packed)
+local function isInvkFirePayload(packed)
+	return typeof(packed[1]) == "string"
+		and typeof(packed[2]) == "number"
+		and typeof(packed[3]) == "CFrame"
+end
+
+local function applySilentAimCframeRewrite(packed, cframeIndex, usePartCFrame, redirectPath)
 	local tracing = AgentDebugger.shouldTrace()
 	if not Config.EnableSilentAim then
 		if tracing then
@@ -598,43 +652,47 @@ local function tryRedirectSilentAim(packed)
 		return false
 	end
 	syncMouseHitSpot(targetPart)
+	if typeof(packed[cframeIndex]) ~= "CFrame" then
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
+		end
+		return false
+	end
+	local redirected = aimCFrameAtTarget(packed[cframeIndex], targetPart, usePartCFrame)
+	if not redirected then
+		if tracing then
+			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
+		end
+		return false
+	end
+	packed[cframeIndex] = redirected
+	debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+	AgentDebugger.recordRedirectOutcome(redirectPath)
+	debugEvent(redirectPath .. " redirected")
+	return true
+end
 
-	-- Actor Sync: Fire(caller, "ShootEvent", ammo, cframe, id, weapon, projectile, ...)
+local function tryRedirectSilentAim(packed)
 	if isShootEventSync(packed) then
-		local redirected = aimCFrameAtTarget(packed[4], targetPart, true)
-		if redirected then
-			packed[4] = redirected
-			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
-			AgentDebugger.recordRedirectOutcome("ShootEvent")
-			debugEvent("Sync ShootEvent redirected")
-			return true
-		end
-		if tracing then
-			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
-		end
-		return false
+		return applySilentAimCframeRewrite(packed, 4, true, "ShootEvent")
 	end
-
-	-- INVK("Fire", weaponName, clock, aimCFrame, suppressor, thirdPerson)
 	if isFireServerShot(packed) then
-		local redirected = aimCFrameAtTarget(packed[4], targetPart, false)
-		if redirected then
-			packed[4] = redirected
-			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
-			AgentDebugger.recordRedirectOutcome("FireServer")
-			debugEvent("FireServer Fire redirected")
-			return true
-		end
-		if tracing then
-			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
-		end
-		return false
+		return applySilentAimCframeRewrite(packed, 4, false, "FireServer")
 	end
-
-	if tracing then
+	if AgentDebugger.shouldTrace() then
 		AgentDebugger.recordRedirectOutcome(nil, "badArgs")
 	end
 	return false
+end
+
+local function tryRedirectInvkFire(packed)
+	if not isInvkFirePayload(packed) then
+		if AgentDebugger.shouldTrace() then
+			AgentDebugger.recordRedirectOutcome(nil, "badArgs")
+		end
+		return false
+	end
+	return applySilentAimCframeRewrite(packed, 3, false, "InvkFire")
 end
 
 local function resetCFrameModifier(modifiers, name)
@@ -665,6 +723,10 @@ end
 
 local vortexEnv = nil
 local installedNamecallHook = false
+local installedInvkHook = false
+local invkHookHostFn = nil
+local invkHookIndex = nil
+local originalInvk = nil
 local oldNamecall = nil
 
 local function hasSetupvalue()
@@ -738,6 +800,37 @@ local function writeUpvalue(fn, index, value)
 		return false
 	end
 	return pcall(debug.setupvalue, fn, index, value)
+end
+
+local function findInvkUpvalue(env)
+	if not env then
+		return nil
+	end
+	local candidates = { "Fire", "Restock", "Reload", "WeaponRender", "ProcessInput", "FireMelee" }
+	for _, name in ipairs(candidates) do
+		local fn = env[name]
+		if typeof(fn) == "function" then
+			local index = findUpvalueIndex(fn, "INVK")
+			if index then
+				return fn, index
+			end
+		end
+	end
+	return nil
+end
+
+local function restoreInvkHook()
+	if installedInvkHook and invkHookHostFn and invkHookIndex and originalInvk then
+		writeUpvalue(invkHookHostFn, invkHookIndex, originalInvk)
+	end
+	installedInvkHook = false
+	invkHookHostFn = nil
+	invkHookIndex = nil
+	originalInvk = nil
+end
+
+local function silentAimHooksReady()
+	return installedInvkHook or installedNamecallHook
 end
 
 local function resolveAmmoUpvaluesHeuristic(fn)
@@ -875,13 +968,14 @@ local function getVortexEnv()
 	local vortex = getVortex()
 	if not vortex or not vortex.Enabled then
 		vortexEnv = nil
+		restoreInvkHook()
 		clearAmmoCache()
 		return nil
 	end
 	if vortexEnv then
 		return vortexEnv
 	end
-	local ok, env = pcall(getsenv, vortex)
+	local ok, env = pcall(resolveExecutorGlobal("getsenv"), vortex)
 	if ok and typeof(env) == "table" then
 		vortexEnv = env
 		clearAmmoCache()
@@ -1059,6 +1153,7 @@ local function probeVortexInventory()
 		envFunctions = envKeys,
 		hasRestock = env ~= nil and typeof(env.Restock) == "function",
 		hasFire = env ~= nil and typeof(env.Fire) == "function",
+		hasInvkUpvalue = env ~= nil and findInvkUpvalue(env) ~= nil,
 	}
 end
 
@@ -1136,33 +1231,31 @@ local function buildFeatureVerdicts(report)
 			"missing sUNC: " .. table.concat(report.sunc.groups.silentAim.missing, ", "),
 			"Remove silent aim or gate behind capability check"
 		)
-	elseif not report.vortex.sync then
-		add("EnableSilentAim", "REWRITE", "Vortex Sync missing", "Locate current shot RemoteEvent/Bindable and re-hook")
-	elseif report.runtime.namecallStats.sync_fire_total == 0 and report.runtime.namecallStats.fireserver_total == 0 then
+	elseif not report.hooks.invkHook and not report.hooks.namecallHook then
+		add("EnableSilentAim", "REWRITE", "INVK/namecall hooks not installed", "Ensure Vortex is enabled and getsenv resolves INVK upvalue")
+	elseif report.runtime.namecallStats.sync_fire_total == 0 and report.runtime.namecallStats.invk_fire_total == 0 and report.runtime.namecallStats.fireserver_total == 0 then
 		add(
 			"EnableSilentAim",
 			"REWRITE",
-			"no Sync/FireServer samples — fire weapons during trace",
-			"Re-run agent diagnostic while shooting; match live arg layout"
+			"no Sync/INVK/FireServer samples — fire weapons during trace",
+			"Re-run agent diagnostic while shooting; confirm INVK hook is active"
 		)
-	elseif report.runtime.namecallStats.sync_unclassified > 0 and report.runtime.redirectStats.shootEvent + report.runtime.redirectStats.fireServer == 0 then
+	elseif report.runtime.namecallStats.invk_fire_shape == 0 and report.runtime.namecallStats.sync_shootEvent_shape == 0 and report.runtime.namecallStats.fireserver_fire == 0 then
 		add(
 			"EnableSilentAim",
 			"REWRITE",
-			"unclassified Sync/FireServer arg shapes in samples",
-			"Match live INVK Fire signature in tryRedirectSilentAim"
+			"no classified local fire samples during trace",
+			"Fire your weapon during diagnostic; expect INVK:Fire samples"
 		)
-	elseif report.runtime.namecallStats.fireserver_fire == 0 and report.runtime.namecallStats.sync_shootEvent_shape == 0 then
+	elseif report.runtime.namecallStats.invk_fire_total > 0 and report.runtime.redirectStats.invkFire + report.runtime.redirectStats.shootEvent + report.runtime.redirectStats.fireServer == 0 then
 		add(
 			"EnableSilentAim",
-			"REWRITE",
-			"no FireServer Fire samples during trace",
-			"Confirm INVK Fire hook fires while shooting"
+			"DISABLE_UNTIL_REWRITE",
+			"INVK Fire seen but no rewrites",
+			"Raise FOVRadius or verify targets are inside FOV when firing"
 		)
-	elseif report.target.inFov == 0 then
-		add("EnableSilentAim", "DISABLE_UNTIL_REWRITE", "no valid targets inside FOV", "Fix target scan filters or raise FOVRadius")
 	else
-		add("EnableSilentAim", "KEEP", "sUNC + Sync present; verify rewrites increment when firing", "Keep namecall redirect paths")
+		add("EnableSilentAim", "KEEP", "INVK hook active; verify rewrites increment when firing", "Keep INVK upvalue redirect path")
 	end
 
 	if not report.sunc.groups.infiniteAmmo.ready then
@@ -1237,6 +1330,7 @@ local function buildAgentReport()
 		hooks = {
 			indexHook = installedIndexHook,
 			namecallHook = installedNamecallHook,
+			invkHook = installedInvkHook,
 			aimHooksReady = aimHooksReady,
 		},
 		config = {
@@ -1275,16 +1369,16 @@ local function printAgentReport(report)
 	warn("[GFA_AGENT_SUMMARY]")
 	warn("executor=" .. tostring(report.sunc.executor))
 	warn(string.format(
-		"silentAim_sunc=%s vortex_sync=%s target_inFov=%d rewrites=%d",
+		"silentAim_sunc=%s invk_hook=%s target_inFov=%d rewrites=%d",
 		tostring(report.sunc.groups.silentAim.ready),
-		tostring(report.vortex.sync),
+		tostring(report.hooks.invkHook),
 		report.target.inFov,
 		report.runtime.fireRewrites
 	))
 	warn(string.format(
-		"namecall sync=%d unclassified=%d fireServer=%d",
+		"namecall sync=%d invk_fire=%d fireServer=%d",
 		report.runtime.namecallStats.sync_fire_total,
-		report.runtime.namecallStats.sync_unclassified,
+		report.runtime.namecallStats.invk_fire_total,
 		report.runtime.namecallStats.fireserver_total
 	))
 	for _, verdict in ipairs(report.verdicts) do
@@ -1305,6 +1399,7 @@ end
 local function runAgentDiagnostic()
 	AgentDebugger.beginTraceSession(AGENT_TRACE_SECONDS)
 	ensureNamecallHook()
+	ensureInvkHook()
 	notify(
 		"Tracing "
 			.. tostring(AGENT_TRACE_SECONDS)
@@ -1325,6 +1420,9 @@ local function runDebugSummary()
 	if not installedNamecallHook then
 		ensureNamecallHook()
 	end
+	if not installedInvkHook then
+		ensureInvkHook()
+	end
 	local now = os.clock()
 	if now - debugLastSummaryAt < DEBUG_SUMMARY_INTERVAL then
 		return
@@ -1336,10 +1434,11 @@ local function runDebugSummary()
 		ammoText = string.format("mag=%s/%s reserve=%s chamber=%s", tostring(ammo.mag), tostring(ammo.clip), tostring(ammo.reserve), tostring(ammo.chamber))
 	end
 	warn(string.format(
-		"[GunfightArena:Debug] target=%s hooks(index=%s,namecall=%s) rewrites=%d restocks=%d %s",
+		"[GunfightArena:Debug] target=%s hooks(index=%s,namecall=%s,invk=%s) rewrites=%d restocks=%d %s",
 		closestTarget and closestTarget.Name or "none",
 		tostring(installedIndexHook),
 		tostring(installedNamecallHook),
+		tostring(installedInvkHook),
 		debugCounters.fireRewrites,
 		debugCounters.restockCalls,
 		ammoText
@@ -1366,7 +1465,7 @@ ensureIndexHook = function()
 	end
 	installedIndexHook = true
 	local ok, result = pcall(function()
-		oldIndex = hookmetamethod(game, "__index", function(self, index)
+		oldIndex = resolveExecutorGlobal("hookmetamethod")(game, "__index", function(self, index)
 			if index == "p" or index == "Position" then
 				if typeof(self) == "Instance" and self:IsA("CFrameValue") then
 					local position = cframeValuePosition(self)
@@ -1398,11 +1497,11 @@ ensureNamecallHook = function()
 	end
 	installedNamecallHook = true
 	local ok, result = pcall(function()
-		oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+		oldNamecall = resolveExecutorGlobal("hookmetamethod")(game, "__namecall", function(self, ...)
 			if isExecutorCall() then
 				return oldNamecall(self, ...)
 			end
-			local method = getnamecallmethod()
+			local method = resolveExecutorGlobal("getnamecallmethod")()
 			if method == "Fire" and typeof(self) == "Instance" and self.Name == "Sync" then
 				local packed = table.pack(...)
 				local tracing = AgentDebugger.shouldTrace()
@@ -1438,6 +1537,59 @@ ensureNamecallHook = function()
 	if not ok then
 		installedNamecallHook = false
 		warn("[GunfightArena] namecall hook failed:", result)
+	end
+end
+
+ensureInvkHook = function()
+	if installedInvkHook or not hasSetupvalue() or not hasGetsenv() then
+		return
+	end
+	if not Config.EnableSilentAim and not AgentDebugger.shouldTrace() then
+		return
+	end
+	local env = getVortexEnv()
+	if not env then
+		return
+	end
+	local hostFn, invkIndex = findInvkUpvalue(env)
+	if not hostFn or not invkIndex then
+		return
+	end
+	local currentInvk = readUpvalue(hostFn, invkIndex)
+	if typeof(currentInvk) ~= "function" then
+		return
+	end
+	if originalInvk and currentInvk == originalInvk then
+		installedInvkHook = true
+		return
+	end
+	if originalInvk and currentInvk ~= originalInvk and installedInvkHook then
+		restoreInvkHook()
+		currentInvk = readUpvalue(hostFn, invkIndex)
+	end
+	originalInvk = currentInvk
+	invkHookHostFn = hostFn
+	invkHookIndex = invkIndex
+	local function invkRedirect(eventName, ...)
+		local packed = table.pack(...)
+		if eventName == "Fire" then
+			if AgentDebugger.shouldTrace() then
+				AgentDebugger.recordInvkFire(packed)
+			end
+			if Config.EnableSilentAim and isInvkFirePayload(packed) then
+				tryRedirectInvkFire(packed)
+			end
+		end
+		return originalInvk(eventName, table.unpack(packed, 1, packed.n))
+	end
+	if writeUpvalue(hostFn, invkIndex, invkRedirect) then
+		installedInvkHook = true
+		debugEvent("hooked Vortex INVK")
+	else
+		originalInvk = nil
+		invkHookHostFn = nil
+		invkHookIndex = nil
+		warn("[GunfightArena] INVK upvalue hook failed")
 	end
 end
 
@@ -1709,7 +1861,8 @@ local function updateAim()
 	end
 	if not aimHooksReady then
 		ensureNamecallHook()
-		aimHooksReady = installedNamecallHook or not hasNamecallHook()
+		ensureInvkHook()
+		aimHooksReady = silentAimHooksReady()
 	end
 	local now = os.clock()
 	if now - lastAimScanAt < AIM_SCAN_INTERVAL then
@@ -1760,6 +1913,7 @@ end
 
 local function cleanup()
 	disconnectAll()
+	restoreInvkHook()
 	vortexEnv = nil
 	clearAmmoCache()
 	MovementData.WalkSpeed = BASE_WALK_SPEED
@@ -1795,8 +1949,8 @@ genv.__GunfightArenaUnload = cleanup
 if not hasDrawing() then
 	notify("Drawing API missing — ESP and FOV circle will be unavailable.", "Compatibility", 6)
 end
-if not hasHookMetamethod() or not hasNamecallHook() then
-	notify("hookmetamethod/getnamecallmethod missing — silent aim will be unavailable.", "Compatibility", 6)
+if not hasGetsenv() or not hasSetupvalue() then
+	notify("getsenv/debug.setupvalue missing — silent aim needs both for INVK hook.", "Compatibility", 6)
 end
 
 UILib.create({
@@ -1917,10 +2071,13 @@ UILib.create({
 		elseif key == "EnableSilentAim" then
 			if value then
 				ensureNamecallHook()
-				aimHooksReady = installedNamecallHook or not hasNamecallHook()
+				ensureInvkHook()
+				aimHooksReady = silentAimHooksReady()
 				lastAimScanAt = 0
-				if not hasHookMetamethod() or not hasNamecallHook() then
-					notify("hookmetamethod/getnamecallmethod missing — silent aim needs both.", "Compatibility", 6)
+				if not hasGetsenv() or not hasSetupvalue() then
+					notify("getsenv/debug.setupvalue missing — silent aim needs INVK upvalue hook.", "Compatibility", 6)
+				elseif not installedInvkHook then
+					notify("INVK hook pending — wait for Vortex to load, then toggle Silent Aim again.", "Compatibility", 6)
 				end
 			else
 				closestTarget = nil
@@ -1943,6 +2100,7 @@ UILib.create({
 		elseif key == "EnableDebugLogs" then
 			if value then
 				ensureNamecallHook()
+				ensureInvkHook()
 				notify(
 					"Debug trace on. Use Agent Diagnostic while firing, or Dump Agent Report for instant snapshot.",
 					"Agent Debug",
