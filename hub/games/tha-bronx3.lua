@@ -5,6 +5,8 @@
 	Verify AC bypass: LocalPlayer:GetAttribute("LastACPos") should stay nil.
 	Fly: WASD + Space/Ctrl while Fly toggle is on (use with AC Bypass).
 	With AC Bypass, fly stays unanchored while moving and respects server _Y ceiling.
+
+	Helpers use descriptive names (e.g. runKoolAidMoneyFarm, findAvailableCookingPot).
 ]]
 
 local Players = game:GetService("Players")
@@ -51,9 +53,9 @@ warn("[ThaBronx3] build", GAME_BUILD)
 local BOOST_WALK_SPEED = Config.WalkSpeed
 local BOOST_JUMP_POWER = Config.JumpPower
 
-local koolAidFarmRunning = false
-local ltkDupeRunning = false
-local fullCycleRunning = false
+local isKoolAidFarmRunning = false
+local isLtkDupeRunning = false
+local isMoneyCycleRunning = false
 
 local setCantRunOriginal = nil
 local noopCantRun = function() end
@@ -72,7 +74,7 @@ end
 -- Utilities (repo scripts expect Rio / Utility / Thread / Actions globals)
 -- ---------------------------------------------------------------------------
 
-local function notify(text, title, duration)
+local function showNotification(text, title, duration)
 	title = title or "Tha Bronx 3"
 	duration = duration or 5
 	pcall(function()
@@ -85,11 +87,11 @@ local function notify(text, title, duration)
 	warn("[ThaBronx3]", title, "-", text)
 end
 
-local function sleep(seconds)
+local function waitSeconds(seconds)
 	task.wait(seconds)
 end
 
-local function findPath(root, ...)
+local function findChildByPath(root, ...)
 	local current = root
 	for _, name in ipairs({ ... }) do
 		if not current then
@@ -100,7 +102,7 @@ local function findPath(root, ...)
 	return current
 end
 
-local function waitForPath(root, ...)
+local function waitForChildPath(root, ...)
 	local current = root
 	for _, name in ipairs({ ... }) do
 		if not current then
@@ -111,22 +113,22 @@ local function waitForPath(root, ...)
 	return current
 end
 
-local function getCharacter()
+local function getLocalCharacter()
 	return LocalPlayer.Character
 end
 
-local function getHumanoid()
-	local character = getCharacter()
+local function getLocalHumanoid()
+	local character = getLocalCharacter()
 	return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-local function getRootPart()
-	local character = getCharacter()
+local function getHumanoidRootPart()
+	local character = getLocalCharacter()
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function teleportTo(where)
-	local root = getRootPart()
+local function teleportCharacterTo(where)
+	local root = getHumanoidRootPart()
 	if not root then
 		return false
 	end
@@ -159,7 +161,7 @@ local function teleportTo(where)
 	return true
 end
 
-local function firePrompt(prompt, holdTime)
+local function triggerProximityPrompt(prompt, holdTime)
 	if not prompt or not prompt:IsA("ProximityPrompt") then
 		return
 	end
@@ -172,8 +174,8 @@ local function firePrompt(prompt, holdTime)
 	prompt:InputHoldEnd()
 end
 
-local function findItem(name)
-	local character = getCharacter()
+local function findPlayerItem(name)
+	local character = getLocalCharacter()
 	local backpack = LocalPlayer:FindFirstChild("Backpack")
 	if character then
 		local tool = character:FindFirstChild(name)
@@ -187,11 +189,11 @@ local function findItem(name)
 	return nil
 end
 
-local function getStoredFolder(waitSeconds)
+local function getPlayerStoredData(waitSeconds)
 	waitSeconds = waitSeconds or 0
 	local stored = LocalPlayer:FindFirstChild("stored")
 		or LocalPlayer:FindFirstChild("Stored")
-		or findPath(LocalPlayer, "PlayerData", "stored")
+		or findChildByPath(LocalPlayer, "PlayerData", "stored")
 	if stored or waitSeconds <= 0 then
 		return stored
 	end
@@ -201,19 +203,26 @@ local function getStoredFolder(waitSeconds)
 	return ok and waited or nil
 end
 
-local function findMapObject(name)
-	local object = workspace:FindFirstChild(name)
-	if object then
-		return object
+local function findWorldObject(name)
+	local direct = workspace:FindFirstChild(name)
+	if direct then
+		return direct
+	end
+	local recursive = workspace:FindFirstChild(name, true)
+	if recursive then
+		return recursive
 	end
 	local worldFolder = workspace:FindFirstChild("World")
 	if worldFolder then
-		return worldFolder:FindFirstChild(name)
+		local found = worldFolder:FindFirstChild(name) or worldFolder:FindFirstChild(name, true)
+		if found then
+			return found
+		end
 	end
 	return nil
 end
 
-local function readNumberValue(parent, names)
+local function readNumericChildValue(parent, names)
 	if not parent then
 		return nil
 	end
@@ -226,40 +235,40 @@ local function readNumberValue(parent, names)
 	return nil
 end
 
-local function getMoney()
-	local stored = getStoredFolder(10)
-	local cash = readNumberValue(stored, { "Money", "Cash", "Wallet", "Clean" })
+local function getCleanMoney()
+	local stored = getPlayerStoredData(10)
+	local cash = readNumericChildValue(stored, { "Money", "Cash", "Wallet", "Clean" })
 	if cash ~= nil then
 		return cash
 	end
 	local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
-	cash = readNumberValue(leaderstats, { "Money", "Cash", "Wallet" })
+	cash = readNumericChildValue(leaderstats, { "Money", "Cash", "Wallet" })
 	return cash or 0
 end
 
-local function getBankMoney()
-	local stored = getStoredFolder(10)
-	return readNumberValue(stored, { "Bank", "BankMoney", "BankCash", "Savings" }) or 0
+local function getBankBalance()
+	local stored = getPlayerStoredData(10)
+	return readNumericChildValue(stored, { "Bank", "BankMoney", "BankCash", "Savings" }) or 0
 end
 
-local function getFilthyMoney()
-	local stored = getStoredFolder(10)
-	return readNumberValue(stored, { "FilthyStack", "Filthy" }) or 0
+local function getDirtyMoney()
+	local stored = getPlayerStoredData(10)
+	return readNumericChildValue(stored, { "FilthyStack", "Filthy" }) or 0
 end
 
-local function formatMoney(amount)
+local function formatCurrency(amount)
 	return "$" .. tostring(math.floor(tonumber(amount) or 0))
 end
 
-local function getGameRemotes()
+local function getRemoteFolder()
 	return ReplicatedStorage:FindFirstChild("GameRemotes")
 		or ReplicatedStorage:FindFirstChild("Remotes")
 		or ReplicatedStorage:FindFirstChild("RemoteEvents")
 		or ReplicatedStorage
 end
 
-local function getRemote(remoteName)
-	local remotes = getGameRemotes()
+local function findGameRemote(remoteName)
+	local remotes = getRemoteFolder()
 	if remotes then
 		local remote = remotes:FindFirstChild(remoteName, true)
 		if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
@@ -273,8 +282,8 @@ local function getRemote(remoteName)
 	return nil
 end
 
-local function invokeRemote(remoteName, ...)
-	local remote = getRemote(remoteName)
+local function invokeGameRemote(remoteName, ...)
+	local remote = findGameRemote(remoteName)
 	if not remote then
 		return false
 	end
@@ -289,8 +298,8 @@ local function invokeRemote(remoteName, ...)
 	return false
 end
 
-local function bankAction(action, amount)
-	local remote = getRemote("BankAction")
+local function sendBankTransaction(action, amount)
+	local remote = findGameRemote("BankAction")
 	if not remote or not remote:IsA("RemoteEvent") then
 		return false
 	end
@@ -298,20 +307,20 @@ local function bankAction(action, amount)
 	return ok
 end
 
-local function withdrawCash(amount)
-	if bankAction("with", amount) then
+local function withdrawBankCash(amount)
+	if sendBankTransaction("with", amount) then
 		return true
 	end
-	return invokeRemote("BankRemote", "Withdraw", amount)
-		or invokeRemote("WithdrawCash", amount)
-		or invokeRemote("ATMRemote", "Withdraw", amount)
+	return invokeGameRemote("BankRemote", "Withdraw", amount)
+		or invokeGameRemote("WithdrawCash", amount)
+		or invokeGameRemote("ATMRemote", "Withdraw", amount)
 end
 
-local function depositCash(amount)
-	return bankAction("depo", amount)
+local function depositBankCash(amount)
+	return sendBankTransaction("depo", amount)
 end
 
-local function readLastAcStatus()
+local function getAnticheatTrackStatus()
 	local value = LocalPlayer:GetAttribute("LastACPos")
 	if value == nil then
 		return "excluded"
@@ -339,14 +348,14 @@ local flyBypassState = {
 	lastFlyActive = false,
 }
 
-local function teardownAntiGlideConn()
+local function disconnectAntiGlideMonitor()
 	if antiGlideConn then
 		antiGlideConn:Disconnect()
 		antiGlideConn = nil
 	end
 end
 
-local function syncAntiGlide(character)
+local function setAntiGlideDisabled(character)
 	if not character then
 		return
 	end
@@ -356,12 +365,12 @@ local function syncAntiGlide(character)
 	end
 end
 
-local function bindAntiGlide(character)
-	teardownAntiGlideConn()
+local function monitorAntiGlideScript(character)
+	disconnectAntiGlideMonitor()
 	if not character then
 		return
 	end
-	syncAntiGlide(character)
+	setAntiGlideDisabled(character)
 	antiGlideConn = character.ChildAdded:Connect(function(child)
 		if child.Name == "Anti-Glide" and child:IsA("LocalScript") then
 			child.Disabled = Config.Fly == true
@@ -369,7 +378,7 @@ local function bindAntiGlide(character)
 	end)
 end
 
-local function getFlyAcCeiling()
+local function getMaxFlyHeight()
 	local acY = flyBypassState.acGroundY
 	if typeof(acY) ~= "number" then
 		return nil
@@ -377,7 +386,7 @@ local function getFlyAcCeiling()
 	return acY + FLY_AC_MAX_ABOVE_Y
 end
 
-local function syncAcGroundYFromAttr()
+local function updateFlyBaselineFromAttribute()
 	if flyBypassState.groundLatched then
 		return
 	end
@@ -391,9 +400,9 @@ local function syncAcGroundYFromAttr()
 	end
 end
 
-syncAcGroundYFromAttr()
+updateFlyBaselineFromAttribute()
 
-local function latchFlyGroundY(root)
+local function lockFlyBaselineHeight(root)
 	local attrY = LocalPlayer:GetAttribute("_Y")
 	local y = typeof(attrY) == "number" and attrY or nil
 	if root and typeof(root.Position.Y) == "number" then
@@ -408,7 +417,7 @@ local function latchFlyGroundY(root)
 	end
 end
 
-local function getFlyMoveDirection(camera)
+local function readFlyKeyboardInput(camera)
 	if not camera then
 		return Vector3.zero
 	end
@@ -435,8 +444,8 @@ local function getFlyMoveDirection(camera)
 	return move
 end
 
-local function clampFlyMoveForAc(root, move)
-	local ceiling = getFlyAcCeiling()
+local function limitFlyMovementForAnticheat(root, move)
+	local ceiling = getMaxFlyHeight()
 	if not ceiling or not root or move.Magnitude <= 0 then
 		return move
 	end
@@ -452,12 +461,12 @@ local function clampFlyMoveForAc(root, move)
 	return Vector3.zero
 end
 
-local function enforceFlyHeightCap(root)
+local function clampFlyHeight(root)
 	if not root then
 		return
 	end
 	local pos = root.Position
-	local ceiling = getFlyAcCeiling()
+	local ceiling = getMaxFlyHeight()
 	local floorY = flyBypassState.acGroundY
 	if typeof(floorY) == "number" then
 		floorY = floorY - FLY_AC_MAX_BELOW_Y
@@ -480,7 +489,7 @@ local function enforceFlyHeightCap(root)
 end
 
 -- Returns true when fly input is actively driving movement this frame.
-local function applyFlyStep(root, humanoid, deltaTime, withBypass)
+local function stepFlyMovement(root, humanoid, deltaTime, withBypass)
 	if not Config.Fly or not root or not humanoid or humanoid.Health <= 0 then
 		return false
 	end
@@ -490,7 +499,7 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 		return false
 	end
 
-	local move = clampFlyMoveForAc(root, getFlyMoveDirection(camera))
+	local move = limitFlyMovementForAnticheat(root, readFlyKeyboardInput(camera))
 	if move.Magnitude <= 0 then
 		if withBypass and humanoid.PlatformStand then
 			humanoid.PlatformStand = false
@@ -509,10 +518,10 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 		if humanoid.PlatformStand then
 			humanoid.PlatformStand = false
 		end
-		enforceFlyHeightCap(root)
+		clampFlyHeight(root)
 		local stepSpeed = math.min(speed, FLY_BYPASS_MAX_SPEED)
 		local step = direction * stepSpeed * dt
-		local ceiling = getFlyAcCeiling()
+		local ceiling = getMaxFlyHeight()
 		if ceiling and root.Position.Y >= ceiling - 0.25 and step.Y > 0 then
 			step = Vector3.new(step.X, 0, step.Z)
 		end
@@ -530,7 +539,7 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 		root.CFrame += step
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
-		enforceFlyHeightCap(root)
+		clampFlyHeight(root)
 		return true
 	end
 
@@ -540,36 +549,36 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 	return true
 end
 
-local function getGenv()
+local function getScriptEnvironment()
 	if typeof(getgenv) == "function" then
 		return getgenv()
 	end
 	return _G
 end
 
-local genv = getGenv()
-genv.__ThaBronx3FlyStep = applyFlyStep
-bypassSession.flyStep = applyFlyStep
+local genv = getScriptEnvironment()
+genv.__ThaBronx3FlyStep = stepFlyMovement
+bypassSession.flyStep = stepFlyMovement
 
-local function applyFly(deltaTime)
+local function updateFreeFlyMovement(deltaTime)
 	if not Config.Fly or Config.MovementBypass then
 		return
 	end
-	local root = getRootPart()
-	local humanoid = getHumanoid()
+	local root = getHumanoidRootPart()
+	local humanoid = getLocalHumanoid()
 	local flyStep = bypassSession.flyStep or genv.__ThaBronx3FlyStep
 	if typeof(flyStep) == "function" then
 		flyStep(root, humanoid, deltaTime, false)
 	end
 end
 
-local function releaseRootPart(rootPart)
+local function unanchorHumanoidRoot(rootPart)
 	if rootPart and rootPart.Parent then
 		rootPart.Anchored = false
 	end
 end
 
-local function teardownMovementBypass()
+local function disableMovementBypass()
 	if bypassSession.preConn then
 		bypassSession.preConn:Disconnect()
 		bypassSession.preConn = nil
@@ -578,7 +587,7 @@ local function teardownMovementBypass()
 		bypassSession.postConn:Disconnect()
 		bypassSession.postConn = nil
 	end
-	releaseRootPart(bypassSession.rootPart)
+	unanchorHumanoidRoot(bypassSession.rootPart)
 	bypassSession.rootPart = nil
 	bypassSession.character = nil
 	bypassSession.flyStep = nil
@@ -587,7 +596,7 @@ end
 
 local sessionConns = {}
 
-local function disconnectSessionConns()
+local function disconnectAllConnections()
 	for _, conn in ipairs(sessionConns) do
 		pcall(function()
 			conn:Disconnect()
@@ -596,7 +605,7 @@ local function disconnectSessionConns()
 	table.clear(sessionConns)
 end
 
-local function teardownSurvivalBypasses()
+local function disableSurvivalBypasses()
 	restoreHungerScripts()
 	if setCantRunOriginal then
 		shared.SetCantRun = setCantRunOriginal
@@ -604,18 +613,18 @@ local function teardownSurvivalBypasses()
 	end
 end
 
-local function teardownAllFeatures()
-	teardownMovementBypass()
-	teardownAntiGlideConn()
-	teardownInstantPrompts()
-	teardownGunPatches()
-	teardownNoFallRagdoll()
-	teardownFullRagdoll()
-	teardownSurvivalBypasses()
-	stopStudioFarmThreads()
-	koolAidFarmRunning = false
-	ltkDupeRunning = false
-	fullCycleRunning = false
+local function cleanupScriptFeatures()
+	disableMovementBypass()
+	disconnectAntiGlideMonitor()
+	disableInstantPrompts()
+	disableGunModWatchers()
+	disableNoFallRagdoll()
+	disableAntiRagdoll()
+	disableSurvivalBypasses()
+	stopStudioCashFarm()
+	isKoolAidFarmRunning = false
+	isLtkDupeRunning = false
+	isMoneyCycleRunning = false
 	Config.StudioFarm = false
 	flyBypassState.groundLatched = false
 	flyBypassState.lastFlyActive = false
@@ -626,11 +635,11 @@ local function teardownAllFeatures()
 end
 
 genv.__ThaBronx3Unload = function()
-	teardownAllFeatures()
-	disconnectSessionConns()
+	cleanupScriptFeatures()
+	disconnectAllConnections()
 end
 
-local function rootIsLive(rootPart, character)
+local function isRootPartAttached(rootPart, character)
 	return rootPart
 		and rootPart.Parent
 		and character
@@ -639,12 +648,12 @@ local function rootIsLive(rootPart, character)
 		and character == LocalPlayer.Character
 end
 
-local function applyMovementBypass(character)
+local function enableMovementBypass(character)
 	if not Config.MovementBypass then
 		return
 	end
 
-	teardownMovementBypass()
+	disableMovementBypass()
 
 	local rootPart = character:WaitForChild("HumanoidRootPart", 15)
 	if not rootPart then
@@ -656,9 +665,9 @@ local function applyMovementBypass(character)
 	bypassSession.rootPart = rootPart
 
 	if Config.Fly then
-		latchFlyGroundY(rootPart)
+		lockFlyBaselineHeight(rootPart)
 	elseif not flyBypassState.groundLatched then
-		syncAcGroundYFromAttr()
+		updateFlyBaselineFromAttribute()
 		if typeof(flyBypassState.acGroundY) ~= "number" then
 			flyBypassState.acGroundY = rootPart.Position.Y
 		end
@@ -667,7 +676,7 @@ local function applyMovementBypass(character)
 	bypassSession.preConn = RunService.PreSimulation:Connect(function()
 		local root = bypassSession.rootPart
 		local char = bypassSession.character
-		if not rootIsLive(root, char) then
+		if not isRootPartAttached(root, char) then
 			return
 		end
 		local humanoid = char:FindFirstChildOfClass("Humanoid")
@@ -679,19 +688,19 @@ local function applyMovementBypass(character)
 			root.Anchored = false
 		end
 		if Config.Fly then
-			enforceFlyHeightCap(root)
+			clampFlyHeight(root)
 		end
 	end)
 
 	bypassSession.postConn = RunService.PostSimulation:Connect(function(deltaTime)
 		local root = bypassSession.rootPart
 		local char = bypassSession.character
-		if not rootIsLive(root, char) then
+		if not isRootPartAttached(root, char) then
 			return
 		end
 		local humanoid = char:FindFirstChildOfClass("Humanoid")
 		if humanoid and humanoid.Health <= 0 then
-			releaseRootPart(root)
+			unanchorHumanoidRoot(root)
 			return
 		end
 
@@ -711,7 +720,7 @@ local function applyMovementBypass(character)
 			end
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
-			enforceFlyHeightCap(root)
+			clampFlyHeight(root)
 			flyBypassState.lastFlyActive = flyActive
 			if flyActive then
 				if root.Anchored then
@@ -731,14 +740,14 @@ local function applyMovementBypass(character)
 	end)
 end
 
-local function refreshMovementBypass()
+local function refreshMovementBypassState()
 	if not Config.MovementBypass then
-		teardownMovementBypass()
+		disableMovementBypass()
 		return
 	end
 	local character = LocalPlayer.Character
 	if character then
-		applyMovementBypass(character)
+		enableMovementBypass(character)
 	end
 end
 
@@ -749,7 +758,7 @@ end
 local promptCache = {}
 local promptAddedConn = nil
 
-local function restorePrompt(prompt)
+local function restorePromptDefaults(prompt)
 	local original = promptCache[prompt]
 	if original ~= nil and prompt.Parent then
 		prompt.HoldDuration = original
@@ -757,7 +766,7 @@ local function restorePrompt(prompt)
 	promptCache[prompt] = nil
 end
 
-local function cachePrompt(prompt)
+local function savePromptDefaults(prompt)
 	if promptCache[prompt] ~= nil then
 		return
 	end
@@ -767,7 +776,7 @@ local function cachePrompt(prompt)
 	end)
 end
 
-local function setPromptState(enabled)
+local function setInstantPromptMode(enabled)
 	for prompt, original in pairs(promptCache) do
 		if prompt.Parent then
 			prompt.HoldDuration = enabled and 0 or original
@@ -778,35 +787,35 @@ local function setPromptState(enabled)
 	if enabled then
 		for _, descendant in ipairs(workspace:GetDescendants()) do
 			if descendant:IsA("ProximityPrompt") then
-				cachePrompt(descendant)
+				savePromptDefaults(descendant)
 				descendant.HoldDuration = 0
 			end
 		end
 	end
 end
 
-local function teardownInstantPrompts()
+local function disableInstantPrompts()
 	if promptAddedConn then
 		promptAddedConn:Disconnect()
 		promptAddedConn = nil
 	end
 	for prompt in pairs(promptCache) do
-		restorePrompt(prompt)
+		restorePromptDefaults(prompt)
 	end
 	table.clear(promptCache)
 end
 
-local function applyInstantPrompts()
-	teardownInstantPrompts()
+local function enableInstantPrompts()
+	disableInstantPrompts()
 	if not Config.InstantPrompts then
 		return
 	end
-	setPromptState(true)
+	setInstantPromptMode(true)
 	promptAddedConn = workspace.DescendantAdded:Connect(function(descendant)
 		if not Config.InstantPrompts or not descendant:IsA("ProximityPrompt") then
 			return
 		end
-		cachePrompt(descendant)
+		savePromptDefaults(descendant)
 		descendant.HoldDuration = 0
 	end)
 end
@@ -817,31 +826,31 @@ end
 
 local ragdollChildConn = nil
 
-local function teardownNoFallRagdoll()
+local function disableNoFallRagdoll()
 	if ragdollChildConn then
 		ragdollChildConn:Disconnect()
 		ragdollChildConn = nil
 	end
 end
 
-local function removeFallDamageRagdoll(character)
+local function removeFallDamageScript(character)
 	local ragdoll = character:FindFirstChild("FallDamageRagdoll")
 	if ragdoll then
 		ragdoll:Destroy()
 	end
 end
 
-local function applyNoFallRagdoll(character)
+local function enableNoFallRagdoll(character)
 	if not Config.NoFallRagdoll and not Config.FullRagdoll then
-		teardownNoFallRagdoll()
+		disableNoFallRagdoll()
 		return
 	end
 	character = character or LocalPlayer.Character
 	if not character then
 		return
 	end
-	teardownNoFallRagdoll()
-	removeFallDamageRagdoll(character)
+	disableNoFallRagdoll()
+	removeFallDamageScript(character)
 	ragdollChildConn = character.ChildAdded:Connect(function(child)
 		if (Config.NoFallRagdoll or Config.FullRagdoll) and child.Name == "FallDamageRagdoll" then
 			child:Destroy()
@@ -853,11 +862,11 @@ end
 -- Full ragdoll immunity (client-side tag / constraint cleanup)
 -- ---------------------------------------------------------------------------
 
-local function clearRagdollState(character)
+local function clearCharacterRagdoll(character)
 	if not character then
 		return
 	end
-	removeFallDamageRagdoll(character)
+	removeFallDamageScript(character)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		pcall(CollectionService.RemoveTag, CollectionService, humanoid, "Ragdoll")
@@ -868,15 +877,15 @@ local function clearRagdollState(character)
 	end
 end
 
-local function teardownFullRagdoll()
+local function disableAntiRagdoll()
 	if fullRagdollConn then
 		fullRagdollConn:Disconnect()
 		fullRagdollConn = nil
 	end
 end
 
-local function applyFullRagdoll(character)
-	teardownFullRagdoll()
+local function enableAntiRagdoll(character)
+	disableAntiRagdoll()
 	if not Config.FullRagdoll then
 		return
 	end
@@ -884,14 +893,14 @@ local function applyFullRagdoll(character)
 	if not character then
 		return
 	end
-	clearRagdollState(character)
+	clearCharacterRagdoll(character)
 	fullRagdollConn = RunService.Heartbeat:Connect(function()
 		if not Config.FullRagdoll then
 			return
 		end
 		local char = LocalPlayer.Character
 		if char then
-			clearRagdollState(char)
+			clearCharacterRagdoll(char)
 		end
 	end)
 end
@@ -900,7 +909,7 @@ end
 -- Shoot bypass (CantShootModule hook)
 -- ---------------------------------------------------------------------------
 
-local function applyShootBypass()
+local function enableShootBypass()
 	local moduleScript = ReplicatedStorage:FindFirstChild("CantShootModule")
 	if not moduleScript or not moduleScript:IsA("ModuleScript") then
 		return
@@ -952,7 +961,7 @@ local GUN_MOD_BOOLEANS = {
 	AutoReload = true,
 }
 
-local function isLikelyGun(tool)
+local function isGunTool(tool)
 	if not tool:IsA("Tool") then
 		return false
 	end
@@ -967,7 +976,7 @@ local function isLikelyGun(tool)
 		or string.find(tool.Name:lower(), "gun") ~= nil
 end
 
-local function rememberEquipValue(tool, object, value)
+local function cacheGunModOriginal(tool, object, value)
 	if not equipCache[tool] then
 		equipCache[tool] = {}
 	end
@@ -976,7 +985,7 @@ local function rememberEquipValue(tool, object, value)
 	end
 end
 
-local function restoreEquipTool(tool)
+local function restoreGunToolDefaults(tool)
 	local saved = equipCache[tool]
 	if not saved then
 		return
@@ -993,8 +1002,8 @@ local function restoreEquipTool(tool)
 	equipCache[tool] = nil
 end
 
-local function modifyGunTool(tool, enabled)
-	if not isLikelyGun(tool) then
+local function applyGunToolMods(tool, enabled)
+	if not isGunTool(tool) then
 		return
 	end
 
@@ -1003,7 +1012,7 @@ local function modifyGunTool(tool, enabled)
 			return
 		end
 		if enabled then
-			rememberEquipValue(tool, "module:" .. key, settings[key])
+			cacheGunModOriginal(tool, "module:" .. key, settings[key])
 			settings[key] = value
 		elseif equipCache[tool] and equipCache[tool]["module:" .. key] ~= nil then
 			settings[key] = equipCache[tool]["module:" .. key]
@@ -1015,7 +1024,7 @@ local function modifyGunTool(tool, enabled)
 			return
 		end
 		if enabled then
-			rememberEquipValue(tool, "module:" .. key, settings[key])
+			cacheGunModOriginal(tool, "module:" .. key, settings[key])
 			settings[key] = value
 		elseif equipCache[tool] and equipCache[tool]["module:" .. key] ~= nil then
 			settings[key] = equipCache[tool]["module:" .. key]
@@ -1029,7 +1038,7 @@ local function modifyGunTool(tool, enabled)
 		local attr = tool:GetAttribute(name)
 		if typeof(attr) == "number" then
 			if enabled then
-				rememberEquipValue(tool, name, attr)
+				cacheGunModOriginal(tool, name, attr)
 				tool:SetAttribute(name, 0)
 			elseif equipCache[tool] and equipCache[tool][name] ~= nil then
 				tool:SetAttribute(name, equipCache[tool][name])
@@ -1041,7 +1050,7 @@ local function modifyGunTool(tool, enabled)
 		if Config.InstantEquip and table.find(EQUIP_SETTING_NAMES, descendant.Name) then
 			if descendant:IsA("ValueBase") and typeof(descendant.Value) == "number" then
 				if enabled then
-					rememberEquipValue(tool, descendant, descendant.Value)
+					cacheGunModOriginal(tool, descendant, descendant.Value)
 					descendant.Value = 0
 				elseif equipCache[tool] and equipCache[tool][descendant] ~= nil then
 					descendant.Value = equipCache[tool][descendant]
@@ -1058,7 +1067,7 @@ local function modifyGunTool(tool, enabled)
 				for _, key in ipairs(EQUIP_SETTING_NAMES) do
 					if typeof(settings[key]) == "number" then
 						if enabled then
-							rememberEquipValue(tool, "module:" .. key, settings[key])
+							cacheGunModOriginal(tool, "module:" .. key, settings[key])
 							settings[key] = 0
 						elseif equipCache[tool] and equipCache[tool]["module:" .. key] ~= nil then
 							settings[key] = equipCache[tool]["module:" .. key]
@@ -1078,26 +1087,26 @@ local function modifyGunTool(tool, enabled)
 	end
 
 	if not enabled then
-		restoreEquipTool(tool)
+		restoreGunToolDefaults(tool)
 	end
 end
 
-local function gunPatchesEnabled()
+local function shouldApplyGunMods()
 	return Config.InstantEquip or Config.GunMods
 end
 
-local function scanGunPatches(container)
+local function scanContainerForGunTools(container)
 	if not container then
 		return
 	end
 	for _, child in ipairs(container:GetChildren()) do
 		if child:IsA("Tool") then
-			modifyGunTool(child, gunPatchesEnabled())
+			applyGunToolMods(child, shouldApplyGunMods())
 		end
 	end
 end
 
-local function teardownGunPatches()
+local function disableGunModWatchers()
 	if equipBackpackConn then
 		equipBackpackConn:Disconnect()
 		equipBackpackConn = nil
@@ -1109,61 +1118,61 @@ local function teardownGunPatches()
 
 	for tool in pairs(equipCache) do
 		if typeof(tool) == "Instance" and tool:IsA("Tool") then
-			restoreEquipTool(tool)
+			restoreGunToolDefaults(tool)
 		end
 	end
 	table.clear(equipCache)
 end
 
-local function onGunAdded(child)
-	if gunPatchesEnabled() and child:IsA("Tool") then
-		modifyGunTool(child, true)
+local function handleGunToolAdded(child)
+	if shouldApplyGunMods() and child:IsA("Tool") then
+		applyGunToolMods(child, true)
 	end
 end
 
-local function bindGunPatchCharacter(character)
+local function watchCharacterGunTools(character)
 	if equipCharacterConn then
 		equipCharacterConn:Disconnect()
 		equipCharacterConn = nil
 	end
-	if not gunPatchesEnabled() or not character then
+	if not shouldApplyGunMods() or not character then
 		return
 	end
-	scanGunPatches(character)
-	equipCharacterConn = character.ChildAdded:Connect(onGunAdded)
+	scanContainerForGunTools(character)
+	equipCharacterConn = character.ChildAdded:Connect(handleGunToolAdded)
 end
 
-local function applyGunPatches()
-	teardownGunPatches()
-	if not gunPatchesEnabled() then
+local function enableGunModWatchers()
+	disableGunModWatchers()
+	if not shouldApplyGunMods() then
 		return
 	end
 
 	local backpack = LocalPlayer:FindFirstChild("Backpack")
-	scanGunPatches(backpack)
-	scanGunPatches(getCharacter())
+	scanContainerForGunTools(backpack)
+	scanContainerForGunTools(getLocalCharacter())
 
 	if backpack then
-		equipBackpackConn = backpack.ChildAdded:Connect(onGunAdded)
+		equipBackpackConn = backpack.ChildAdded:Connect(handleGunToolAdded)
 	end
-	bindGunPatchCharacter(getCharacter())
+	watchCharacterGunTools(getLocalCharacter())
 end
 
 -- ---------------------------------------------------------------------------
 -- Studio farm (StudioFarm.luau)
 -- ---------------------------------------------------------------------------
 
-local studioThreads = {}
+local studioFarmThreads = {}
 
-local function stopStudioFarmThreads()
-	for _, thread in ipairs(studioThreads) do
+local function stopStudioCashFarm()
+	for _, thread in ipairs(studioFarmThreads) do
 		task.cancel(thread)
 	end
-	table.clear(studioThreads)
+	table.clear(studioFarmThreads)
 end
 
-local function getStudioFarmData()
-	local studioPay = findMapObject("StudioPay")
+local function findStudioPayStacks()
+	local studioPay = findWorldObject("StudioPay")
 	local container = studioPay and studioPay:FindFirstChild("Money")
 	if not container then
 		return nil
@@ -1189,12 +1198,12 @@ local function getStudioFarmData()
 	return stacks, prompts
 end
 
-local function studioStealLoop(index, prompt, model)
+local function loopStudioCashSteal(index, prompt, model)
 	while Config.StudioFarm do
 		if prompt and prompt.Parent and prompt.Enabled then
-			teleportTo(model)
-			firePrompt(prompt)
-			RunService.Heartbeat:Wait()
+			teleportCharacterTo(model)
+			triggerProximityPrompt(prompt)
+			task.wait(0.05)
 		else
 			if not prompt or not prompt.Parent then
 				break
@@ -1211,19 +1220,19 @@ local function studioStealLoop(index, prompt, model)
 	end
 end
 
-local function applyStudioFarm()
-	stopStudioFarmThreads()
+local function startStudioCashFarm()
+	stopStudioCashFarm()
 	if not Config.StudioFarm then
 		return
 	end
 
 	task.spawn(function()
-		local stacks, prompts = getStudioFarmData()
+		local stacks, prompts = findStudioPayStacks()
 		if not Config.StudioFarm then
 			return
 		end
 		if not stacks then
-			notify("StudioPay/Money not found — studio may not be loaded.", "Studio Farm", 6)
+			showNotification("StudioPay/Money not found — studio may not be loaded.", "Studio Farm", 6)
 			Config.StudioFarm = false
 			return
 		end
@@ -1231,14 +1240,14 @@ local function applyStudioFarm()
 		local started = 0
 		for index, prompt in pairs(prompts) do
 			if prompt and Config.StudioFarm then
-				table.insert(studioThreads, task.spawn(studioStealLoop, index, prompt, stacks[index]))
+				table.insert(studioFarmThreads, task.spawn(loopStudioCashSteal, index, prompt, stacks[index]))
 				started += 1
 			end
 		end
 		if started > 0 then
-			notify("Studio farm running on " .. started .. " cash stack(s).", "Studio Farm", 5)
+			showNotification("Studio farm running on " .. started .. " cash stack(s).", "Studio Farm", 5)
 		else
-			notify("No StudioPay prompts found.", "Studio Farm", 6)
+			showNotification("No StudioPay prompts found.", "Studio Farm", 6)
 			Config.StudioFarm = false
 		end
 	end)
@@ -1262,63 +1271,63 @@ local KOOL_AID_PRICES = {
 }
 local KOOL_AID_COST = 2746
 
-local function getExoticStock()
+local function findExoticShopStock()
 	return ReplicatedStorage:FindFirstChild("ExoticStock")
 end
 
-local function getMissingKoolAidCost()
+local function calculateSupplyPurchaseCost()
 	local total = 0
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		if not findItem(itemName) then
+		if not findPlayerItem(itemName) then
 			total = total + (KOOL_AID_PRICES[itemName] or 0)
 		end
 	end
 	return total
 end
 
-local function ensureKoolAidFunds()
-	if not getStoredFolder(15) then
+local function ensureSupplyMoneyAvailable()
+	if not getPlayerStoredData(15) then
 		return false, "Player data not loaded — wait a few seconds after spawn and retry."
 	end
 
-	local required = getMissingKoolAidCost()
-	local cash = getMoney()
+	local required = calculateSupplyPurchaseCost()
+	local cash = getCleanMoney()
 	if cash >= required then
 		return true
 	end
 
-	local bank = getBankMoney()
+	local bank = getBankBalance()
 	if bank < required then
 		return false,
 			"Need "
-				.. formatMoney(required)
+				.. formatCurrency(required)
 				.. " (have "
-				.. formatMoney(cash)
+				.. formatCurrency(cash)
 				.. " cash, "
-				.. formatMoney(bank)
+				.. formatCurrency(bank)
 				.. " bank)."
 	end
 
-	if not withdrawCash(required) then
+	if not withdrawBankCash(required) then
 		return false, "Bank withdraw failed — stand near an ATM or retry."
 	end
 
-	sleep(1)
-	cash = getMoney()
+	waitSeconds(1)
+	cash = getCleanMoney()
 	if cash < required then
-		return false, "Withdraw sent but cash is still below " .. formatMoney(required) .. "."
+		return false, "Withdraw sent but cash is still below " .. formatCurrency(required) .. "."
 	end
 	return true
 end
 
-local function buyKoolAidSupplies()
-	local stockRoot = getExoticStock()
+local function purchaseKoolAidItems()
+	local stockRoot = findExoticShopStock()
 	if not stockRoot then
 		return false, "ExoticStock not found in ReplicatedStorage."
 	end
 
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		if not findItem(itemName) then
+		if not findPlayerItem(itemName) then
 			local stock = stockRoot:FindFirstChild(itemName)
 			if not stock or not stock:IsA("ValueBase") or stock.Value <= 0 then
 				return false, itemName .. " is out of stock — try another server."
@@ -1332,7 +1341,7 @@ local function buyKoolAidSupplies()
 	end
 
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		if not findItem(itemName) then
+		if not findPlayerItem(itemName) then
 			local ok, result = pcall(remote.InvokeServer, remote, itemName)
 			if not ok then
 				return false, "Shop error on " .. itemName .. ": " .. tostring(result)
@@ -1340,12 +1349,12 @@ local function buyKoolAidSupplies()
 			if result == false then
 				return false, "Shop rejected " .. itemName .. " — check cash and stock."
 			end
-			sleep(1.25)
+			waitSeconds(1.25)
 		end
 	end
 
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		if not findItem(itemName) then
+		if not findPlayerItem(itemName) then
 			return false, itemName .. " missing from backpack after purchase."
 		end
 	end
@@ -1353,30 +1362,30 @@ local function buyKoolAidSupplies()
 	return true
 end
 
-local function getCookPrompt(cookPart)
+local function findCookPrompt(cookPart)
 	if not cookPart then
 		return nil
 	end
 	return cookPart:FindFirstChild("ProximityPrompt")
-		or cookPart:FindFirstChildOfClass("ProximityPrompt")
+		or cookPart:FindFirstChildWhichIsA("ProximityPrompt", true)
 end
 
-local function getSellPrompt(sellPart)
+local function findSellPrompt(sellPart)
 	if not sellPart then
 		return nil
 	end
 	return sellPart:FindFirstChild("ProximityPrompt")
-		or sellPart:FindFirstChildOfClass("ProximityPrompt", true)
+		or sellPart:FindFirstChildWhichIsA("ProximityPrompt", true)
 end
 
-local function getCookProgress(cookPart)
-	return cookPart and findPath(cookPart, "Steam", "LoadUI")
+local function findCookProgressBar(cookPart)
+	return cookPart and findChildByPath(cookPart, "Steam", "LoadUI")
 end
 
-local function isPotBusy(pot)
+local function isCookingPotInUse(pot)
 	local cookPart = pot and pot:FindFirstChild("CookPart")
 	local ownerTag = pot and pot:FindFirstChild("Owner")
-	local progress = getCookProgress(cookPart)
+	local progress = findCookProgressBar(cookPart)
 
 	if ownerTag and ownerTag.Value then
 		return true
@@ -1387,22 +1396,19 @@ local function isPotBusy(pot)
 	return progress and progress.Enabled
 end
 
-local function getAvailableCookingPot()
-	local pots = findMapObject("CookingPots")
+local function findAvailableCookingPot()
+	local pots = findWorldObject("CookingPots")
 	if not pots then
 		return nil
 	end
 	for _, pot in ipairs(pots:GetChildren()) do
-		if pot:IsA("Model") then
-			local ownerTag = pot:FindFirstChild("Owner")
+		if pot:IsA("Model") and not isCookingPotInUse(pot) then
 			local cookPart = pot:FindFirstChild("CookPart")
-			local prompt = getCookPrompt(cookPart)
-			if ownerTag
-				and cookPart
+			local prompt = findCookPrompt(cookPart)
+			if cookPart
 				and prompt
 				and prompt.Enabled
-				and prompt.ActionText == "Turn On"
-				and not isPotBusy(pot)
+				and (prompt.ActionText == "Turn On" or prompt.ActionText == "Mix Items")
 			then
 				return pot
 			end
@@ -1411,7 +1417,7 @@ local function getAvailableCookingPot()
 	return nil
 end
 
-local function waitForPromptAction(prompt, actionText, timeout)
+local function waitUntilPromptShowsAction(prompt, actionText, timeout)
 	local deadline = tick() + (timeout or 8)
 	while prompt and prompt.Parent and tick() < deadline do
 		if prompt.ActionText == actionText and prompt.Enabled then
@@ -1422,7 +1428,7 @@ local function waitForPromptAction(prompt, actionText, timeout)
 	return false
 end
 
-local function waitForToolConsumed(tool, timeout)
+local function waitUntilToolUnequipped(tool, timeout)
 	local deadline = tick() + (timeout or 8)
 	while tool and tool.Parent and tick() < deadline do
 		RunService.Heartbeat:Wait()
@@ -1430,7 +1436,7 @@ local function waitForToolConsumed(tool, timeout)
 	return not tool or tool.Parent == nil
 end
 
-local function waitForCookFinished(progress, cookPart, timeout)
+local function waitUntilCookingCompletes(progress, cookPart, timeout)
 	local deadline = tick() + (timeout or 120)
 	local startDeadline = tick() + 10
 	local sawBusy = false
@@ -1447,106 +1453,111 @@ local function waitForCookFinished(progress, cookPart, timeout)
 	return false
 end
 
-local function runKoolAidFarm()
-	if koolAidFarmRunning then
+local function runKoolAidMoneyFarm()
+	if isKoolAidFarmRunning then
 		return false
 	end
-	koolAidFarmRunning = true
+	isKoolAidFarmRunning = true
 	local success = false
 
 	local ok, err = pcall(function()
-		notify("Kool-Aid farm started — buying supplies and cooking.", "Kool-Aid Farm", 4)
+		showNotification("Kool-Aid farm started — buying supplies and cooking.", "Kool-Aid Farm", 4)
 
-		local fundsOk, fundsMsg = ensureKoolAidFunds()
+		local fundsOk, fundsMsg = ensureSupplyMoneyAvailable()
 		if not fundsOk then
-			notify(fundsMsg, "Kool-Aid Farm", 8)
+			showNotification(fundsMsg, "Kool-Aid Farm", 8)
 			return
 		end
 
-		local bought, buyMsg = buyKoolAidSupplies()
+		local bought, buyMsg = purchaseKoolAidItems()
 		if not bought then
-			notify(buyMsg, "Kool-Aid Farm", 10)
+			showNotification(buyMsg, "Kool-Aid Farm", 10)
 			return
 		end
 
-		local cookingPot = getAvailableCookingPot()
+		local cookingPot = findAvailableCookingPot()
 		if not cookingPot then
-			notify("No free cooking pot — try another server.", "Kool-Aid Farm", 10)
+			showNotification("No free cooking pot — try another server.", "Kool-Aid Farm", 10)
 			return
 		end
 
 		local cookPart = cookingPot:WaitForChild("CookPart", 10)
-		local cookPrompt = getCookPrompt(cookPart)
-		local cookProgress = getCookProgress(cookPart)
-		local sellPart = findMapObject("IceFruit Sell")
-		local sellPrompt = getSellPrompt(sellPart)
+		local cookPrompt = findCookPrompt(cookPart)
+		local cookProgress = findCookProgressBar(cookPart)
+		local sellPart = findWorldObject("IceFruit Sell")
+		local sellPrompt = findSellPrompt(sellPart)
 
 		if not cookPart or not cookPrompt or not cookProgress or not sellPart or not sellPrompt then
-			notify("Cooking or IceFruit Sell prompt missing in map.", "Kool-Aid Farm", 8)
+			showNotification("Cooking or IceFruit Sell prompt missing in map.", "Kool-Aid Farm", 8)
 			return
 		end
 
-		local fijiWater = findItem("FijiWater")
-		local freshWater = findItem("FreshWater")
-		local iceFruitBag = findItem("Ice-Fruit Bag")
-		local iceFruitCupz = findItem("Ice-Fruit Cupz")
-		local humanoid = getHumanoid()
+		local fijiWater = findPlayerItem("FijiWater")
+		local freshWater = findPlayerItem("FreshWater")
+		local iceFruitBag = findPlayerItem("Ice-Fruit Bag")
+		local iceFruitCupz = findPlayerItem("Ice-Fruit Cupz")
+		local humanoid = getLocalHumanoid()
 
 		if not fijiWater or not freshWater or not iceFruitBag or not iceFruitCupz or not humanoid then
-			notify("Supplies missing from backpack after shop purchase.", "Kool-Aid Farm", 6)
+			showNotification("Supplies missing from backpack after shop purchase.", "Kool-Aid Farm", 6)
 			return
 		end
 
-		local filthyBefore = getFilthyMoney()
+		local filthyBefore = getDirtyMoney()
 		local cookOrder = { fijiWater, freshWater, iceFruitBag }
 
-		teleportTo(cookPart.Position)
-		sleep(0.25)
-		firePrompt(cookPrompt)
-		if not waitForPromptAction(cookPrompt, "Mix Items", 8) then
-			notify("Cooking pot did not switch to Mix Items.", "Kool-Aid Farm", 8)
+		teleportCharacterTo(cookPart.Position)
+		waitSeconds(0.25)
+		if cookPrompt.ActionText == "Turn On" then
+			triggerProximityPrompt(cookPrompt)
+			if not waitUntilPromptShowsAction(cookPrompt, "Mix Items", 8) then
+				showNotification("Cooking pot did not switch to Mix Items.", "Kool-Aid Farm", 8)
+				return
+			end
+		elseif cookPrompt.ActionText ~= "Mix Items" then
+			showNotification("Cooking pot prompt is not ready (expected Turn On or Mix Items).", "Kool-Aid Farm", 8)
 			return
 		end
 
 		for _, tool in ipairs(cookOrder) do
 			humanoid:EquipTool(tool)
-			sleep(0.35)
-			if not waitForPromptAction(cookPrompt, "Mix Items", 4) then
-				notify("Cooking prompt not ready for " .. tool.Name .. ".", "Kool-Aid Farm", 8)
+			waitSeconds(0.35)
+			if not waitUntilPromptShowsAction(cookPrompt, "Mix Items", 4) then
+				showNotification("Cooking prompt not ready for " .. tool.Name .. ".", "Kool-Aid Farm", 8)
 				return
 			end
-			firePrompt(cookPrompt)
-			if not waitForToolConsumed(tool, 8) then
-				notify(tool.Name .. " was not accepted by the pot.", "Kool-Aid Farm", 8)
+			triggerProximityPrompt(cookPrompt)
+			if not waitUntilToolUnequipped(tool, 8) then
+				showNotification(tool.Name .. " was not accepted by the pot.", "Kool-Aid Farm", 8)
 				return
 			end
 		end
 
-		if not waitForCookFinished(cookProgress, cookPart, 120) then
-			notify("Cooking timed out — pot stayed busy.", "Kool-Aid Farm", 8)
+		if not waitUntilCookingCompletes(cookProgress, cookPart, 120) then
+			showNotification("Cooking timed out — pot stayed busy.", "Kool-Aid Farm", 8)
 			return
 		end
 
-		teleportTo(cookPart.Position)
-		sleep(0.25)
+		teleportCharacterTo(cookPart.Position)
+		waitSeconds(0.25)
 		humanoid:EquipTool(iceFruitCupz)
-		sleep(0.1)
-		firePrompt(cookPrompt)
-		sleep(1)
+		waitSeconds(0.1)
+		triggerProximityPrompt(cookPrompt)
+		waitSeconds(1)
 
-		teleportTo(sellPart.Position)
-		sleep(0.25)
+		teleportCharacterTo(sellPart.Position)
+		waitSeconds(0.25)
 		for _ = 1, 2000 do
-			firePrompt(sellPrompt)
+			triggerProximityPrompt(sellPrompt)
 		end
 
-		local filthyAfter = getFilthyMoney()
+		local filthyAfter = getDirtyMoney()
 		success = true
-		notify(
+		showNotification(
 			"Cook + sell done. Filthy: "
-				.. formatMoney(filthyBefore)
+				.. formatCurrency(filthyBefore)
 				.. " → "
-				.. formatMoney(filthyAfter)
+				.. formatCurrency(filthyAfter)
 				.. ". Run LTK dupe, then wash.",
 			"Kool-Aid Farm",
 			10
@@ -1554,14 +1565,14 @@ local function runKoolAidFarm()
 	end)
 
 	if not ok then
-		notify(tostring(err), "Kool-Aid Farm", 8)
+		showNotification(tostring(err), "Kool-Aid Farm", 8)
 	elseif not success then
-		-- step-specific notify already shown
+		-- step-specific showNotification already shown
 	else
-		-- success notify already shown
+		-- success showNotification already shown
 	end
 
-	koolAidFarmRunning = false
+	isKoolAidFarmRunning = false
 	return success
 end
 
@@ -1569,7 +1580,7 @@ end
 -- Infinite money — LTK Hub raw dupe (InfiniteMoney-LTK Hub.lua)
 -- ---------------------------------------------------------------------------
 
-local function restorePlayerGui(enabled)
+local function setHudGuiEnabled(enabled)
 	local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
 	if not playerGui then
 		return
@@ -1588,7 +1599,7 @@ local function restorePlayerGui(enabled)
 	end)
 end
 
-local function waitForMaxMoney(timeout)
+local function waitForPlayerMaxMoney(timeout)
 	timeout = timeout or 10
 	local maxMoney = LocalPlayer:GetAttribute("MaxMoney")
 	if typeof(maxMoney) == "number" then
@@ -1605,76 +1616,76 @@ local function waitForMaxMoney(timeout)
 	return LocalPlayer:GetAttribute("MaxMoney")
 end
 
-local function runLtkMoneyDupe()
-	if ltkDupeRunning then
+local function runLtkSellMoneyDupe()
+	if isLtkDupeRunning then
 		return false
 	end
-	ltkDupeRunning = true
+	isLtkDupeRunning = true
 	local success = false
 
 	local ok, err = pcall(function()
-		if not getStoredFolder(15) then
-			notify("Player data not loaded — wait after spawn and retry.", "LTK Dupe", 8)
+		if not getPlayerStoredData(15) then
+			showNotification("Player data not loaded — wait after spawn and retry.", "LTK Dupe", 8)
 			return
 		end
 
-		local sellPart = findMapObject("IceFruit Sell")
-		local sellPrompt = getSellPrompt(sellPart)
+		local sellPart = findWorldObject("IceFruit Sell")
+		local sellPrompt = findSellPrompt(sellPart)
 		if not sellPart or not sellPrompt then
-			notify("IceFruit Sell not found on map.", "LTK Dupe", 6)
+			showNotification("IceFruit Sell not found on map.", "LTK Dupe", 6)
 			return
 		end
 
-		local root = getRootPart()
+		local root = getHumanoidRootPart()
 		if not root then
-			notify("Character not loaded.", "LTK Dupe", 5)
+			showNotification("Character not loaded.", "LTK Dupe", 5)
 			return
 		end
 
-		local filthyBefore = getFilthyMoney()
+		local filthyBefore = getDirtyMoney()
 		local oldPos = root.CFrame
 
-		restorePlayerGui(false)
-		teleportTo(sellPart)
-		notify("LTK dupe running — spamming sell prompt.", "LTK Dupe", 4)
+		setHudGuiEnabled(false)
+		teleportCharacterTo(sellPart)
+		showNotification("LTK dupe running — spamming sell prompt.", "LTK Dupe", 4)
 
 		for _ = 1, 999 do
-			firePrompt(sellPrompt)
+			triggerProximityPrompt(sellPrompt)
 		end
 
-		sleep(4.5)
+		waitSeconds(4.5)
 
-		local filthyAfter = getFilthyMoney()
-		local maxMoney = waitForMaxMoney(10)
-		restorePlayerGui(true)
+		local filthyAfter = getDirtyMoney()
+		local maxMoney = waitForPlayerMaxMoney(10)
+		setHudGuiEnabled(true)
 		root.CFrame = oldPos
 
 		if typeof(maxMoney) == "number" and filthyAfter >= maxMoney then
 			success = true
-			notify(
+			showNotification(
 				"Dupe capped at "
-					.. formatMoney(maxMoney)
+					.. formatCurrency(maxMoney)
 					.. " filthy (was "
-					.. formatMoney(filthyBefore)
+					.. formatCurrency(filthyBefore)
 					.. "). Wash at the washer.",
 				"LTK Dupe",
 				10
 			)
 		elseif filthyAfter > filthyBefore then
 			success = true
-			notify(
+			showNotification(
 				"Filthy increased "
-					.. formatMoney(filthyBefore)
+					.. formatCurrency(filthyBefore)
 					.. " → "
-					.. formatMoney(filthyAfter)
+					.. formatCurrency(filthyAfter)
 					.. ". Wash when ready.",
 				"LTK Dupe",
 				10
 			)
 		else
-			notify(
+			showNotification(
 				"Dupe did not increase filthy (still "
-					.. formatMoney(filthyAfter)
+					.. formatCurrency(filthyAfter)
 					.. "). Run Kool-Aid farm first.",
 				"LTK Dupe",
 				10
@@ -1683,16 +1694,16 @@ local function runLtkMoneyDupe()
 	end)
 
 	if not ok then
-		restorePlayerGui(true)
-		notify(tostring(err), "LTK Dupe", 8)
+		setHudGuiEnabled(true)
+		showNotification(tostring(err), "LTK Dupe", 8)
 	end
 
-	ltkDupeRunning = false
+	isLtkDupeRunning = false
 	return success
 end
 
 -- ---------------------------------------------------------------------------
--- Survival bypasses (client-side hunger / sleep / injured)
+-- Survival bypasses (client-side hunger / waitSeconds / injured)
 -- ---------------------------------------------------------------------------
 
 local function restoreHungerScripts()
@@ -1704,7 +1715,7 @@ local function restoreHungerScripts()
 	end
 end
 
-local function applyNoHunger()
+local function disableHungerTracking()
 	if not Config.NoHunger then
 		restoreHungerScripts()
 		return
@@ -1724,7 +1735,7 @@ local function applyNoHunger()
 	end
 end
 
-local function applyNoInjuredHook()
+local function setInjuredStateBypass()
 	if Config.NoInjured then
 		if typeof(shared.SetCantRun) == "function" and shared.SetCantRun ~= noopCantRun then
 			setCantRunOriginal = shared.SetCantRun
@@ -1738,14 +1749,14 @@ local function applyNoInjuredHook()
 	end
 end
 
-local function applySurvivalBypasses()
+local function tickSurvivalBypasses()
 	if Config.NoSleep then
 		shared.Wokeness = 100
 		shared.Sleeping = false
 	end
 	if Config.NoInjured then
-		applyNoInjuredHook()
-		local humanoid = getHumanoid()
+		setInjuredStateBypass()
+		local humanoid = getLocalHumanoid()
 		if humanoid and humanoid.Health > 0 and humanoid.Health < 26 and not Config.SpeedBoost then
 			humanoid.WalkSpeed = Config.AlwaysSprint and Config.RunSpeed or 16
 		end
@@ -1756,22 +1767,22 @@ end
 -- Teleports + money utilities
 -- ---------------------------------------------------------------------------
 
-local function teleportToNamed(label, finder)
+local function teleportToWorldLocation(label, finder)
 	local target = finder()
 	if not target then
-		notify(label .. " not found in workspace.", "Teleport", 5)
+		showNotification(label .. " not found in workspace.", "Teleport", 5)
 		return false
 	end
-	if teleportTo(target) then
-		notify("Teleported to " .. label .. ".", "Teleport", 3)
+	if teleportCharacterTo(target) then
+		showNotification("Teleported to " .. label .. ".", "Teleport", 3)
 		return true
 	end
-	notify("Teleport failed.", "Teleport", 4)
+	showNotification("Teleport failed.", "Teleport", 4)
 	return false
 end
 
-local function findWashPrompt()
-	local washer = findMapObject("WashingMachine")
+local function findMoneyWasherPrompt()
+	local washer = findWorldObject("WashingMachine")
 	if not washer then
 		return nil, nil
 	end
@@ -1781,108 +1792,108 @@ local function findWashPrompt()
 	return washer, prompt
 end
 
-local function runWashMoney()
-	local filthyBefore = getFilthyMoney()
-	local cashBefore = getMoney()
+local function washDirtyMoney()
+	local filthyBefore = getDirtyMoney()
+	local cashBefore = getCleanMoney()
 	if filthyBefore <= 0 then
-		notify("No filthy cash to wash — run Kool-Aid farm + LTK dupe first.", "Wash Money", 8)
+		showNotification("No filthy cash to wash — run Kool-Aid farm + LTK dupe first.", "Wash Money", 8)
 		return false
 	end
 
-	local washer, prompt = findWashPrompt()
+	local washer, prompt = findMoneyWasherPrompt()
 	if not washer or not prompt then
-		notify("WashingMachine not found on map.", "Wash Money", 6)
+		showNotification("WashingMachine not found on map.", "Wash Money", 6)
 		return false
 	end
 
-	notify("Washing " .. formatMoney(filthyBefore) .. " filthy cash...", "Wash Money", 4)
-	teleportTo(washer)
-	sleep(0.25)
+	showNotification("Washing " .. formatCurrency(filthyBefore) .. " filthy cash...", "Wash Money", 4)
+	teleportCharacterTo(washer)
+	waitSeconds(0.25)
 	for _ = 1, 100 do
-		firePrompt(prompt)
+		triggerProximityPrompt(prompt)
 	end
-	sleep(0.5)
+	waitSeconds(0.5)
 
-	local filthyAfter = getFilthyMoney()
-	local cashAfter = getMoney()
-	notify(
+	local filthyAfter = getDirtyMoney()
+	local cashAfter = getCleanMoney()
+	showNotification(
 		"Wash done. Clean "
-			.. formatMoney(cashBefore)
+			.. formatCurrency(cashBefore)
 			.. " → "
-			.. formatMoney(cashAfter)
+			.. formatCurrency(cashAfter)
 			.. " | Filthy "
-			.. formatMoney(filthyBefore)
+			.. formatCurrency(filthyBefore)
 			.. " → "
-			.. formatMoney(filthyAfter),
+			.. formatCurrency(filthyAfter),
 		"Wash Money",
 		10
 	)
 	return filthyAfter < filthyBefore or cashAfter > cashBefore
 end
 
-local function runBuySupplies()
+local function startSupplyPurchase()
 	task.spawn(function()
-		local fundsOk, fundsMsg = ensureKoolAidFunds()
+		local fundsOk, fundsMsg = ensureSupplyMoneyAvailable()
 		if not fundsOk then
-			notify(fundsMsg, "Buy Kool-Aid", 8)
+			showNotification(fundsMsg, "Buy Kool-Aid", 8)
 			return
 		end
-		local bought, buyMsg = buyKoolAidSupplies()
+		local bought, buyMsg = purchaseKoolAidItems()
 		if bought then
-			notify("All Kool-Aid supplies purchased.", "Buy Kool-Aid", 5)
+			showNotification("All Kool-Aid supplies purchased.", "Buy Kool-Aid", 5)
 		else
-			notify(buyMsg, "Buy Kool-Aid", 8)
+			showNotification(buyMsg, "Buy Kool-Aid", 8)
 		end
 	end)
 end
 
-local function teleportToFreePot()
-	local pot = getAvailableCookingPot()
+local function teleportToAvailablePot()
+	local pot = findAvailableCookingPot()
 	if not pot then
-		notify("No free cooking pot available.", "Cooking Pot", 5)
+		showNotification("No free cooking pot available.", "Cooking Pot", 5)
 		return
 	end
 	local cookPart = pot:FindFirstChild("CookPart", true)
-	if cookPart and teleportTo(cookPart) then
-		notify("Teleported to free cooking pot.", "Cooking Pot", 4)
+	if cookPart and teleportCharacterTo(cookPart) then
+		showNotification("Teleported to free cooking pot.", "Cooking Pot", 4)
 	else
-		notify("Cook pot found but teleport failed.", "Cooking Pot", 5)
+		showNotification("Cook pot found but teleport failed.", "Cooking Pot", 5)
 	end
 end
 
-local function runFullMoneyCycle()
-	if fullCycleRunning or koolAidFarmRunning or ltkDupeRunning then
-		notify("A money script is already running.", "Full Money Cycle", 5)
+local function runAutoMoneyCycle()
+	if isMoneyCycleRunning or isKoolAidFarmRunning or isLtkDupeRunning then
+		showNotification("A money script is already running.", "Full Money Cycle", 5)
 		return
 	end
-	fullCycleRunning = true
+	isMoneyCycleRunning = true
 	task.spawn(function()
 		local ok, err = pcall(function()
-			notify("Full cycle: cook → dupe → wash.", "Full Money Cycle", 5)
+			showNotification("Full cycle: cook → dupe → wash.", "Full Money Cycle", 5)
 
-			if not runKoolAidFarm() then
-				notify("Cycle stopped — Kool-Aid farm failed.", "Full Money Cycle", 8)
+			if not runKoolAidMoneyFarm() then
+				showNotification("Cycle stopped — Kool-Aid farm failed.", "Full Money Cycle", 8)
 				return
 			end
-			if not runLtkMoneyDupe() then
-				notify("Cycle stopped — LTK dupe failed.", "Full Money Cycle", 8)
+			if not runLtkSellMoneyDupe() then
+				showNotification("Cycle stopped — LTK dupe failed.", "Full Money Cycle", 8)
 				return
 			end
-			runWashMoney()
+			washDirtyMoney()
 
-			notify(
+			showNotification(
 				"Full cycle complete. Clean "
-					.. formatMoney(getMoney())
+					.. formatCurrency(getCleanMoney())
 					.. " | Filthy "
-					.. formatMoney(getFilthyMoney()),
+					.. formatCurrency(getDirtyMoney()),
 				"Full Money Cycle",
 				10
 			)
 		end)
 		if not ok then
-			notify(tostring(err), "Full Money Cycle", 8)
+			showNotification(tostring(err), "Full Money Cycle", 8)
 		end
-		fullCycleRunning = false
+		isMoneyCycleRunning = false
 	end)
 end
 
@@ -1890,11 +1901,11 @@ end
 -- Movement boosts
 -- ---------------------------------------------------------------------------
 
-local function applyAlwaysSprint()
+local function tickAutoSprint()
 	if not Config.AlwaysSprint or Config.SpeedBoost or Config.Fly or Config.MovementBypass then
 		return
 	end
-	local humanoid = getHumanoid()
+	local humanoid = getLocalHumanoid()
 	if not humanoid or humanoid.Health <= 0 or shared.Sleeping then
 		return
 	end
@@ -1905,8 +1916,8 @@ local function applyAlwaysSprint()
 	end
 end
 
-local function resetMovementStats()
-	local humanoid = getHumanoid()
+local function resetDefaultMovement()
+	local humanoid = getLocalHumanoid()
 	if not humanoid or humanoid.Health <= 0 or Config.MovementBypass or Config.Fly then
 		return
 	end
@@ -1924,8 +1935,8 @@ local function resetMovementStats()
 	end
 end
 
-local function applyMovementBoosts()
-	local humanoid = getHumanoid()
+local function applySpeedJumpBoosts()
+	local humanoid = getLocalHumanoid()
 	if not humanoid or humanoid.Health <= 0 then
 		return
 	end
@@ -1945,39 +1956,39 @@ local function applyMovementBoosts()
 	end
 end
 
-local function bindCharacter(character)
+local function setupCharacterFeatures(character)
 	if not character then
 		return
 	end
 	if Config.MovementBypass then
-		applyMovementBypass(character)
+		enableMovementBypass(character)
 	else
-		teardownMovementBypass()
+		disableMovementBypass()
 	end
-	bindAntiGlide(character)
+	monitorAntiGlideScript(character)
 	if Config.NoFallRagdoll or Config.FullRagdoll then
-		applyNoFallRagdoll(character)
+		enableNoFallRagdoll(character)
 	end
 	if Config.FullRagdoll then
-		applyFullRagdoll(character)
+		enableAntiRagdoll(character)
 	else
-		teardownFullRagdoll()
+		disableAntiRagdoll()
 	end
-	if gunPatchesEnabled() then
-		bindGunPatchCharacter(character)
+	if shouldApplyGunMods() then
+		watchCharacterGunTools(character)
 	end
-	applyNoHunger()
-	applyShootBypass()
-	applyMovementBoosts()
+	disableHungerTracking()
+	enableShootBypass()
+	applySpeedJumpBoosts()
 end
 
-local function onCharacterRemoving(_character)
+local function cleanupCharacterFeatures(_character)
 	if bypassSession.character == _character then
-		teardownMovementBypass()
+		disableMovementBypass()
 	end
-	teardownAntiGlideConn()
-	teardownNoFallRagdoll()
-	teardownFullRagdoll()
+	disconnectAntiGlideMonitor()
+	disableNoFallRagdoll()
+	disableAntiRagdoll()
 	if equipCharacterConn then
 		equipCharacterConn:Disconnect()
 		equipCharacterConn = nil
@@ -2072,8 +2083,8 @@ hubUiInstance = UILib.create({
 							id = "tpSell",
 							label = "TP IceFruit Sell",
 							onClick = function()
-								teleportToNamed("IceFruit Sell", function()
-									return findMapObject("IceFruit Sell")
+								teleportToWorldLocation("IceFruit Sell", function()
+									return findWorldObject("IceFruit Sell")
 								end)
 							end,
 						},
@@ -2082,8 +2093,8 @@ hubUiInstance = UILib.create({
 							id = "tpWash",
 							label = "TP Washer",
 							onClick = function()
-								teleportToNamed("WashingMachine", function()
-									return findMapObject("WashingMachine")
+								teleportToWorldLocation("WashingMachine", function()
+									return findWorldObject("WashingMachine")
 								end)
 							end,
 						},
@@ -2092,13 +2103,13 @@ hubUiInstance = UILib.create({
 							id = "tpStudio",
 							label = "TP Studio",
 							onClick = function()
-								teleportToNamed("Studio", function()
-									local studioPay = findMapObject("StudioPay")
-									return studioPay and findPath(studioPay, "Money", "StudioPay1")
+								teleportToWorldLocation("Studio", function()
+									local studioPay = findWorldObject("StudioPay")
+									return studioPay and findChildByPath(studioPay, "Money", "StudioPay1")
 								end)
 							end,
 						},
-						{ type = "button", id = "tpPot", label = "TP Free Pot", onClick = teleportToFreePot },
+						{ type = "button", id = "tpPot", label = "TP Free Pot", onClick = teleportToAvailablePot },
 					},
 				},
 				{
@@ -2109,19 +2120,19 @@ hubUiInstance = UILib.create({
 							id = "washMoney",
 							label = "Wash Money",
 							onClick = function()
-								task.spawn(runWashMoney)
+								task.spawn(washDirtyMoney)
 							end,
 						},
-						{ type = "button", id = "buySupplies", label = "Buy Kool-Aid", onClick = runBuySupplies },
+						{ type = "button", id = "buySupplies", label = "Buy Kool-Aid", onClick = startSupplyPurchase },
 						{
 							type = "button",
 							id = "withdraw2750",
 							label = "Withdraw $2746",
 							onClick = function()
-								if withdrawCash(KOOL_AID_COST) then
-									notify("Withdrew " .. formatMoney(KOOL_AID_COST) .. " from bank.", "Bank", 4)
+								if withdrawBankCash(KOOL_AID_COST) then
+									showNotification("Withdrew " .. formatCurrency(KOOL_AID_COST) .. " from bank.", "Bank", 4)
 								else
-									notify("Bank withdraw failed.", "Bank", 5)
+									showNotification("Bank withdraw failed.", "Bank", 5)
 								end
 							end,
 						},
@@ -2130,13 +2141,13 @@ hubUiInstance = UILib.create({
 							id = "koolAidFarm",
 							label = "Kool-Aid Farm",
 							getLabel = function()
-								return koolAidFarmRunning and "Kool-Aid Farm (running...)" or "Kool-Aid Farm"
+								return isKoolAidFarmRunning and "Kool-Aid Farm (running...)" or "Kool-Aid Farm"
 							end,
 							canClick = function()
-								return not koolAidFarmRunning
+								return not isKoolAidFarmRunning
 							end,
 							onClick = function()
-								task.spawn(runKoolAidFarm)
+								task.spawn(runKoolAidMoneyFarm)
 							end,
 						},
 						{
@@ -2144,13 +2155,13 @@ hubUiInstance = UILib.create({
 							id = "ltkDupe",
 							label = "LTK Money Dupe",
 							getLabel = function()
-								return ltkDupeRunning and "LTK Dupe (running...)" or "LTK Money Dupe"
+								return isLtkDupeRunning and "LTK Dupe (running...)" or "LTK Money Dupe"
 							end,
 							canClick = function()
-								return not ltkDupeRunning
+								return not isLtkDupeRunning
 							end,
 							onClick = function()
-								task.spawn(runLtkMoneyDupe)
+								task.spawn(runLtkSellMoneyDupe)
 							end,
 						},
 						{
@@ -2158,12 +2169,12 @@ hubUiInstance = UILib.create({
 							id = "fullCycle",
 							label = "Full Money Cycle",
 							getLabel = function()
-								return fullCycleRunning and "Full Cycle (running...)" or "Full Money Cycle"
+								return isMoneyCycleRunning and "Full Cycle (running...)" or "Full Money Cycle"
 							end,
 							canClick = function()
-								return not fullCycleRunning and not koolAidFarmRunning and not ltkDupeRunning
+								return not isMoneyCycleRunning and not isKoolAidFarmRunning and not isLtkDupeRunning
 							end,
-							onClick = runFullMoneyCycle,
+							onClick = runAutoMoneyCycle,
 						},
 					},
 				},
@@ -2177,65 +2188,65 @@ hubUiInstance = UILib.create({
 				Config.Fly = false
 				flyBypassState.groundLatched = false
 				flyBypassState.lastFlyActive = false
-				bindAntiGlide(LocalPlayer.Character)
-				notify("Fly disabled — requires AC Bypass.", "Movement", 4)
+				monitorAntiGlideScript(LocalPlayer.Character)
+				showNotification("Fly disabled — requires AC Bypass.", "Movement", 4)
 			end
 			if not value then
 				flyBypassState.groundLatched = false
 				flyBypassState.lastFlyActive = false
 			end
-			refreshMovementBypass()
+			refreshMovementBypassState()
 		elseif key == "InstantPrompts" then
-			applyInstantPrompts()
+			enableInstantPrompts()
 		elseif key == "NoFallRagdoll" then
 			if value or Config.FullRagdoll then
-				applyNoFallRagdoll(LocalPlayer.Character)
+				enableNoFallRagdoll(LocalPlayer.Character)
 			else
-				teardownNoFallRagdoll()
+				disableNoFallRagdoll()
 			end
 		elseif key == "FullRagdoll" then
 			if value then
-				applyNoFallRagdoll(LocalPlayer.Character)
-				applyFullRagdoll(LocalPlayer.Character)
+				enableNoFallRagdoll(LocalPlayer.Character)
+				enableAntiRagdoll(LocalPlayer.Character)
 			else
-				teardownFullRagdoll()
+				disableAntiRagdoll()
 				if not Config.NoFallRagdoll then
-					teardownNoFallRagdoll()
+					disableNoFallRagdoll()
 				end
 			end
 		elseif key == "InstantEquip" or key == "GunMods" then
-			applyGunPatches()
+			enableGunModWatchers()
 		elseif key == "ShootBypass" then
-			applyShootBypass()
+			enableShootBypass()
 		elseif key == "NoHunger" then
-			applyNoHunger()
+			disableHungerTracking()
 		elseif key == "NoInjured" then
-			applyNoInjuredHook()
+			setInjuredStateBypass()
 		elseif key == "StudioFarm" then
-			applyStudioFarm()
+			startStudioCashFarm()
 		elseif key == "Fly" then
 			if Config.Fly then
 				if not Config.MovementBypass then
 					Config.MovementBypass = true
-					notify("AC Bypass enabled for fly.", "Fly", 3)
+					showNotification("AC Bypass enabled for fly.", "Fly", 3)
 				end
-				latchFlyGroundY(getRootPart())
+				lockFlyBaselineHeight(getHumanoidRootPart())
 			else
 				flyBypassState.groundLatched = false
 				flyBypassState.lastFlyActive = false
-				syncAcGroundYFromAttr()
+				updateFlyBaselineFromAttribute()
 			end
-			bindAntiGlide(LocalPlayer.Character)
-			refreshMovementBypass()
+			monitorAntiGlideScript(LocalPlayer.Character)
+			refreshMovementBypassState()
 		elseif key == "SpeedBoost" or key == "JumpBoost" then
 			if value then
-				applyMovementBoosts()
+				applySpeedJumpBoosts()
 			else
-				resetMovementStats()
+				resetDefaultMovement()
 			end
 		elseif key == "AlwaysSprint" then
 			if not value then
-				resetMovementStats()
+				resetDefaultMovement()
 			end
 		elseif key == "NoSleep" and not value then
 			shared.Wokeness = nil
@@ -2244,33 +2255,33 @@ hubUiInstance = UILib.create({
 	end,
 })
 
-disconnectSessionConns()
+disconnectAllConnections()
 table.insert(sessionConns, LocalPlayer.AttributeChanged:Connect(function(name)
 	if name == "_Y" then
-		syncAcGroundYFromAttr()
+		updateFlyBaselineFromAttribute()
 	end
 end))
-table.insert(sessionConns, LocalPlayer.CharacterAdded:Connect(bindCharacter))
-table.insert(sessionConns, LocalPlayer.CharacterRemoving:Connect(onCharacterRemoving))
+table.insert(sessionConns, LocalPlayer.CharacterAdded:Connect(setupCharacterFeatures))
+table.insert(sessionConns, LocalPlayer.CharacterRemoving:Connect(cleanupCharacterFeatures))
 
 if LocalPlayer.Character then
-	task.defer(bindCharacter, LocalPlayer.Character)
+	task.defer(setupCharacterFeatures, LocalPlayer.Character)
 end
 
-applyInstantPrompts()
-applyShootBypass()
+enableInstantPrompts()
+enableShootBypass()
 
 table.insert(sessionConns, LocalPlayer.PlayerGui.ChildAdded:Connect(function(child)
 	if child.Name == "Hunger" and Config.NoHunger then
-		task.defer(applyNoHunger)
+		task.defer(disableHungerTracking)
 	end
 end))
 
 table.insert(sessionConns, RunService.Heartbeat:Connect(function(deltaTime)
-	applySurvivalBypasses()
-	applyMovementBoosts()
-	applyAlwaysSprint()
-	applyFly(typeof(deltaTime) == "number" and deltaTime or 1 / 60)
+	tickSurvivalBypasses()
+	applySpeedJumpBoosts()
+	tickAutoSprint()
+	updateFreeFlyMovement(typeof(deltaTime) == "number" and deltaTime or 1 / 60)
 end))
 
-print("[MicroHub] Tha Bronx 3", GAME_BUILD, "— LastACPos:", readLastAcStatus())
+print("[MicroHub] Tha Bronx 3", GAME_BUILD, "— LastACPos:", getAnticheatTrackStatus())
