@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "16-sa-debug-volt"
+local GAME_BUILD = "17-sa-debug-fire"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -479,6 +479,7 @@ local dbg = {
 	logCooldowns = {} :: { [string]: number },
 	hooksReady = false,
 	networkHooked = false,
+	remoteHooked = false,
 	remotePath = "",
 	syncPath = "",
 	syncBound = 0,
@@ -489,6 +490,7 @@ local dbg = {
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
 local dbgNetworkHooked = false
+local dbgRemoteHooked = false
 local dbgInitPrinted = false
 local dbgHookWorkerActive = false
 local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
@@ -566,6 +568,11 @@ local function dbgMaybeDecode(value: any): any
 end
 
 local function dbgRecordNetworkEvent(eventName: any, payload: { any })
+	if typeof(eventName) == "string" and eventName == "Fire" and dbg.lastFire then
+		if os.clock() - dbg.lastFire.at < 0.02 then
+			return
+		end
+	end
 	dbg.netCount += 1
 	if typeof(eventName) ~= "string" then
 		dbg.lastEvent = dbgShortVal(eventName)
@@ -625,6 +632,32 @@ local function dbgSession(): { [string]: any }?
 	return env[DBG_SESSION_KEY]
 end
 
+local function dbgHooksActive(): boolean
+	return dbg.networkHooked or dbg.remoteHooked
+end
+
+local function dbgTryHookFunction(oldFn: any, newFn: any, sessionKey: string): boolean
+	if typeof(hookfunction) ~= "function" then
+		return false
+	end
+	local session = dbgSession()
+	if session and session[sessionKey] == oldFn then
+		return true
+	end
+	hookfunction(oldFn, newFn)
+	if session then
+		session[sessionKey] = oldFn
+	end
+	return true
+end
+
+local function dbgRecordRemoteFire(args: { any })
+	if typeof(args[2]) ~= "string" then
+		return
+	end
+	dbgRecordNetworkEvent(args[2], { args[3], args[4], args[5], args[6], args[7], args[8] })
+end
+
 local function dbgIsNetworkApi(tbl: any): boolean
 	return typeof(tbl) == "table"
 		and typeof(rawget(tbl, "FireServer")) == "function"
@@ -642,23 +675,60 @@ local function dbgCombatRemote(): RemoteEvent?
 	return nil
 end
 
+local function dbgRemoteScore(remote: RemoteEvent): number
+	local parent = remote.Parent
+	if parent == LocalPlayer then
+		return 100
+	end
+	if parent and parent:IsA("Player") and parent == LocalPlayer then
+		return 100
+	end
+	local playerAncestor = remote:FindFirstAncestorWhichIsA("Player")
+	if playerAncestor == LocalPlayer then
+		return 90
+	end
+	return 0
+end
+
 local function dbgFindNetworkApi(): (any, RemoteEvent?)
 	if typeof(getgc) ~= "function" then
 		return nil, nil
 	end
 
 	local combatRemote = dbgCombatRemote()
-	if not combatRemote then
-		return nil, nil
-	end
+	local bestApi: any = nil
+	local bestRemote: RemoteEvent? = nil
+	local bestScore = 0
 
 	for _, obj in getgc(true) do
-		if dbgIsNetworkApi(obj) and rawget(obj, "RE") == combatRemote then
+		if not dbgIsNetworkApi(obj) then
+			continue
+		end
+		local remote = rawget(obj, "RE")
+		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
+			continue
+		end
+		if combatRemote and remote == combatRemote then
 			return obj, combatRemote
+		end
+		local score = dbgRemoteScore(remote)
+		if score > bestScore then
+			bestApi, bestRemote, bestScore = obj, remote, score
 		end
 	end
 
+	if bestScore >= 90 then
+		return bestApi, bestRemote
+	end
 	return nil, nil
+end
+
+local function dbgPrintInit(label: string, path: string)
+	if dbgInitPrinted then
+		return
+	end
+	dbgInitPrinted = true
+	print("[GFA-DBG] init", label, "@", path)
 end
 
 local function dbgHookNetworkApi()
@@ -666,65 +736,99 @@ local function dbgHookNetworkApi()
 		return
 	end
 
-	local session = dbgSession()
-	if session and session.networkHooked then
-		dbgNetworkHooked = true
-		dbg.networkHooked = true
-		dbg.hooksReady = true
-		dbg.remotePath = session.remotePath or dbg.remotePath
-		dbg.status = "Fire hook active (rejoin to reset)"
-		return
-	end
-
-	if typeof(hookfunction) ~= "function" or typeof(newcclosure) ~= "function" then
-		dbg.status = "hookfunction unavailable"
+	if typeof(newcclosure) ~= "function" then
+		dbg.status = "newcclosure unavailable"
 		return
 	end
 
 	local api, remote = dbgFindNetworkApi()
-	if not api or not remote then
-		dbg.status = if dbgCombatRemote() then "waiting for Network API" else "waiting for player RemoteEvent"
+	if not api or not remote or dbgRemoteScore(remote) < 90 then
 		return
 	end
 
 	dbg.remotePath = remote:GetFullName()
 	local oldFireServer = api.FireServer
-	hookfunction(
+	if not dbgTryHookFunction(
 		oldFireServer,
 		newcclosure(function(self, eventName, ...)
 			if Config.AimDebugger then
 				dbgRecordNetworkEvent(eventName, { ... })
 			end
 			return oldFireServer(self, eventName, ...)
-		end)
-	)
-
-	if session then
-		session.networkHooked = true
-		session.remotePath = dbg.remotePath
+		end),
+		"networkFireFn"
+	) then
+		return
 	end
 
 	dbgNetworkHooked = true
 	dbg.networkHooked = true
 	dbg.hooksReady = true
 	dbg.status = "Network.FireServer hooked"
+	dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
+end
 
-	if not dbgInitPrinted then
-		dbgInitPrinted = true
-		print("[GFA-DBG] init Network.FireServer hooked @", dbg.remotePath)
+local function dbgHookRemoteFireServer()
+	if dbgRemoteHooked then
+		return
+	end
+
+	if typeof(newcclosure) ~= "function" then
+		dbg.status = "newcclosure unavailable"
+		return
+	end
+
+	local remote = dbgCombatRemote()
+	if not remote then
+		return
+	end
+
+	local path = remote:GetFullName()
+	if dbg.remotePath == "" then
+		dbg.remotePath = path
+	end
+
+	local oldFire = remote.FireServer
+	if not dbgTryHookFunction(
+		oldFire,
+		newcclosure(function(self, ...)
+			if Config.AimDebugger and self == remote then
+				dbgRecordRemoteFire({ ... })
+			end
+			return oldFire(self, ...)
+		end),
+		"remoteFireFn"
+	) then
+		return
+	end
+
+	dbgRemoteHooked = true
+	dbg.remoteHooked = true
+	dbg.hooksReady = true
+	if dbg.networkHooked then
+		dbg.status = "Network + RemoteEvent FireServer hooked"
+	else
+		dbg.status = "RemoteEvent.FireServer hooked"
+		dbgPrintInit("RemoteEvent.FireServer hooked", path)
 	end
 end
 
 local function dbgStartHookWorker()
-	if dbgHookWorkerActive or dbgNetworkHooked or not Config.AimDebugger then
+	if dbgHookWorkerActive or dbgHooksActive() or not Config.AimDebugger then
 		return
 	end
 	dbgHookWorkerActive = true
 	task.spawn(function()
-		while Config.AimDebugger and not dbgNetworkHooked do
+		while Config.AimDebugger and not dbgHooksActive() do
 			dbgHookNetworkApi()
-			if dbgNetworkHooked then
+			dbgHookRemoteFireServer()
+			if dbgHooksActive() then
 				break
+			end
+			if dbgCombatRemote() then
+				dbg.status = "waiting for Network API"
+			else
+				dbg.status = "waiting for player RemoteEvent"
 			end
 			task.wait(DBG_HOOK_RETRY)
 		end
@@ -883,8 +987,9 @@ local function dbgUpdate()
 	local lines = {
 		"── Silent Aim Debugger ──",
 		string.format(
-			"Hooks: net:%s sync:%d | %s",
+			"Hooks: net:%s remote:%s sync:%d | %s",
 			if dbg.networkHooked then "OK" else "—",
+			if dbg.remoteHooked then "OK" else "—",
 			dbg.syncBound,
 			dbg.status
 		),
@@ -1223,7 +1328,7 @@ UILib.create({
 						{ type = "toggle", key = "AimDebugger", label = "Debugger", hud = "SA Debug" },
 						{
 							type = "hint",
-							text = "Traces Fire/Hitcheck + Sync. Rejoin if re-injecting. Console logs are rate-limited.",
+							text = "Traces Fire/Hitcheck + Sync. Rejoin once after updating. Console logs are rate-limited.",
 						},
 					},
 				},
