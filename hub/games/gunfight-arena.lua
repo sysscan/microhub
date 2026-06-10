@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "11-sticky-aim"
+local GAME_BUILD = "12-sa-debug"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -23,6 +23,7 @@ local Config = {
 	AimSmooth = 35,
 	AimPart = "Head",
 	AimFOVCircle = false,
+	AimDebugger = false,
 	ESP = true,
 	ESPAllies = true,
 	ESPSnaplines = true,
@@ -440,6 +441,372 @@ local function updateAimbot(dt: number)
 	end
 end
 
+-- Silent aim debugger (Vortex INVK → Network.FireServer → RemoteEvent)
+
+local DBG_CONSOLE_INTERVAL = 4
+local DBG_LINE_COUNT = 14
+
+type DbgShot = {
+	at: number,
+	weapon: string?,
+	clock: number?,
+	serverCf: CFrame?,
+	suppressed: boolean?,
+	ads: boolean?,
+}
+
+type DbgHit = {
+	at: number,
+	a: any,
+	b: any,
+	c: any,
+	d: any,
+}
+
+local dbg = {
+	fireCount = 0,
+	hitCount = 0,
+	syncCount = 0,
+	lastFire = nil :: DbgShot?,
+	lastHitcheck = nil :: DbgHit?,
+	lastSyncCf = nil :: CFrame?,
+	lastSyncWeapon = nil :: string?,
+	lastConsoleAt = 0,
+	hooksReady = false,
+	remotePath = "",
+	syncPath = "",
+	status = "idle",
+}
+
+local dbgTexts: { any } = {}
+local dbgHookInstalled = false
+local dbgSyncConn: RBXScriptConnection? = nil
+
+local function dbgShortCf(cf: any): string
+	if typeof(cf) ~= "CFrame" then
+		return "—"
+	end
+	local p, l = cf.Position, cf.LookVector
+	return string.format(
+		"p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)",
+		p.X,
+		p.Y,
+		p.Z,
+		l.X,
+		l.Y,
+		l.Z
+	)
+end
+
+local function dbgShortVal(value: any): string
+	local t = typeof(value)
+	if t == "string" then
+		if #value > 28 then
+			return string.sub(value, 1, 25) .. "..."
+		end
+		return value
+	end
+	if t == "number" then
+		return string.format("%.3f", value)
+	end
+	if t == "boolean" then
+		return if value then "true" else "false"
+	end
+	if t == "CFrame" then
+		return dbgShortCf(value)
+	end
+	if t == "Instance" then
+		return value.Name
+	end
+	return t
+end
+
+local function dbgLogOnce(key: string, message: string)
+	if not Config.AimDebugger then
+		return
+	end
+	local now = os.clock()
+	if now - dbg.lastConsoleAt < DBG_CONSOLE_INTERVAL then
+		return
+	end
+	dbg.lastConsoleAt = now
+	print("[GFA-DBG]", key, message)
+end
+
+local function dbgRecordFire(_remote: Instance, args: { any })
+	dbg.fireCount += 1
+	local evt = args[2]
+	if typeof(evt) ~= "string" then
+		return
+	end
+	if evt == "Fire" then
+		dbg.lastFire = {
+			at = os.clock(),
+			weapon = dbgShortVal(args[3]),
+			clock = if typeof(args[4]) == "number" then args[4] else nil,
+			serverCf = if typeof(args[5]) == "CFrame" then args[5] else nil,
+			suppressed = if typeof(args[6]) == "boolean" then args[6] else nil,
+			ads = if typeof(args[7]) == "boolean" then args[7] else nil,
+		}
+		dbgLogOnce("Fire", string.format("#%d %s %s", dbg.fireCount, dbg.lastFire.weapon, dbgShortCf(dbg.lastFire.serverCf)))
+	elseif evt == "Hitcheck" then
+		dbg.hitCount += 1
+		dbg.lastHitcheck = {
+			at = os.clock(),
+			a = args[3],
+			b = args[4],
+			c = args[5],
+			d = args[6],
+		}
+		dbgLogOnce(
+			"Hitcheck",
+			string.format(
+				"#%d %s | %s | %s | %s",
+				dbg.hitCount,
+				dbgShortVal(dbg.lastHitcheck.a),
+				dbgShortVal(dbg.lastHitcheck.b),
+				dbgShortVal(dbg.lastHitcheck.c),
+				dbgShortVal(dbg.lastHitcheck.d)
+			)
+		)
+	end
+end
+
+local function dbgFindNetworkRemote(): RemoteEvent?
+	for _, inst in game:GetDescendants() do
+		if inst:IsA("RemoteEvent") and inst.Name == "RemoteEvent" and inst.Parent then
+			local parent = inst.Parent
+			if parent:IsA("Folder") or parent:IsA("Model") or parent:IsA("Player") then
+				return inst
+			end
+		end
+	end
+	return nil
+end
+
+local function dbgHookRemote()
+	if dbgHookInstalled or typeof(hookmetamethod) ~= "function" or typeof(newcclosure) ~= "function" then
+		return
+	end
+	if typeof(getnamecallmethod) ~= "function" or typeof(checkcaller) ~= "function" then
+		dbg.status = "executor hooks unavailable"
+		return
+	end
+
+	local remote = dbgFindNetworkRemote()
+	if not remote then
+		dbg.status = "waiting for RemoteEvent"
+		return
+	end
+
+	dbg.remotePath = remote:GetFullName()
+	local oldNamecall: (...any) -> ...any
+	oldNamecall = hookmetamethod(
+		game,
+		"__namecall",
+		newcclosure(function(self, ...)
+			if Config.AimDebugger and not checkcaller() then
+				local method = getnamecallmethod()
+				if method == "FireServer" and self == remote then
+					dbgRecordFire(self, { ... })
+				end
+			end
+			return oldNamecall(self, ...)
+		end)
+	)
+
+	dbgHookInstalled = true
+	dbg.hooksReady = true
+	dbg.status = "remote hook active"
+	dbgLogOnce("init", "RemoteEvent hook installed at " .. dbg.remotePath)
+end
+
+local function dbgHookSync()
+	if dbgSyncConn or not Config.AimDebugger then
+		return
+	end
+
+	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+	if not playerScripts then
+		return
+	end
+
+	local function bindSync(sync: Instance, label: string)
+		if not sync:IsA("BindableEvent") or dbgSyncConn then
+			return
+		end
+		dbg.syncPath = label
+		dbgSyncConn = sync.Event:Connect(function(...)
+			if not Config.AimDebugger then
+				return
+			end
+			local args = { ... }
+			local shooter = args[1]
+			if shooter ~= LocalPlayer then
+				return
+			end
+			local shotCf = args[4]
+			if typeof(shotCf) ~= "CFrame" then
+				return
+			end
+			dbg.syncCount += 1
+			dbg.lastSyncCf = shotCf
+			dbg.lastSyncWeapon = dbgShortVal(args[6] or args[3])
+		end)
+	end
+
+	local vortex = playerScripts:FindFirstChild("Vortex")
+	if vortex then
+		local sync = vortex:FindFirstChild("Sync")
+		if sync then
+			bindSync(sync, vortex:GetFullName() .. ".Sync")
+		end
+	end
+
+	local secondThread = playerScripts:FindFirstChild("SecondThread")
+	if secondThread then
+		local sync = secondThread:FindFirstChild("Sync")
+		if sync and not dbgSyncConn then
+			bindSync(sync, secondThread:GetFullName() .. ".Sync")
+		end
+	end
+end
+
+local function dbgViewModelFlame(): BasePart?
+	local vm = workspace:FindFirstChild("ViewModel")
+	if not vm or not vm:IsA("Model") then
+		return nil
+	end
+	for _, desc in vm:GetDescendants() do
+		if desc.Name == "Flame" and desc:IsA("BasePart") then
+			return desc
+		end
+	end
+	return nil
+end
+
+local function dbgAngleTo(origin: Vector3, look: Vector3, target: Vector3): number
+	local dir = target - origin
+	if dir.Magnitude < 0.01 then
+		return 0
+	end
+	return math.deg(math.acos(math.clamp(look.Unit:Dot(dir.Unit), -1, 1)))
+end
+
+local function dbgEnsureOverlay()
+	if not canDraw or #dbgTexts > 0 then
+		return
+	end
+	for i = 1, DBG_LINE_COUNT do
+		local line = Drawing.new("Text")
+		line.Size = 13
+		line.Outline = true
+		line.Center = false
+		line.Visible = false
+		line.Position = Vector2.new(12, 8 + (i - 1) * 15)
+		dbgTexts[i] = line
+	end
+end
+
+local function dbgSetLine(index: number, text: string, visible: boolean)
+	local line = dbgTexts[index]
+	if not line then
+		return
+	end
+	line.Text = text
+	line.Visible = visible and Config.AimDebugger
+end
+
+local function dbgHideOverlay()
+	for _, line in dbgTexts do
+		line.Visible = false
+	end
+end
+
+local function dbgUpdate()
+	if not Config.AimDebugger then
+		dbgHideOverlay()
+		return
+	end
+
+	dbgHookRemote()
+	dbgHookSync()
+	dbgEnsureOverlay()
+
+	local origin = aimOrigin()
+	local part = closestAimPart(origin)
+	local targetNameStr = if part and part.Parent then part.Parent.Name else "—"
+	local mouseHit = _G.MouseHitSpot
+	local mouseHitStr = if typeof(mouseHit) == "Vector3"
+		then string.format("%.0f,%.0f,%.0f", mouseHit.X, mouseHit.Y, mouseHit.Z)
+		else "—"
+	local thirdPerson = isThirdPerson()
+	local flame = dbgViewModelFlame()
+	local camLook = Camera.CFrame.LookVector
+	local camToTarget = if part then dbgAngleTo(Camera.CFrame.Position, camLook, part.Position) else nil
+	local serverToTarget = if part and dbg.lastFire and dbg.lastFire.serverCf
+		then dbgAngleTo(dbg.lastFire.serverCf.Position, dbg.lastFire.serverCf.LookVector, part.Position)
+		else nil
+	local syncToTarget = if part and dbg.lastSyncCf
+		then dbgAngleTo(dbg.lastSyncCf.Position, dbg.lastSyncCf.LookVector, part.Position)
+		else nil
+	local clockOffset = LocalPlayer:GetAttribute("ClockOffset")
+	local networkReady = clockOffset ~= nil
+
+	local lines = {
+		"── Silent Aim Debugger ──",
+		string.format(
+			"Hooks: %s | Sync: %s | %s",
+			if dbg.hooksReady then "OK" else "—",
+			if dbgSyncConn then "OK" else "—",
+			dbg.status
+		),
+		string.format(
+			"Net: %s | ClockOffset: %s | %s",
+			if networkReady then "ready" else "pending",
+			dbgShortVal(clockOffset),
+			if thirdPerson then "3rd person" else "1st person"
+		),
+		string.format("Counts  Fire:%d  Hitcheck:%d  Sync:%d", dbg.fireCount, dbg.hitCount, dbg.syncCount),
+		string.format("Target: %s | FOV ok: %s", targetNameStr, if part then "yes" else "no"),
+		string.format(
+			"Angles°  cam:%s  server:%s  sync:%s",
+			if camToTarget then string.format("%.1f", camToTarget) else "—",
+			if serverToTarget then string.format("%.1f", serverToTarget) else "—",
+			if syncToTarget then string.format("%.1f", syncToTarget) else "—"
+		),
+		"MouseHitSpot: " .. mouseHitStr,
+		string.format(
+			"Flame: %s",
+			if flame then dbgShortCf(flame.CFrame) else "—"
+		),
+		"Cam look: " .. string.format("%.2f,%.2f,%.2f", camLook.X, camLook.Y, camLook.Z),
+		string.format(
+			"Last Fire [%s]: %s",
+			if dbg.lastFire then dbg.lastFire.weapon else "—",
+			if dbg.lastFire then dbgShortCf(dbg.lastFire.serverCf) else "—"
+		),
+		string.format(
+			"Last Sync [%s]: %s",
+			dbg.lastSyncWeapon or "—",
+			dbgShortCf(dbg.lastSyncCf)
+		),
+		string.format(
+			"Last Hitcheck: %s | %s | %s | %s",
+			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.a) else "—",
+			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.b) else "—",
+			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.c) else "—",
+			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.d) else "—"
+		),
+		"Hook: Fire arg5 CFrame (cam) + Sync shot CFrame + MouseHitSpot",
+		if dbg.remotePath ~= "" then dbg.remotePath else "Remote: not found yet",
+	}
+
+	for i = 1, DBG_LINE_COUNT do
+		dbgSetLine(i, lines[i] or "", lines[i] ~= nil)
+	end
+end
+
 -- ESP
 
 local function box2d(char: Model, root: BasePart): (number?, number?, number?, number?)
@@ -714,6 +1081,21 @@ UILib.create({
 			},
 		},
 		{
+			label = "Silent Aim",
+			sections = {
+				{
+					title = "Debug",
+					items = {
+						{ type = "toggle", key = "AimDebugger", label = "Debugger", hud = "SA Debug" },
+						{
+							type = "hint",
+							text = "Top-left overlay traces INVK Fire/Hitcheck + Vortex Sync shot CFrame. Console logs are rate-limited.",
+						},
+					},
+				},
+			},
+		},
+		{
 			label = "Visual",
 			sections = {
 				{
@@ -735,7 +1117,10 @@ UILib.create({
 	hud = { showKey = "ShowHUD" },
 })
 
-RunService.RenderStepped:Connect(updateESP)
+RunService.RenderStepped:Connect(function()
+	updateESP()
+	dbgUpdate()
+end)
 RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateAimbot)
 
 print("[MicroHub] Gunfight Arena", GAME_BUILD, "— Drawing:", canDraw)
