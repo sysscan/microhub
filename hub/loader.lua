@@ -1,8 +1,6 @@
--- MicroHub loader v1.6.18
--- Remote only. Resolves GitHub main -> immutable commit SHA, then loads every file from that SHA.
+-- MicroHub loader — fetched at latest commit SHA by bootstrap.lua (or an equivalent bootstrap snippet).
 
-local VERSION = "1.6.18"
-local MIN_UI_VERSION = "3.0.0"
+local VERSION = "1.7.0"
 local OWNER = "sysscan"
 local REPO = "microhub"
 local BRANCH = "main"
@@ -220,26 +218,6 @@ local function runSource(path)
 	return result
 end
 
-local function versionAtLeast(actual, minimum)
-	local ai, mi = 1, 1
-	while true do
-		local av
-		av, ai = tostring(actual):match("(%d+)%.?()", ai)
-		local mv
-		mv, mi = tostring(minimum):match("(%d+)%.?()", mi)
-		if not av and not mv then
-			return true
-		end
-		av = tonumber(av) or 0
-		mv = tonumber(mv) or 0
-		if av > mv then
-			return true
-		elseif av < mv then
-			return false
-		end
-	end
-end
-
 local function findGame(placeId)
 	for _, entry in ipairs(GAMES) do
 		for _, id in ipairs(entry.placeIds) do
@@ -281,9 +259,6 @@ local ok, err = pcall(function()
 		error("lib/ui.lua did not return a UI library", 0)
 	end
 	local uiVersion = tostring(ui.version or "?")
-	if not versionAtLeast(uiVersion, MIN_UI_VERSION) then
-		error("stale UI " .. uiVersion .. " (need " .. MIN_UI_VERSION .. "+) — re-run loader snippet", 0)
-	end
 	shared[UI_KEY] = ui
 
 	runSource(entry.path)
