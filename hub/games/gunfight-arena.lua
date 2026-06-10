@@ -6,13 +6,21 @@
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "7-load-fix"
+local GAME_BUILD = "9-aimbot"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
+	Aimbot = false,
+	AimTeamCheck = true,
+	AimHold = true,
+	AimFOV = 120,
+	AimSmooth = 35,
+	AimPart = "Head",
+	AimFOVCircle = false,
 	ESP = true,
 	ESPAllies = true,
 	ESPSnaplines = true,
@@ -32,6 +40,15 @@ local esp = {}
 local wallsFolder = workspace:FindFirstChild("Walls")
 local espNeedsHide = false
 local GREY_TEAM = BrickColor.new("Medium stone grey")
+local aimFovSq = Config.AimFOV * Config.AimFOV
+local aimTarget = nil
+local aimFovCircle = nil
+
+local function setAimFOV(value)
+	Config.AimFOV = math.clamp(math.floor(value), 20, 500)
+	aimFovSq = Config.AimFOV * Config.AimFOV
+end
+
 
 -- Mirror ReplicatedStorage.Network GetSpawned without require() — the module anti-tamper kicks/hangs foreign callers.
 local function getSpawned()
@@ -53,9 +70,26 @@ local function getSpawned()
 	return spawned
 end
 
-local WHITE = Color3.fromRGB(245, 247, 250)
-local DIM = Color3.fromRGB(168, 174, 184)
-local BAR_BG = Color3.fromRGB(18, 20, 26)
+local WHITE = Color3.fromRGB(248, 250, 252)
+local DIM = Color3.fromRGB(148, 156, 168)
+local BAR_BG = Color3.fromRGB(10, 12, 16)
+local BACKDROP = Color3.fromRGB(8, 10, 14)
+
+local function hpColor(ratio)
+	if ratio > 0.55 then
+		return Color3.fromRGB(72, 214, 128)
+	elseif ratio > 0.25 then
+		return Color3.fromRGB(255, 196, 72)
+	end
+	return Color3.fromRGB(255, 86, 92)
+end
+
+local function formatDistance(studs)
+	if studs >= 1000 then
+		return string.format("%.1fkm", studs / 1000)
+	end
+	return string.format("%dm", math.floor(studs))
+end
 
 local CORNER_OFFSETS = {
 	Vector3.new(1, 1, 1),
@@ -279,6 +313,150 @@ local function collectTargets()
 	return targets
 end
 
+local function getAimPart(char)
+	if not char then
+		return nil
+	end
+	local part = char:FindFirstChild(Config.AimPart or "Head")
+	if part and part:IsA("BasePart") then
+		return part
+	end
+	return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+end
+
+local function getAimOrigin()
+	if UserInputService.MouseEnabled then
+		return UserInputService:GetMouseLocation()
+	end
+	local vp = Camera.ViewportSize
+	return Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+end
+
+local function isThirdPerson()
+	local scripts = LocalPlayer:FindFirstChild("PlayerScripts")
+	local vortex = scripts and scripts:FindFirstChild("Vortex")
+	if vortex then
+		local modifiers = vortex:FindFirstChild("Modifiers")
+		local flag = modifiers and modifiers:FindFirstChild("IsThirdPerson")
+		if flag and flag:IsA("BoolValue") then
+			return flag.Value
+		end
+	end
+	local api = rawget(_G, "GlobalAPI")
+	if api and typeof(api.Settings) == "table" then
+		local mode = api.Settings.CameraMode
+		if mode ~= nil then
+			return mode ~= 1
+		end
+	end
+	return LocalPlayer.CameraMinZoomDistance > 1
+end
+
+local function syncMouseHitSpot(position)
+	if typeof(position) ~= "Vector3" then
+		return
+	end
+	_G.MouseHitSpot = position
+	if typeof(getgenv) == "function" then
+		local env = getgenv()
+		if typeof(env) == "table" then
+			env.MouseHitSpot = position
+		end
+	end
+end
+
+local function considerAimCandidate(closest, closestDistSq, worldPos, originX, originY, candidate)
+	local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
+	if not onScreen or screenPos.Z <= 0 then
+		return closest, closestDistSq
+	end
+	local dx = screenPos.X - originX
+	local dy = screenPos.Y - originY
+	local distSq = dx * dx + dy * dy
+	if distSq >= closestDistSq then
+		return closest, closestDistSq
+	end
+	candidate.position = worldPos
+	candidate.screenPos = Vector2.new(screenPos.X, screenPos.Y)
+	return candidate, distSq
+end
+
+local function getClosestAimTarget(origin)
+	local closest = nil
+	local closestDistSq = aimFovSq
+	local originX, originY = origin.X, origin.Y
+
+	for char, name in pairs(collectTargets()) do
+		local alive = isCombatModel(char)
+		if not alive or isAllySpawnShielded(name) then
+			continue
+		end
+		if Config.AimTeamCheck and relation(name, char) == "Ally" then
+			continue
+		end
+		local part = getAimPart(char)
+		if not part then
+			continue
+		end
+		local candidate = { char = char, name = name, part = part }
+		closest, closestDistSq = considerAimCandidate(
+			closest,
+			closestDistSq,
+			part.Position,
+			originX,
+			originY,
+			candidate
+		)
+	end
+
+	return closest
+end
+
+local function aimAlpha(dt)
+	local smooth = math.clamp(Config.AimSmooth or 35, 1, 100)
+	return math.clamp(dt * (101 - smooth) * 0.14, 0.04, 1)
+end
+
+local function shouldAimActive()
+	if not Config.Aimbot then
+		return false
+	end
+	if Config.AimHold then
+		return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+	end
+	return true
+end
+
+local function updateAimbot(dt)
+	local origin = getAimOrigin()
+
+	if aimFovCircle then
+		aimFovCircle.Position = origin
+		aimFovCircle.Radius = Config.AimFOV
+		aimFovCircle.Visible = Config.Aimbot and Config.AimFOVCircle
+	end
+
+	if not shouldAimActive() then
+		aimTarget = nil
+		return
+	end
+
+	aimTarget = getClosestAimTarget(origin)
+
+	if not aimTarget or not aimTarget.part or not aimTarget.part.Parent then
+		return
+	end
+
+	local targetPos = aimTarget.part.Position
+	syncMouseHitSpot(targetPos)
+
+	if not isThirdPerson() then
+		local camPos = Camera.CFrame.Position
+		local goal = CFrame.new(camPos, targetPos)
+		Camera.CFrame = Camera.CFrame:Lerp(goal, aimAlpha(dt))
+	end
+end
+
 local function box2d(char, root)
 	local head = char:FindFirstChild("Head")
 	if head and root then
@@ -331,9 +509,12 @@ local function mk(kind, props)
 end
 
 local function setVisible(entry, visible)
-	entry.box.Visible = visible
+	entry.backdrop.Visible = visible
+	for _, corner in ipairs(entry.corners) do
+		corner.Visible = visible
+	end
 	entry.name.Visible = visible
-	entry.hpBg.Visible = visible
+	entry.hpOutline.Visible = visible
 	entry.hpFill.Visible = visible
 	entry.dist.Visible = visible
 	entry.line.Visible = visible and Config.ESPSnaplines
@@ -346,12 +527,45 @@ local function hideAll()
 end
 
 local function destroyEntry(entry)
-	entry.box:Remove()
+	entry.backdrop:Remove()
+	for _, corner in ipairs(entry.corners) do
+		corner:Remove()
+	end
 	entry.name:Remove()
-	entry.hpBg:Remove()
+	entry.hpOutline:Remove()
 	entry.hpFill:Remove()
 	entry.dist:Remove()
 	entry.line:Remove()
+end
+
+local function drawCorners(corners, x, y, w, h, color)
+	local len = math.clamp(math.min(w, h) * 0.24, 7, 16)
+	local right, bottom = x + w, y + h
+
+	corners[1].From = Vector2.new(x, y)
+	corners[1].To = Vector2.new(x + len, y)
+	corners[2].From = Vector2.new(x, y)
+	corners[2].To = Vector2.new(x, y + len)
+
+	corners[3].From = Vector2.new(right, y)
+	corners[3].To = Vector2.new(right - len, y)
+	corners[4].From = Vector2.new(right, y)
+	corners[4].To = Vector2.new(right, y + len)
+
+	corners[5].From = Vector2.new(x, bottom)
+	corners[5].To = Vector2.new(x + len, bottom)
+	corners[6].From = Vector2.new(x, bottom)
+	corners[6].To = Vector2.new(x, bottom - len)
+
+	corners[7].From = Vector2.new(right, bottom)
+	corners[7].To = Vector2.new(right - len, bottom)
+	corners[8].From = Vector2.new(right, bottom)
+	corners[8].To = Vector2.new(right, bottom - len)
+
+	for _, corner in ipairs(corners) do
+		corner.Color = color
+		corner.Visible = true
+	end
 end
 
 local function ensure(char)
@@ -359,16 +573,32 @@ local function ensure(char)
 	if entry then
 		return entry
 	end
+	local corners = {}
+	for _ = 1, 8 do
+		table.insert(corners, mk("Line", { Thickness = 1.2, Transparency = 0.06 }))
+	end
 	entry = {
-		box = mk("Square", { Filled = false, Thickness = 1, Transparency = 0.12 }),
-		name = mk("Text", { Size = 12, Center = true, Outline = true }),
-		hpBg = mk("Square", { Filled = true, Thickness = 0 }),
+		backdrop = mk("Square", { Filled = true, Thickness = 0, Transparency = 0.84 }),
+		corners = corners,
+		name = mk("Text", { Size = 13, Center = true, Outline = true }),
+		hpOutline = mk("Square", { Filled = true, Thickness = 0, Color = BAR_BG }),
 		hpFill = mk("Square", { Filled = true, Thickness = 0 }),
-		dist = mk("Text", { Size = 11, Center = true, Outline = true, Transparency = 0.18 }),
-		line = mk("Line", { Thickness = 1, Transparency = 0.45 }),
+		dist = mk("Text", { Size = 10, Center = true, Outline = true, Transparency = 0.12 }),
+		line = mk("Line", { Thickness = 1, Transparency = 0.5 }),
 	}
 	esp[char] = entry
 	return entry
+end
+
+if canDraw then
+	aimFovCircle = mk("Circle", {
+		Thickness = 1,
+		NumSides = 48,
+		Filled = false,
+		Transparency = 0.45,
+		Color = Color3.fromRGB(255, 255, 255),
+	})
+	aimFovCircle.Visible = false
 end
 
 local function drawTarget(name, char, hum, root, camPos, snapFrom)
@@ -397,39 +627,41 @@ local function drawTarget(name, char, hum, root, camPos, snapFrom)
 	local hp = hum.Health
 	local maxHp = hum.MaxHealth > 0 and hum.MaxHealth or 100
 	local ratio = math.clamp(hp / maxHp, 0, 1)
-	local barW = math.max(34, w)
-	local barH = 2
+	local barW = math.max(38, w + 4)
+	local barH = 3
 	local barX = cx - barW * 0.5
-	local barY = bottom + 5
+	local barY = bottom + 6
+	local dist = (root.Position - camPos).Magnitude
 
-	entry.box.Position = Vector2.new(x, y)
-	entry.box.Size = Vector2.new(w, h)
-	entry.box.Color = accent
-	entry.box.Visible = true
+	entry.backdrop.Position = Vector2.new(x - 2, y - 2)
+	entry.backdrop.Size = Vector2.new(w + 4, h + 4)
+	entry.backdrop.Color = BACKDROP
+	entry.backdrop.Visible = true
 
-	entry.name.Position = Vector2.new(cx, y - 15)
-	entry.name.Text = displayName(name)
+	drawCorners(entry.corners, x, y, w, h, accent)
+
+	entry.name.Position = Vector2.new(cx, y - 17)
+	entry.name.Text = string.format("%s  %d", displayName(name), math.floor(hp))
 	entry.name.Color = WHITE
 	entry.name.Visible = true
 
-	entry.hpBg.Position = Vector2.new(barX, barY)
-	entry.hpBg.Size = Vector2.new(barW, barH)
-	entry.hpBg.Color = BAR_BG
-	entry.hpBg.Visible = true
+	entry.hpOutline.Position = Vector2.new(barX, barY)
+	entry.hpOutline.Size = Vector2.new(barW, barH)
+	entry.hpOutline.Visible = true
 
 	entry.hpFill.Position = Vector2.new(barX, barY)
-	entry.hpFill.Size = Vector2.new(barW * ratio, barH)
-	entry.hpFill.Color = Color3.fromRGB(255 - ratio * 200, 70 + ratio * 185, 72)
+	entry.hpFill.Size = Vector2.new(math.max(1, barW * ratio), barH)
+	entry.hpFill.Color = hpColor(ratio)
 	entry.hpFill.Visible = true
 
-	entry.dist.Position = Vector2.new(cx, barY + 5)
-	entry.dist.Text = string.format("%dm", math.floor((root.Position - camPos).Magnitude))
+	entry.dist.Position = Vector2.new(cx, barY + 7)
+	entry.dist.Text = formatDistance(dist)
 	entry.dist.Color = DIM
 	entry.dist.Visible = true
 
 	if Config.ESPSnaplines then
 		entry.line.From = snapFrom
-		entry.line.To = Vector2.new(cx, bottom)
+		entry.line.To = Vector2.new(cx, bottom + 1)
 		entry.line.Color = accent
 		entry.line.Visible = true
 	else
@@ -479,6 +711,29 @@ UILib.create({
 	config = Config,
 	pages = {
 		{
+			label = "Combat",
+			sections = {
+				{
+					title = "Aimbot",
+					items = {
+						{ type = "toggle", key = "Aimbot", label = "Aimbot", hud = "Aimbot" },
+						{ type = "toggle", key = "AimTeamCheck", label = "Team Check", hud = "Team Check" },
+						{ type = "toggle", key = "AimHold", label = "Hold RMB", hud = "Hold RMB" },
+						{
+							type = "select",
+							key = "AimPart",
+							label = "Bone",
+							options = { "Head", "UpperTorso", "HumanoidRootPart", "LowerTorso" },
+						},
+						{ type = "slider", key = "AimFOV", label = "FOV", min = 20, max = 500, step = 10, onChange = setAimFOV },
+						{ type = "slider", key = "AimSmooth", label = "Smoothness", min = 1, max = 100, step = 1 },
+						{ type = "toggle", key = "AimFOVCircle", label = "FOV Circle", hud = "FOV Circle" },
+						{ type = "hint", text = "Hold RMB to aim. Works in 1st and 3rd person." },
+					},
+				},
+			},
+		},
+		{
 			label = "Visual",
 			sections = {
 				{
@@ -501,5 +756,6 @@ UILib.create({
 })
 
 RunService.RenderStepped:Connect(updateESP)
+RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateAimbot)
 
 print("[MicroHub] Gunfight Arena", GAME_BUILD, "— Drawing:", canDraw)
