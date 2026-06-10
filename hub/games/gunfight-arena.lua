@@ -8,7 +8,7 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "2-sleek-esp"
+local GAME_BUILD = "3-esp-enemy-fix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -55,8 +55,25 @@ local function teamColor(rel)
 	return Config.ESPNeutralColor
 end
 
-local function relation(player, localTeam)
-	local pt = player:GetAttribute("Team")
+local function teamId(entity)
+	if not entity then
+		return nil
+	end
+	local id = entity:GetAttribute("Team")
+	if id == nil and entity:IsA("Player") and entity.Team then
+		id = entity.Team.Name
+	end
+	if id == nil then
+		return nil
+	end
+	return tonumber(id) or id
+end
+
+local function relation(player, char, localTeam)
+	local pt = teamId(player)
+	if pt == nil and char then
+		pt = teamId(char)
+	end
 	if localTeam ~= nil and pt ~= nil then
 		return localTeam == pt and "Ally" or "Enemy"
 	end
@@ -65,10 +82,24 @@ end
 
 local function getChar(player)
 	local m = workspace:FindFirstChild(player.Name)
-	return (m and m:IsA("Model")) and m or player.Character
+	if m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") then
+		return m
+	end
+	if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+		return player.Character
+	end
+	return m and m:IsA("Model") and m or player.Character
 end
 
-local function isSpawnProtected(player, char)
+-- Walls domes stay on allies; enemy domes are reparented to Env. Don't hide enemies behind Walls checks.
+local function isSpawnProtected(player, char, localTeam)
+	local pt = teamId(player)
+	if pt == nil and char then
+		pt = teamId(char)
+	end
+	if localTeam ~= nil and pt ~= nil and pt ~= localTeam then
+		return false
+	end
 	if char:FindFirstChildOfClass("ForceField") then
 		return true
 	end
@@ -84,7 +115,7 @@ local function box2d(char)
 	if head and root then
 		local top, topOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.35, 0))
 		local bot, botOn = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 2.6, 0))
-		if topOn and botOn and top.Z > 0 and bot.Z > 0 then
+		if top.Z > 0 and bot.Z > 0 and (topOn or botOn) then
 			local height = math.max(12, bot.Y - top.Y)
 			local width = height * 0.52
 			return top.X - width * 0.5, top.Y, width, height
@@ -179,7 +210,7 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 local function drawPlayer(player, char, hum, root, localTeam, camPos, snapFrom)
-	local rel = relation(player, localTeam)
+	local rel = relation(player, char, localTeam)
 	if rel == "Ally" and not Config.ESPAllies then
 		local entry = esp[player]
 		if entry then
@@ -262,19 +293,42 @@ local function updateESP()
 	end
 
 	local camPos = Camera.CFrame.Position
-	local localTeam = LocalPlayer:GetAttribute("Team")
+	local localTeam = teamId(LocalPlayer)
 	local snapFrom = Config.ESPSnaplines and Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y) or nil
+	local seen = {}
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player ~= LocalPlayer then
 			local char = getChar(player)
 			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			local root = char and (char.PrimaryPart or char:FindFirstChild("HumanoidRootPart"))
-			if hum and root and hum.Health > 0 and not isSpawnProtected(player, char) then
+			if hum and root and hum.Health > 0 and not isSpawnProtected(player, char, localTeam) then
+				seen[player] = true
 				drawPlayer(player, char, hum, root, localTeam, camPos, snapFrom)
-			elseif esp[player] then
-				setVisible(esp[player], false)
 			end
+		end
+	end
+
+	for _, child in ipairs(workspace:GetChildren()) do
+		if child:IsA("Model") and child ~= LocalPlayer.Character then
+			local player = Players:GetPlayerFromCharacter(child)
+			if not player then
+				player = Players:FindFirstChild(child.Name)
+			end
+			if player and player ~= LocalPlayer and not seen[player] then
+				local hum = child:FindFirstChildOfClass("Humanoid")
+				local root = child.PrimaryPart or child:FindFirstChild("HumanoidRootPart")
+				if hum and root and hum.Health > 0 and not isSpawnProtected(player, child, localTeam) then
+					seen[player] = true
+					drawPlayer(player, child, hum, root, localTeam, camPos, snapFrom)
+				end
+			end
+		end
+	end
+
+	for player, entry in pairs(esp) do
+		if not seen[player] then
+			setVisible(entry, false)
 		end
 	end
 end
