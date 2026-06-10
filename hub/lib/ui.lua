@@ -83,12 +83,26 @@ local function pointerPos(input)
 	return UserInputService:GetMouseLocation()
 end
 
+local function tryInputType(name)
+	local ok, value = pcall(function()
+		return Enum.UserInputType[name]
+	end)
+	if ok then
+		return value
+	end
+	return nil
+end
+
 local function isMobile()
 	if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
 		return true
 	end
 	local last = UserInputService:GetLastInputType()
-	return last == Enum.UserInputType.Touch or last == Enum.UserInputType.TouchTap
+	if last == Enum.UserInputType.Touch then
+		return true
+	end
+	local touchTap = tryInputType("TouchTap")
+	return touchTap ~= nil and last == touchTap
 end
 
 local function shallowCopy(tbl)
@@ -175,8 +189,11 @@ local uiBlockedInputs = {
 	Enum.UserInputType.MouseMovement,
 	Enum.UserInputType.MouseWheel,
 	Enum.UserInputType.Touch,
-	Enum.UserInputType.TouchTap,
 }
+local touchTapInput = tryInputType("TouchTap")
+if touchTapInput then
+	table.insert(uiBlockedInputs, touchTapInput)
+end
 for _, action in ipairs(Enum.PlayerActions:GetEnumItems()) do
 	table.insert(uiBlockedInputs, action)
 end
