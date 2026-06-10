@@ -1,7 +1,7 @@
--- MicroHub loader v1.6.12
+-- MicroHub loader v1.6.14
 -- Remote only. Resolves GitHub main -> immutable commit SHA, then loads every file from that SHA.
 
-local VERSION = "1.6.12"
+local VERSION = "1.6.14"
 local MIN_UI_VERSION = "3.0.0"
 local OWNER = "sysscan"
 local REPO = "microhub"
