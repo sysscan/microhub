@@ -46,7 +46,7 @@ local FLY_AC_MAX_ABOVE_Y = 10
 local FLY_BYPASS_MAX_SPEED = 16
 local FLY_BYPASS_MAX_STEP = 0.32
 local FLY_AC_MAX_BELOW_Y = 2
-local GAME_BUILD = "15-all-features-fix"
+local GAME_BUILD = "16-money-farms-fix"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -188,17 +188,30 @@ local function findItem(name)
 	return nil
 end
 
-local function getStoredFolder()
+local function getStoredFolder(waitSeconds)
+	waitSeconds = waitSeconds or 0
 	local stored = LocalPlayer:FindFirstChild("stored")
 		or LocalPlayer:FindFirstChild("Stored")
 		or findPath(LocalPlayer, "PlayerData", "stored")
-	if stored then
+	if stored or waitSeconds <= 0 then
 		return stored
 	end
 	local ok, waited = pcall(function()
-		return LocalPlayer:WaitForChild("stored", 5)
+		return LocalPlayer:WaitForChild("stored", waitSeconds)
 	end)
 	return ok and waited or nil
+end
+
+local function findMapObject(name)
+	local object = workspace:FindFirstChild(name)
+	if object then
+		return object
+	end
+	local worldFolder = workspace:FindFirstChild("World")
+	if worldFolder then
+		return worldFolder:FindFirstChild(name)
+	end
+	return nil
 end
 
 local function readNumberValue(parent, names)
@@ -215,24 +228,28 @@ local function readNumberValue(parent, names)
 end
 
 local function getMoney()
-	local stored = getStoredFolder()
-	local cash = readNumberValue(stored, { "Cash", "Money", "Wallet", "Clean" })
+	local stored = getStoredFolder(10)
+	local cash = readNumberValue(stored, { "Money", "Cash", "Wallet", "Clean" })
 	if cash ~= nil then
 		return cash
 	end
 	local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
-	cash = readNumberValue(leaderstats, { "Cash", "Money", "Wallet" })
+	cash = readNumberValue(leaderstats, { "Money", "Cash", "Wallet" })
 	return cash or 0
 end
 
 local function getBankMoney()
-	local stored = getStoredFolder()
+	local stored = getStoredFolder(10)
 	return readNumberValue(stored, { "Bank", "BankMoney", "BankCash", "Savings" }) or 0
 end
 
 local function getFilthyMoney()
-	local stored = getStoredFolder()
+	local stored = getStoredFolder(10)
 	return readNumberValue(stored, { "FilthyStack", "Filthy" }) or 0
+end
+
+local function formatMoney(amount)
+	return "$" .. tostring(math.floor(tonumber(amount) or 0))
 end
 
 local function getGameRemotes()
@@ -293,12 +310,6 @@ end
 
 local function depositCash(amount)
 	return bankAction("depo", amount)
-end
-
-local function getSharedStorage()
-	return ReplicatedStorage:FindFirstChild("SharedStorage")
-		or findPath(ReplicatedStorage, "Shared", "Storage")
-		or ReplicatedStorage
 end
 
 local function readLastAcStatus()
@@ -1261,7 +1272,8 @@ local function stopStudioFarmThreads()
 end
 
 local function getStudioFarmData()
-	local container = findPath(World, "StudioPay", "Money")
+	local studioPay = findMapObject("StudioPay")
+	local container = studioPay and studioPay:FindFirstChild("Money")
 	if not container then
 		return nil
 	end
@@ -1320,15 +1332,23 @@ local function applyStudioFarm()
 			return
 		end
 		if not stacks then
-			notify("StudioPay/Money not found — is the studio loaded?", "Studio Farm", 6)
+			notify("StudioPay/Money not found — studio may not be loaded.", "Studio Farm", 6)
 			Config.StudioFarm = false
 			return
 		end
 
+		local started = 0
 		for index, prompt in pairs(prompts) do
 			if prompt and Config.StudioFarm then
 				table.insert(studioThreads, task.spawn(studioStealLoop, index, prompt, stacks[index]))
+				started += 1
 			end
+		end
+		if started > 0 then
+			notify("Studio farm running on " .. started .. " cash stack(s).", "Studio Farm", 5)
+		else
+			notify("No StudioPay prompts found.", "Studio Farm", 6)
+			Config.StudioFarm = false
 		end
 	end)
 end
@@ -1343,53 +1363,81 @@ local KOOL_AID_ITEMS = {
 	"FijiWater",
 	"FreshWater",
 }
+local KOOL_AID_COST = 2746
 
-local function exoticStockAvailable()
-	local stockRoot = findPath(getSharedStorage(), "ExoticStock")
-	if not stockRoot then
-		return false
+local function getExoticStock()
+	return ReplicatedStorage:FindFirstChild("ExoticStock")
+end
+
+local function ensureKoolAidFunds()
+	if not getStoredFolder(15) then
+		return false, "Player data not loaded — wait a few seconds after spawn and retry."
 	end
-	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		local stock = stockRoot:FindFirstChild(itemName)
-		if not stock or not stock:IsA("ValueBase") or stock.Value == 0 then
-			return false
-		end
+
+	local cash = getMoney()
+	if cash >= KOOL_AID_COST then
+		return true
+	end
+
+	local bank = getBankMoney()
+	if bank < KOOL_AID_COST then
+		return false,
+			"Need "
+				.. formatMoney(KOOL_AID_COST)
+				.. " (have "
+				.. formatMoney(cash)
+				.. " cash, "
+				.. formatMoney(bank)
+				.. " bank)."
+	end
+
+	if not withdrawCash(KOOL_AID_COST) then
+		return false, "Bank withdraw failed — stand near an ATM or retry."
+	end
+
+	sleep(1)
+	cash = getMoney()
+	if cash < KOOL_AID_COST then
+		return false, "Withdraw sent but cash is still below " .. formatMoney(KOOL_AID_COST) .. "."
 	end
 	return true
 end
 
-local function invokeShopRemote(itemName)
-	for _, remoteName in ipairs({ "ExoticShopRemote", "ExoticShopRemote2" }) do
-		local remote = getRemote(remoteName)
-		if remote and remote:IsA("RemoteFunction") then
-			local ok, result = pcall(remote.InvokeServer, remote, itemName)
-			if ok and result ~= false then
-				return true
-			end
-		elseif remote and remote:IsA("RemoteEvent") then
-			if invokeRemote(remoteName, itemName) then
-				return true
-			end
+local function buyKoolAidSupplies()
+	local stockRoot = getExoticStock()
+	if not stockRoot then
+		return false, "ExoticStock not found in ReplicatedStorage."
+	end
+
+	for _, itemName in ipairs(KOOL_AID_ITEMS) do
+		local stock = stockRoot:FindFirstChild(itemName)
+		if not stock or not stock:IsA("ValueBase") or stock.Value <= 0 then
+			return false, itemName .. " is out of stock — try another server."
 		end
 	end
-	return false
-end
 
-local function buyKoolAidSupplies()
-	if not exoticStockAvailable() then
-		return false
+	local remote = ReplicatedStorage:FindFirstChild("ExoticShopRemote")
+	if not remote or not remote:IsA("RemoteFunction") then
+		return false, "ExoticShopRemote missing — game may have updated."
 	end
+
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		if not invokeShopRemote(itemName) then
-			return false
+		local ok, result = pcall(remote.InvokeServer, remote, itemName)
+		if not ok then
+			return false, "Shop error on " .. itemName .. ": " .. tostring(result)
+		end
+		if result == false then
+			return false, "Shop rejected " .. itemName .. " — check cash and stock."
 		end
 		sleep(1.25)
 	end
+
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
 		if not findItem(itemName) then
-			return false
+			return false, itemName .. " missing from backpack after purchase."
 		end
 	end
+
 	return true
 end
 
@@ -1410,7 +1458,7 @@ local function getSellPrompt(sellPart)
 end
 
 local function getAvailableCookingPot()
-	local pots = World:FindFirstChild("CookingPots")
+	local pots = findMapObject("CookingPots")
 	if not pots then
 		return nil
 	end
@@ -1435,40 +1483,40 @@ end
 
 local function runKoolAidFarm()
 	if koolAidFarmRunning then
-		return
+		return false
 	end
 	koolAidFarmRunning = true
+	local success = false
 
 	local ok, err = pcall(function()
-		if getMoney() < 2750 then
-			if getBankMoney() >= 2750 then
-				withdrawCash(2750)
-				sleep(0.5)
-			else
-				notify("You need at least $2,750 to buy Kool-Aid supplies.", "Insufficient Funds", 5)
-				return
-			end
+		notify("Kool-Aid farm started — buying supplies and cooking.", "Kool-Aid Farm", 4)
+
+		local fundsOk, fundsMsg = ensureKoolAidFunds()
+		if not fundsOk then
+			notify(fundsMsg, "Kool-Aid Farm", 8)
+			return
 		end
 
-		if not buyKoolAidSupplies() then
-			notify("Exotic stock unavailable or shop remote failed. Try another server.", "Server Hop Required", 10)
+		local bought, buyMsg = buyKoolAidSupplies()
+		if not bought then
+			notify(buyMsg, "Kool-Aid Farm", 10)
 			return
 		end
 
 		local cookingPot = getAvailableCookingPot()
 		if not cookingPot then
-			notify("No free cooking pot found. Try another server.", "Server Hop Required", 10)
+			notify("No free cooking pot — try another server.", "Kool-Aid Farm", 10)
 			return
 		end
 
 		local cookPart = cookingPot:WaitForChild("CookPart", 10)
 		local cookPrompt = getCookPrompt(cookPart)
 		local cookProgress = cookPart and findPath(cookPart, "Steam", "LoadUI")
-		local sellPart = World:FindFirstChild("IceFruit Sell")
+		local sellPart = findMapObject("IceFruit Sell")
 		local sellPrompt = getSellPrompt(sellPart)
 
 		if not cookPart or not cookPrompt or not cookProgress or not sellPart or not sellPrompt then
-			notify("Cook or sell prompts missing — game layout may have changed.", "Kool-Aid Farm", 8)
+			notify("Cooking or IceFruit Sell prompt missing in map.", "Kool-Aid Farm", 8)
 			return
 		end
 
@@ -1479,10 +1527,11 @@ local function runKoolAidFarm()
 		local humanoid = getHumanoid()
 
 		if not fijiWater or not freshWater or not iceFruitBag or not iceFruitCupz or not humanoid then
-			notify("Missing supplies after purchase.", "Kool-Aid Farm", 5)
+			notify("Supplies missing from backpack after shop purchase.", "Kool-Aid Farm", 6)
 			return
 		end
 
+		local filthyBefore = getFilthyMoney()
 		local cookOrder = { fijiWater, freshWater, iceFruitBag }
 
 		teleportTo(cookPart.Position)
@@ -1525,14 +1574,29 @@ local function runKoolAidFarm()
 			firePrompt(sellPrompt)
 		end
 
-		notify("Kool-Aid farm cycle finished. Wash filthy money and repeat.", "Infinite Money", 8)
+		local filthyAfter = getFilthyMoney()
+		success = true
+		notify(
+			"Cook + sell done. Filthy: "
+				.. formatMoney(filthyBefore)
+				.. " → "
+				.. formatMoney(filthyAfter)
+				.. ". Run LTK dupe, then wash.",
+			"Kool-Aid Farm",
+			10
+		)
 	end)
 
 	if not ok then
-		notify(tostring(err), "Kool-Aid Farm Error", 8)
+		notify(tostring(err), "Kool-Aid Farm", 8)
+	elseif not success then
+		-- step-specific notify already shown
+	else
+		-- success notify already shown
 	end
 
 	koolAidFarmRunning = false
+	return success
 end
 
 -- ---------------------------------------------------------------------------
@@ -1558,27 +1622,55 @@ local function restorePlayerGui(enabled)
 	end)
 end
 
+local function waitForMaxMoney(timeout)
+	timeout = timeout or 10
+	local maxMoney = LocalPlayer:GetAttribute("MaxMoney")
+	if typeof(maxMoney) == "number" then
+		return maxMoney
+	end
+	local deadline = tick() + timeout
+	while tick() < deadline do
+		maxMoney = LocalPlayer:GetAttribute("MaxMoney")
+		if typeof(maxMoney) == "number" then
+			return maxMoney
+		end
+		RunService.Heartbeat:Wait()
+	end
+	return LocalPlayer:GetAttribute("MaxMoney")
+end
+
 local function runLtkMoneyDupe()
 	if ltkDupeRunning then
-		return
+		return false
 	end
 	ltkDupeRunning = true
+	local success = false
 
 	local ok, err = pcall(function()
-		local sellPart = World:FindFirstChild("IceFruit Sell")
+		if not getStoredFolder(15) then
+			notify("Player data not loaded — wait after spawn and retry.", "LTK Dupe", 8)
+			return
+		end
+
+		local sellPart = findMapObject("IceFruit Sell")
 		local sellPrompt = getSellPrompt(sellPart)
 		if not sellPart or not sellPrompt then
-			notify("IceFruit Sell prompt not found.", "LTK Money Dupe", 6)
+			notify("IceFruit Sell not found on map.", "LTK Dupe", 6)
 			return
 		end
 
 		local root = getRootPart()
 		if not root then
+			notify("Character not loaded.", "LTK Dupe", 5)
 			return
 		end
 
+		local filthyBefore = getFilthyMoney()
 		local oldPos = root.CFrame
+
+		restorePlayerGui(false)
 		teleportTo(sellPart)
+		notify("LTK dupe running — spamming sell prompt.", "LTK Dupe", 4)
 
 		for _ = 1, 999 do
 			firePrompt(sellPrompt)
@@ -1586,24 +1678,51 @@ local function runLtkMoneyDupe()
 
 		sleep(4.5)
 
-		local stored = getStoredFolder()
-		local filthy = stored and stored:FindFirstChild("FilthyStack")
-		local maxMoney = LocalPlayer:GetAttribute("MaxMoney")
+		local filthyAfter = getFilthyMoney()
+		local maxMoney = waitForMaxMoney(10)
+		restorePlayerGui(true)
+		root.CFrame = oldPos
 
-		if filthy and maxMoney and filthy.Value >= maxMoney then
-			restorePlayerGui(true)
-			root.CFrame = oldPos
-			notify("Money dupe completed — wash filthy money and repeat.", "LTK Money Dupe", 10)
+		if typeof(maxMoney) == "number" and filthyAfter >= maxMoney then
+			success = true
+			notify(
+				"Dupe capped at "
+					.. formatMoney(maxMoney)
+					.. " filthy (was "
+					.. formatMoney(filthyBefore)
+					.. "). Wash at the washer.",
+				"LTK Dupe",
+				10
+			)
+		elseif filthyAfter > filthyBefore then
+			success = true
+			notify(
+				"Filthy increased "
+					.. formatMoney(filthyBefore)
+					.. " → "
+					.. formatMoney(filthyAfter)
+					.. ". Wash when ready.",
+				"LTK Dupe",
+				10
+			)
 		else
-			notify("Dupe may not have capped. Check FilthyStack vs MaxMoney.", "LTK Money Dupe", 8)
+			notify(
+				"Dupe did not increase filthy (still "
+					.. formatMoney(filthyAfter)
+					.. "). Run Kool-Aid farm first.",
+				"LTK Dupe",
+				10
+			)
 		end
 	end)
 
 	if not ok then
-		notify(tostring(err), "LTK Dupe Error", 8)
+		restorePlayerGui(true)
+		notify(tostring(err), "LTK Dupe", 8)
 	end
 
 	ltkDupeRunning = false
+	return success
 end
 
 -- ---------------------------------------------------------------------------
@@ -1686,34 +1805,67 @@ local function teleportToNamed(label, finder)
 end
 
 local function findWashPrompt()
-	local washer = World:FindFirstChild("WashingMachine")
+	local washer = findMapObject("WashingMachine")
 	if not washer then
 		return nil, nil
 	end
-	local prompt = washer:FindFirstChildWhichIsA("ProximityPrompt", true)
+	local prompt = washer:FindFirstChild("WashingMachine")
+		or washer:FindFirstChild("ProximityPrompt")
+		or washer:FindFirstChildWhichIsA("ProximityPrompt", true)
 	return washer, prompt
 end
 
 local function runWashMoney()
+	local filthyBefore = getFilthyMoney()
+	local cashBefore = getMoney()
+	if filthyBefore <= 0 then
+		notify("No filthy cash to wash — run Kool-Aid farm + LTK dupe first.", "Wash Money", 8)
+		return false
+	end
+
 	local washer, prompt = findWashPrompt()
 	if not washer or not prompt then
-		notify("WashingMachine prompt not found.", "Wash Money", 6)
-		return
+		notify("WashingMachine not found on map.", "Wash Money", 6)
+		return false
 	end
+
+	notify("Washing " .. formatMoney(filthyBefore) .. " filthy cash...", "Wash Money", 4)
 	teleportTo(washer)
 	sleep(0.25)
 	for _ = 1, 100 do
 		firePrompt(prompt)
 	end
-	notify("Wash prompts fired — check clean vs filthy cash.", "Wash Money", 6)
+	sleep(0.5)
+
+	local filthyAfter = getFilthyMoney()
+	local cashAfter = getMoney()
+	notify(
+		"Wash done. Clean "
+			.. formatMoney(cashBefore)
+			.. " → "
+			.. formatMoney(cashAfter)
+			.. " | Filthy "
+			.. formatMoney(filthyBefore)
+			.. " → "
+			.. formatMoney(filthyAfter),
+		"Wash Money",
+		10
+	)
+	return filthyAfter < filthyBefore or cashAfter > cashBefore
 end
 
 local function runBuySupplies()
 	task.spawn(function()
-		if buyKoolAidSupplies() then
-			notify("Kool-Aid supplies purchased.", "Exotic Shop", 5)
+		local fundsOk, fundsMsg = ensureKoolAidFunds()
+		if not fundsOk then
+			notify(fundsMsg, "Buy Kool-Aid", 8)
+			return
+		end
+		local bought, buyMsg = buyKoolAidSupplies()
+		if bought then
+			notify("All Kool-Aid supplies purchased.", "Buy Kool-Aid", 5)
 		else
-			notify("Purchase failed — check stock or cash.", "Exotic Shop", 6)
+			notify(buyMsg, "Buy Kool-Aid", 8)
 		end
 	end)
 end
@@ -1734,25 +1886,29 @@ end
 
 local function runFullMoneyCycle()
 	if fullCycleRunning or koolAidFarmRunning or ltkDupeRunning then
+		notify("A money script is already running.", "Full Money Cycle", 5)
 		return
 	end
 	fullCycleRunning = true
 	task.spawn(function()
 		local ok, err = pcall(function()
-			runKoolAidFarm()
-			while koolAidFarmRunning do
-				RunService.Heartbeat:Wait()
+			notify("Full cycle: cook → dupe → wash.", "Full Money Cycle", 5)
+
+			if not runKoolAidFarm() then
+				notify("Cycle stopped — Kool-Aid farm failed.", "Full Money Cycle", 8)
+				return
 			end
-			runLtkMoneyDupe()
-			while ltkDupeRunning do
-				RunService.Heartbeat:Wait()
+			if not runLtkMoneyDupe() then
+				notify("Cycle stopped — LTK dupe failed.", "Full Money Cycle", 8)
+				return
 			end
 			runWashMoney()
+
 			notify(
-				"Full cycle done — Cash: $"
-					.. tostring(getMoney())
-					.. " | Filthy: $"
-					.. tostring(getFilthyMoney()),
+				"Full cycle complete. Clean "
+					.. formatMoney(getMoney())
+					.. " | Filthy "
+					.. formatMoney(getFilthyMoney()),
 				"Full Money Cycle",
 				10
 			)
@@ -1959,7 +2115,7 @@ hubUiInstance = UILib.create({
 				label = "TP IceFruit Sell",
 				onClick = function()
 					teleportToNamed("IceFruit Sell", function()
-						return World:FindFirstChild("IceFruit Sell")
+						return findMapObject("IceFruit Sell")
 					end)
 				end,
 			},
@@ -1969,7 +2125,7 @@ hubUiInstance = UILib.create({
 				label = "TP Washer",
 				onClick = function()
 					teleportToNamed("WashingMachine", function()
-						return World:FindFirstChild("WashingMachine")
+						return findMapObject("WashingMachine")
 					end)
 				end,
 			},
@@ -1979,7 +2135,8 @@ hubUiInstance = UILib.create({
 				label = "TP Studio",
 				onClick = function()
 					teleportToNamed("Studio", function()
-						return findPath(World, "StudioPay", "Money", "StudioPay1")
+						local studioPay = findMapObject("StudioPay")
+						return studioPay and findPath(studioPay, "Money", "StudioPay1")
 					end)
 				end,
 			},
@@ -2008,10 +2165,10 @@ hubUiInstance = UILib.create({
 				id = "withdraw2750",
 				label = "Withdraw $2750",
 				onClick = function()
-					if withdrawCash(2750) then
-						notify("Withdraw request sent.", "Bank", 4)
+					if withdrawCash(KOOL_AID_COST) then
+						notify("Withdrew " .. formatMoney(KOOL_AID_COST) .. " from bank.", "Bank", 4)
 					else
-						notify("BankAction withdraw failed.", "Bank", 5)
+						notify("Bank withdraw failed.", "Bank", 5)
 					end
 				end,
 			},
