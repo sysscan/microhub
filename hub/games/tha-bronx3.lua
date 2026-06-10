@@ -1247,10 +1247,26 @@ local KOOL_AID_ITEMS = {
 	"FijiWater",
 	"FreshWater",
 }
+local KOOL_AID_PRICES = {
+	["Ice-Fruit Bag"] = 2500,
+	["Ice-Fruit Cupz"] = 150,
+	FijiWater = 48,
+	FreshWater = 48,
+}
 local KOOL_AID_COST = 2746
 
 local function getExoticStock()
 	return ReplicatedStorage:FindFirstChild("ExoticStock")
+end
+
+local function getMissingKoolAidCost()
+	local total = 0
+	for _, itemName in ipairs(KOOL_AID_ITEMS) do
+		if not findItem(itemName) then
+			total = total + (KOOL_AID_PRICES[itemName] or 0)
+		end
+	end
+	return total
 end
 
 local function ensureKoolAidFunds()
@@ -1258,16 +1274,17 @@ local function ensureKoolAidFunds()
 		return false, "Player data not loaded — wait a few seconds after spawn and retry."
 	end
 
+	local required = getMissingKoolAidCost()
 	local cash = getMoney()
-	if cash >= KOOL_AID_COST then
+	if cash >= required then
 		return true
 	end
 
 	local bank = getBankMoney()
-	if bank < KOOL_AID_COST then
+	if bank < required then
 		return false,
 			"Need "
-				.. formatMoney(KOOL_AID_COST)
+				.. formatMoney(required)
 				.. " (have "
 				.. formatMoney(cash)
 				.. " cash, "
@@ -1275,14 +1292,14 @@ local function ensureKoolAidFunds()
 				.. " bank)."
 	end
 
-	if not withdrawCash(KOOL_AID_COST) then
+	if not withdrawCash(required) then
 		return false, "Bank withdraw failed — stand near an ATM or retry."
 	end
 
 	sleep(1)
 	cash = getMoney()
-	if cash < KOOL_AID_COST then
-		return false, "Withdraw sent but cash is still below " .. formatMoney(KOOL_AID_COST) .. "."
+	if cash < required then
+		return false, "Withdraw sent but cash is still below " .. formatMoney(required) .. "."
 	end
 	return true
 end
@@ -1294,9 +1311,11 @@ local function buyKoolAidSupplies()
 	end
 
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		local stock = stockRoot:FindFirstChild(itemName)
-		if not stock or not stock:IsA("ValueBase") or stock.Value <= 0 then
-			return false, itemName .. " is out of stock — try another server."
+		if not findItem(itemName) then
+			local stock = stockRoot:FindFirstChild(itemName)
+			if not stock or not stock:IsA("ValueBase") or stock.Value <= 0 then
+				return false, itemName .. " is out of stock — try another server."
+			end
 		end
 	end
 
@@ -1306,14 +1325,16 @@ local function buyKoolAidSupplies()
 	end
 
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		local ok, result = pcall(remote.InvokeServer, remote, itemName)
-		if not ok then
-			return false, "Shop error on " .. itemName .. ": " .. tostring(result)
+		if not findItem(itemName) then
+			local ok, result = pcall(remote.InvokeServer, remote, itemName)
+			if not ok then
+				return false, "Shop error on " .. itemName .. ": " .. tostring(result)
+			end
+			if result == false then
+				return false, "Shop rejected " .. itemName .. " — check cash and stock."
+			end
+			sleep(1.25)
 		end
-		if result == false then
-			return false, "Shop rejected " .. itemName .. " — check cash and stock."
-		end
-		sleep(1.25)
 	end
 
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
@@ -1341,6 +1362,24 @@ local function getSellPrompt(sellPart)
 		or sellPart:FindFirstChildOfClass("ProximityPrompt", true)
 end
 
+local function getCookProgress(cookPart)
+	return cookPart and findPath(cookPart, "Steam", "LoadUI")
+end
+
+local function isPotBusy(pot)
+	local cookPart = pot and pot:FindFirstChild("CookPart")
+	local ownerTag = pot and pot:FindFirstChild("Owner")
+	local progress = getCookProgress(cookPart)
+
+	if ownerTag and ownerTag.Value then
+		return true
+	end
+	if cookPart and cookPart:GetAttribute("PendingSize") ~= nil then
+		return true
+	end
+	return progress and progress.Enabled
+end
+
 local function getAvailableCookingPot()
 	local pots = findMapObject("CookingPots")
 	if not pots then
@@ -1350,19 +1389,55 @@ local function getAvailableCookingPot()
 		if pot:IsA("Model") then
 			local ownerTag = pot:FindFirstChild("Owner")
 			local cookPart = pot:FindFirstChild("CookPart")
-			local progress = cookPart and findPath(cookPart, "Steam", "LoadUI")
+			local prompt = getCookPrompt(cookPart)
 			if ownerTag
 				and cookPart
-				and getCookPrompt(cookPart)
-				and progress
-				and not ownerTag.Value
-				and not progress.Enabled
+				and prompt
+				and prompt.Enabled
+				and prompt.ActionText == "Turn On"
+				and not isPotBusy(pot)
 			then
 				return pot
 			end
 		end
 	end
 	return nil
+end
+
+local function waitForPromptAction(prompt, actionText, timeout)
+	local deadline = tick() + (timeout or 8)
+	while prompt and prompt.Parent and tick() < deadline do
+		if prompt.ActionText == actionText and prompt.Enabled then
+			return true
+		end
+		RunService.Heartbeat:Wait()
+	end
+	return false
+end
+
+local function waitForToolConsumed(tool, timeout)
+	local deadline = tick() + (timeout or 8)
+	while tool and tool.Parent and tick() < deadline do
+		RunService.Heartbeat:Wait()
+	end
+	return not tool or tool.Parent == nil
+end
+
+local function waitForCookFinished(progress, cookPart, timeout)
+	local deadline = tick() + (timeout or 120)
+	local startDeadline = tick() + 10
+	local sawBusy = false
+
+	while tick() < deadline do
+		local busy = (progress and progress.Enabled) or (cookPart and cookPart:GetAttribute("PendingSize") ~= nil)
+		if busy then
+			sawBusy = true
+		elseif sawBusy or tick() >= startDeadline then
+			return true
+		end
+		RunService.Heartbeat:Wait()
+	end
+	return false
 end
 
 local function runKoolAidFarm()
@@ -1395,7 +1470,7 @@ local function runKoolAidFarm()
 
 		local cookPart = cookingPot:WaitForChild("CookPart", 10)
 		local cookPrompt = getCookPrompt(cookPart)
-		local cookProgress = cookPart and findPath(cookPart, "Steam", "LoadUI")
+		local cookProgress = getCookProgress(cookPart)
 		local sellPart = findMapObject("IceFruit Sell")
 		local sellPrompt = getSellPrompt(sellPart)
 
@@ -1421,28 +1496,28 @@ local function runKoolAidFarm()
 		teleportTo(cookPart.Position)
 		sleep(0.25)
 		firePrompt(cookPrompt)
-		sleep(0.25)
+		if not waitForPromptAction(cookPrompt, "Mix Items", 8) then
+			notify("Cooking pot did not switch to Mix Items.", "Kool-Aid Farm", 8)
+			return
+		end
 
 		for _, tool in ipairs(cookOrder) do
 			humanoid:EquipTool(tool)
-			sleep(0.5)
+			sleep(0.35)
+			if not waitForPromptAction(cookPrompt, "Mix Items", 4) then
+				notify("Cooking prompt not ready for " .. tool.Name .. ".", "Kool-Aid Farm", 8)
+				return
+			end
 			firePrompt(cookPrompt)
-			local start = tick()
-			while tick() - start < 5 and tool.Parent do
-				RunService.Heartbeat:Wait()
+			if not waitForToolConsumed(tool, 8) then
+				notify(tool.Name .. " was not accepted by the pot.", "Kool-Aid Farm", 8)
+				return
 			end
 		end
 
-		while cookProgress.Enabled do
-			local changed = false
-			local conn = cookProgress:GetPropertyChangedSignal("Enabled"):Connect(function()
-				changed = true
-			end)
-			local deadline = tick() + 2.035
-			while cookProgress.Enabled and tick() < deadline and not changed do
-				RunService.Heartbeat:Wait()
-			end
-			conn:Disconnect()
+		if not waitForCookFinished(cookProgress, cookPart, 120) then
+			notify("Cooking timed out — pot stayed busy.", "Kool-Aid Farm", 8)
+			return
 		end
 
 		teleportTo(cookPart.Position)
@@ -1953,6 +2028,7 @@ hubUiInstance = UILib.create({
 						{ type = "toggle", key = "NoInjured", label = "No Injured", hud = "No Injured" },
 						{ type = "toggle", key = "NoSleep", label = "No Sleep", hud = "No Sleep" },
 						{ type = "toggle", key = "NoHunger", label = "No Hunger", hud = "No Hunger" },
+						{ type = "toggle", key = "InstantPrompts", label = "Inst Prompts", hud = "Inst Prompts" },
 					},
 				},
 				{
@@ -2082,20 +2158,6 @@ hubUiInstance = UILib.create({
 							end,
 							onClick = runFullMoneyCycle,
 						},
-					},
-				},
-			},
-		},
-		{
-			label = "Misc",
-			sections = {
-				{
-					title = "UTILITIES",
-					items = {
-						{ type = "toggle", key = "InstantPrompts", label = "Inst Prompts", hud = "Inst Prompts" },
-						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
-						{ type = "hint", text = "WASD+Space/Ctrl fly | Sprint = always run" },
-						{ type = "hint", text = "LastACPos nil = bypass active" },
 					},
 				},
 			},
