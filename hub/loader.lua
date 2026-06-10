@@ -1,8 +1,8 @@
--- MicroHub loader v1.6.0
+-- MicroHub loader v1.6.1
 -- Remote only. Resolves GitHub main -> immutable commit SHA, then loads every file from that SHA.
 
-local VERSION = "1.6.0"
-local MIN_UI_VERSION = "2.1.0"
+local VERSION = "1.6.1"
+local MIN_UI_VERSION = "3.0.0"
 local OWNER = "sysscan"
 local REPO = "microhub"
 local BRANCH = "main"
@@ -152,9 +152,6 @@ local function fetch(path)
 	for _, url in ipairs(urls) do
 		local ok, body = pcall(httpGet, addBust(url))
 		if ok then
-			if path == "lib/ui.lua" and body:find("TouchTap", 1, true) then
-				error("stale UI contained TouchTap at " .. sha, 0)
-			end
 			return body
 		end
 		table.insert(failures, tostring(body))

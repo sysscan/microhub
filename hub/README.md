@@ -8,7 +8,7 @@ Paste this. It asks GitHub for the latest `main` commit SHA first, then download
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.0"
+local MIN_LOADER = "1.6.1"
 
 local function requestFunction()
 	return request or http_request or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request)
@@ -36,21 +36,22 @@ assert(body:find('VERSION = "' .. MIN_LOADER .. '"', 1, true), "stale loader bod
 loadstring(body, "MicroHub.Loader")()
 ```
 
-You should see `[MicroHub] v1.6.0 @ <commit> -> ...` and `ready — UI 2.1.0`. Re-run anytime.
+You should see `[MicroHub] v1.6.1 @ <commit> -> ...` and `ready — UI 3.0.0`. Re-run anytime.
 
 ## Layout
 
 ```
 hub/
 ├── loader.lua      # Self-contained remote loader
-├── lib/ui.lua      # Shared Drawing UI v2 (tabs, sliders, selects, colors)
+├── lib/ui.lua      # Cascade-backed UI adapter
 └── games/          # Per-game scripts
 ```
 
-## UI v2 (`lib/ui.lua`)
+## UI (`lib/ui.lua`)
 
-- **PC:** RightShift toggles menu, drag title bar, mouse wheel scroll, click/drag sliders
-- **Mobile:** ☰ floating button, touch input, larger controls, single-column layout
+- Powered by [Cascade](https://github.com/cascadeui/Cascade), pinned to release `v1.4.0`
+- **PC:** RightShift toggles menu, Cascade handles drag/resize
+- **Mobile:** Cascade window pill and touch-friendly controls
 - **Tabs:** `pages = { { label = "Combat", sections = { ... } } }`
 - **Items:** `toggle`, `slider`, `select`, `color`, `number`, `button`, `hint`, `label`, `separator`
 - **Legacy:** `sections` + `toggles` + `footer` still work (auto-converted)

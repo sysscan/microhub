@@ -6,7 +6,7 @@ Script hub for Roblox — auto-loads the right script per game.
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.0"
+local MIN_LOADER = "1.6.1"
 
 local function requestFunction()
 	return request or http_request or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request)
