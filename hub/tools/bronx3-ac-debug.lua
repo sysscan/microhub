@@ -627,6 +627,10 @@ function Bronx3ACDebug.getLogPath()
 	return session.logPath
 end
 
+function Bronx3ACDebug.getVersion()
+	return DEBUG_VERSION
+end
+
 getGenv().__Bronx3ACDebug = Bronx3ACDebug
 
 if getGenv().__Bronx3ACDebugAutoStart then

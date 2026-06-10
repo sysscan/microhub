@@ -298,6 +298,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local acDebugModule = nil
+local AC_DEBUG_VERSION = "3-no-global-namecall"
 
 local function getAcDebugContext()
 	return {
@@ -309,15 +310,28 @@ local function getAcDebugContext()
 	}
 end
 
-local function loadAcDebugModule()
-	if acDebugModule then
-		return acDebugModule
+local function acDebugModuleVersion(mod)
+	if typeof(mod) ~= "table" or typeof(mod.getVersion) ~= "function" then
+		return nil
 	end
+	return mod.getVersion()
+end
+
+local function clearAcDebugModuleCache(genv)
+	acDebugModule = nil
+	if genv then
+		genv.__Bronx3ACDebug = nil
+	end
+end
+
+local function loadAcDebugModule(forceRefresh)
 	local genv = getgenv and getgenv() or _G
-	if typeof(genv.__Bronx3ACDebug) == "table" then
-		acDebugModule = genv.__Bronx3ACDebug
+	local cached = acDebugModule or genv.__Bronx3ACDebug
+	if not forceRefresh and acDebugModuleVersion(cached) == AC_DEBUG_VERSION then
+		acDebugModule = cached
 		return acDebugModule
 	end
+	clearAcDebugModuleCache(genv)
 
 	local function compileAndRun(source)
 		local ok, fn = pcall(loadstring, source, "bronx3-ac-debug")
@@ -328,34 +342,51 @@ local function loadAcDebugModule()
 		if not runOk then
 			return nil, result
 		end
-		return genv.__Bronx3ACDebug or result
+		local mod = genv.__Bronx3ACDebug or result
+		if acDebugModuleVersion(mod) ~= AC_DEBUG_VERSION then
+			return nil, "outdated ac debug script"
+		end
+		return mod
 	end
 
 	local root = genv.HUB_LOCAL_ROOT or "hub"
 	local path = root .. "/tools/bronx3-ac-debug.lua"
 	local forceRemote = genv.HUB_FORCE_REMOTE == true
-	if not forceRemote and typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(path) then
-		acDebugModule = compileAndRun(readfile(path))
-		if acDebugModule then
-			return acDebugModule
+
+	local function trySource(source, updateLocal)
+		local mod, err = compileAndRun(source)
+		if mod then
+			acDebugModule = mod
+			if updateLocal and typeof(writefile) == "function" then
+				pcall(writefile, path, source)
+			end
+			return mod
 		end
+		return nil, err
 	end
 
-	if typeof(request) == "function" then
+	if typeof(request) == "function" and (forceRemote or forceRefresh or Config.ACDebug) then
 		local base = genv.HUB_BASE or "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 		local res = request({
 			Url = base .. "/tools/bronx3-ac-debug.lua?t=" .. tostring(os.time()),
 			Method = "GET",
 		})
 		if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
-			acDebugModule = compileAndRun(res.Body)
-			if acDebugModule then
-				return acDebugModule
+			local mod = trySource(res.Body, true)
+			if mod then
+				return mod
 			end
 		end
 	end
 
-	warn("[ThaBronx3] AC debug script unavailable (local + remote fetch failed)")
+	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(path) then
+		local mod = trySource(readfile(path), false)
+		if mod then
+			return mod
+		end
+	end
+
+	warn("[ThaBronx3] AC debug script unavailable (remote + local fetch failed or outdated)")
 	return nil
 end
 
@@ -370,7 +401,7 @@ local function acDebugMark(tag, detail)
 end
 
 local function applyAcDebug()
-	local mod = loadAcDebugModule()
+	local mod = loadAcDebugModule(Config.ACDebug == true)
 	if not mod then
 		if Config.ACDebug then
 			notify("AC debug script not found in Volt workspace (hub/tools/).", "AC Debug", 6)
