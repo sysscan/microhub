@@ -1,5 +1,5 @@
 --[[
-	MicroHub UI v2.0.1 — Drawing-based menu for PC + mobile.
+	MicroHub UI v2.0.2 — Drawing-based menu for PC + mobile.
 	Loaded by hub/loader.lua into shared.__MicroHubUILib
 
 	Item types (per section.items or legacy section.toggles):
@@ -35,7 +35,6 @@ local THEME = {
 	hudAccent = Color3.fromRGB(72, 220, 130),
 	hudTitle = Color3.fromRGB(195, 200, 220),
 	hudLine = Color3.fromRGB(80, 255, 140),
-	overlay = Color3.fromRGB(0, 0, 0),
 	mobileFab = Color3.fromRGB(99, 102, 241),
 }
 
@@ -56,9 +55,7 @@ local function sq(props)
 	d.Thickness = props.Thickness or 1
 	d.Color = props.Color or THEME.text
 	d.Visible = false
-	if props.Transparency then
-		d.Transparency = props.Transparency
-	end
+	d.Transparency = props.Transparency or 0
 	return d
 end
 
@@ -167,14 +164,7 @@ local function buildPages(options)
 	return { { label = "Menu", sections = sections } }
 end
 
-local uiBlockedInputs = {
-	Enum.UserInputType.MouseButton1,
-	Enum.UserInputType.MouseButton2,
-	Enum.UserInputType.MouseButton3,
-	Enum.UserInputType.MouseMovement,
-	Enum.UserInputType.MouseWheel,
-	Enum.UserInputType.Touch,
-}
+local uiBlockedInputs = {}
 for _, action in ipairs(Enum.PlayerActions:GetEnumItems()) do
 	table.insert(uiBlockedInputs, action)
 end
@@ -190,7 +180,7 @@ function HubUI.new(options)
 	self.pages = buildPages(options)
 	self.toggleKey = options.toggleKey or Enum.KeyCode.RightShift
 	self.mobileToggleKey = options.mobileToggleKey or Enum.KeyCode.ButtonY
-	self.dragHint = options.dragHint or (isMobile() and "Drag header" or "RightShift")
+	self.dragHint = options.dragHint or (isMobile() and "Drag title bar" or "Drag title bar")
 	self.onToggle = options.onToggle
 	self.onChange = options.onChange
 	self.onMenuVisible = options.onMenuVisible
@@ -234,21 +224,20 @@ function HubUI.new(options)
 	end
 
 	self.drawings = {
-		overlay = sq({ Color = THEME.overlay, Transparency = 0.45 }),
-		bg = sq({ Color = THEME.bg, Transparency = 0.04 }),
-		border = sq({ Filled = false, Color = THEME.border }),
-		header = sq({ Color = THEME.header, Transparency = 0.08 }),
+		bg = sq({ Color = THEME.bg }),
+		border = sq({ Filled = false, Color = THEME.border, Thickness = 2 }),
+		header = sq({ Color = THEME.header }),
 		accent = sq({ Color = THEME.accent }),
 		title = txt({ Size = 16 }),
 		hint = txt({ Size = 11, Color = THEME.muted }),
 		tabs = {},
 		fab = sq({ Color = THEME.mobileFab }),
 		fabText = txt({ Size = 18, Center = true, Color = THEME.text }),
-		scrollTrack = sq({ Color = THEME.track, Transparency = 0.3 }),
+		scrollTrack = sq({ Color = THEME.track }),
 		scrollThumb = sq({ Color = THEME.accentSoft }),
 		dynamic = {},
 		hud = {
-			bg = sq({ Color = THEME.hudBg, Transparency = 0.22 }),
+			bg = sq({ Color = THEME.hudBg }),
 			border = sq({ Filled = false, Color = THEME.hudBorder }),
 			accent = sq({ Color = THEME.hudAccent }),
 			title = txt({ Size = 12, Color = THEME.hudTitle }),
@@ -409,6 +398,8 @@ function HubUI:setMenuVisible(visible)
 		self:_setBlocked(true)
 	else
 		self:_setBlocked(false)
+		self:_hideMenuDrawings()
+		self:_clearDynamic()
 		if self.savedMouseBehavior then
 			UserInputService.MouseBehavior = self.savedMouseBehavior
 			self.savedMouseBehavior = nil
@@ -725,13 +716,29 @@ function HubUI:_handlePointerMove(pointer)
 	end
 end
 
+function HubUI:_shouldIgnoreProcessed(input, processed)
+	if not processed then
+		return false
+	end
+	if input.UserInputType == Enum.UserInputType.Touch then
+		return false
+	end
+	if self.menuVisible and input.UserInputType == Enum.UserInputType.MouseButton1 then
+		return false
+	end
+	return true
+end
+
 function HubUI:_bindInput()
 	UserInputService.InputBegan:Connect(function(input, processed)
-		if processed and input.UserInputType ~= Enum.UserInputType.Touch then
+		if self:_shouldIgnoreProcessed(input, processed) then
 			return
 		end
 		if input.KeyCode == self.toggleKey or input.KeyCode == self.mobileToggleKey then
 			self:setMenuVisible(not self.menuVisible)
+			return
+		end
+		if not self.menuVisible and input.UserInputType ~= Enum.UserInputType.Touch then
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -787,18 +794,20 @@ function HubUI:_dynText(props)
 	return d
 end
 
+function HubUI:_hideMenuDrawings()
+	self.drawings.bg.Visible = false
+	self.drawings.border.Visible = false
+	self.drawings.header.Visible = false
+	self.drawings.accent.Visible = false
+	self.drawings.title.Visible = false
+	self.drawings.hint.Visible = false
+	self.drawings.scrollTrack.Visible = false
+	self.drawings.scrollThumb.Visible = false
+end
+
 function HubUI:_drawHud()
-	local hud = self.drawings.hud
-	local modules = {}
-	for _, toggle in ipairs(self.toggles) do
-		if toggle.hud and self.config[toggle.key] then
-			table.insert(modules, toggle.hud)
-		end
-	end
-	while #hud.lines < #modules do
-		table.insert(hud.lines, txt({ Size = 13, Color = THEME.hudLine }))
-	end
-	if not self.config[self.hudShowKey] then
+	if self.menuVisible then
+		local hud = self.drawings.hud
 		hud.bg.Visible = false
 		hud.border.Visible = false
 		hud.accent.Visible = false
@@ -809,7 +818,29 @@ function HubUI:_drawHud()
 		end
 		return
 	end
-	local count = math.max(#modules, 1)
+
+	local hud = self.drawings.hud
+	local modules = {}
+	for _, toggle in ipairs(self.toggles) do
+		if toggle.hud and self.config[toggle.key] then
+			table.insert(modules, toggle.hud)
+		end
+	end
+	while #hud.lines < #modules do
+		table.insert(hud.lines, txt({ Size = 13, Color = THEME.hudLine }))
+	end
+	if not self.config[self.hudShowKey] or #modules == 0 then
+		hud.bg.Visible = false
+		hud.border.Visible = false
+		hud.accent.Visible = false
+		hud.title.Visible = false
+		hud.empty.Visible = false
+		for _, line in ipairs(hud.lines) do
+			line.Visible = false
+		end
+		return
+	end
+	local count = #modules
 	local height = 24 + count * self.hudLineHeight + self.hudPadding
 	local hudX = Camera.ViewportSize.X - self.hudWidth - 14
 	local hudY = 14
@@ -825,15 +856,6 @@ function HubUI:_drawHud()
 	hud.title.Position = Vector2.new(hudX + self.hudPadding + 4, hudY + 5)
 	hud.title.Text = "ACTIVE"
 	hud.title.Visible = true
-	if #modules == 0 then
-		hud.empty.Position = Vector2.new(hudX + self.hudPadding + 6, hudY + 22)
-		hud.empty.Text = "none"
-		hud.empty.Visible = true
-		for _, line in ipairs(hud.lines) do
-			line.Visible = false
-		end
-		return
-	end
 	hud.empty.Visible = false
 	for index, name in ipairs(modules) do
 		local line = hud.lines[index]
@@ -848,7 +870,6 @@ end
 
 function HubUI:_draw()
 	self:_clearDynamic()
-	self:_drawHud()
 
 	if self.mobile then
 		local fab = self:_fabRect()
@@ -863,14 +884,18 @@ function HubUI:_draw()
 		self.drawings.fabText.Visible = false
 	end
 
-	local visible = self.menuVisible
+	if not self.menuVisible then
+		self:_hideMenuDrawings()
+		self:_drawHud()
+		return
+	end
+
+	self:_drawHud()
+
+	local visible = true
 	local x, y = self.X, self.Y
 	local height = self:_menuHeight()
 	local page = self.pages[self.activePage]
-
-	self.drawings.overlay.Position = Vector2.new(0, 0)
-	self.drawings.overlay.Size = Camera.ViewportSize
-	self.drawings.overlay.Visible = visible
 
 	self.drawings.bg.Position = Vector2.new(x, y)
 	self.drawings.bg.Size = Vector2.new(self.Width, height)
@@ -898,7 +923,6 @@ function HubUI:_draw()
 			local active = index == self.activePage
 			local tabBg = self:_dynSquare({
 				Color = active and THEME.accentSoft or THEME.pill,
-				Transparency = active and 0.15 or 0.35,
 			})
 			tabBg.Position = Vector2.new(x + (index - 1) * tabW, tabY)
 			tabBg.Size = Vector2.new(tabW, self.TabHeight)
@@ -989,7 +1013,7 @@ function HubUI:_draw()
 				local trackY = iy + (item.type == "number" and 18 or 16)
 				local trackH = self.mobile and 10 or 8
 				local trackW = iw - (item.type == "number" and (self.mobile and 76 or 64) or 0)
-				local track = self:_dynSquare({ Color = THEME.track, Transparency = 0.2 })
+				local track = self:_dynSquare({ Color = THEME.track })
 				track.Position = Vector2.new(ix, trackY)
 				track.Size = Vector2.new(trackW, trackH)
 				track.Visible = visible and onScreen
@@ -1028,7 +1052,7 @@ function HubUI:_draw()
 					if offsetX + pw > iw then
 						break
 					end
-					local pill = self:_dynSquare({ Color = active and THEME.pillActive or THEME.pill, Transparency = 0.1 })
+					local pill = self:_dynSquare({ Color = active and THEME.pillActive or THEME.pill })
 					pill.Position = Vector2.new(ix + offsetX, pillY)
 					pill.Size = Vector2.new(pw, self.mobile and 22 or 18)
 					pill.Visible = visible and onScreen
@@ -1109,7 +1133,7 @@ function HubUI:_draw()
 end
 
 return {
-	version = "2.0.1",
+	version = "2.0.2",
 	create = function(options)
 		return HubUI.new(options)
 	end,

@@ -1,6 +1,6 @@
 -- MicroHub simple loader. Remote-only, no workspace cache, no bootstrap, no runtime.
 
-local VERSION = "1.5.0"
+local VERSION = "1.5.1"
 local BASE_URL = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 local UI_KEY = "__MicroHubUILib"
 
