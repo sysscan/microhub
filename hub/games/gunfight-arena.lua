@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "13-sa-debug-fix"
+local GAME_BUILD = "14-sa-debug-remote"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -613,29 +613,87 @@ local function dbgRecordRemoteFire(args: { any })
 	dbgRecordNetworkEvent(args[2], { args[3], args[4], args[5], args[6], args[7], args[8] })
 end
 
+local function dbgIsNetworkApi(tbl: any): boolean
+	return typeof(tbl) == "table"
+		and typeof(rawget(tbl, "FireServer")) == "function"
+		and typeof(rawget(tbl, "OnEvent")) == "function"
+		and typeof(rawget(tbl, "EncodeData")) == "function"
+		and typeof(rawget(tbl, "DecodeData")) == "function"
+		and typeof(rawget(tbl, "RE")) == "Instance"
+end
+
+local function dbgCombatRemote(): RemoteEvent?
+	local remote = LocalPlayer:FindFirstChild("RemoteEvent")
+	if remote and remote:IsA("RemoteEvent") then
+		return remote
+	end
+	return nil
+end
+
+local function dbgRemoteScore(remote: RemoteEvent): number
+	local parent = remote.Parent
+	if parent == LocalPlayer then
+		return 100
+	end
+	if parent and parent:IsA("Player") and parent == LocalPlayer then
+		return 100
+	end
+	local playerAncestor = remote:FindFirstAncestorWhichIsA("Player")
+	if playerAncestor == LocalPlayer then
+		return 90
+	end
+	if parent and (parent:IsA("Folder") or parent:IsA("Model")) then
+		return 40
+	end
+	return 0
+end
+
 local function dbgFindNetworkApi(): (any, RemoteEvent?)
 	if typeof(getgc) ~= "function" then
 		return nil, nil
 	end
-	for _, obj in getgc(true) do
-		if typeof(obj) == "table" then
-			local fireServer = rawget(obj, "FireServer")
-			local remote = rawget(obj, "RE")
-			if typeof(fireServer) == "function" and typeof(remote) == "Instance" and remote:IsA("RemoteEvent") then
-				return obj, remote
+
+	local combatRemote = dbgCombatRemote()
+	if combatRemote then
+		for _, obj in getgc(true) do
+			if dbgIsNetworkApi(obj) and rawget(obj, "RE") == combatRemote then
+				return obj, combatRemote
 			end
 		end
+	end
+
+	local bestApi: any = nil
+	local bestRemote: RemoteEvent? = nil
+	local bestScore = 0
+
+	for _, obj in getgc(true) do
+		if not dbgIsNetworkApi(obj) then
+			continue
+		end
+		local remote = rawget(obj, "RE")
+		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
+			continue
+		end
+		local score = dbgRemoteScore(remote)
+		if score > bestScore then
+			bestApi, bestRemote, bestScore = obj, remote, score
+		end
+	end
+
+	if bestScore >= 90 then
+		return bestApi, bestRemote
 	end
 	return nil, nil
 end
 
 local function dbgFindNetworkRemote(): RemoteEvent?
+	local combat = dbgCombatRemote()
+	if combat then
+		return combat
+	end
 	for _, inst in game:GetDescendants() do
-		if inst:IsA("RemoteEvent") and inst.Name == "RemoteEvent" and inst.Parent then
-			local parent = inst.Parent
-			if parent:IsA("Folder") or parent:IsA("Model") or parent:IsA("Player") then
-				return inst
-			end
+		if inst:IsA("RemoteEvent") and inst.Name == "RemoteEvent" and inst.Parent == LocalPlayer then
+			return inst
 		end
 	end
 	return nil
@@ -647,10 +705,8 @@ local function dbgHookNetworkApi()
 	end
 
 	local api, remote = dbgFindNetworkApi()
-	if not api or not remote then
-		if dbg.status == "idle" or dbg.status == "waiting for RemoteEvent" then
-			dbg.status = "waiting for Network API"
-		end
+	if not api or not remote or dbgRemoteScore(remote) < 90 then
+		dbg.status = if dbgCombatRemote() then "waiting for Network API" else "waiting for player RemoteEvent"
 		return
 	end
 
