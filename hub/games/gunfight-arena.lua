@@ -5,12 +5,11 @@
 ]]
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "6-all-modes"
+local GAME_BUILD = "7-load-fix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -32,16 +31,26 @@ local canDraw = typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
 local esp = {}
 local wallsFolder = workspace:FindFirstChild("Walls")
 local espNeedsHide = false
-local getSpawnedFn = nil
 local GREY_TEAM = BrickColor.new("Medium stone grey")
 
-do
-	local ok, net = pcall(function()
-		return require(ReplicatedStorage:WaitForChild("Network"))()
-	end)
-	if ok and typeof(net) == "table" and typeof(net.GetSpawned) == "function" then
-		getSpawnedFn = net.GetSpawned
+-- Mirror ReplicatedStorage.Network GetSpawned without require() — the module anti-tamper kicks/hangs foreign callers.
+local function getSpawned()
+	local spawned = {}
+	for _, record in ipairs(Players:GetChildren()) do
+		if record.Name == LocalPlayer.Name then
+			continue
+		end
+		local char = workspace:FindFirstChild(record.Name)
+		if not char or not char:IsA("Model") then
+			continue
+		end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local root = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart")
+		if hum and root and hum.Health > 0 then
+			spawned[record.Name] = char
+		end
 	end
+	return spawned
 end
 
 local WHITE = Color3.fromRGB(245, 247, 250)
@@ -85,14 +94,14 @@ end
 
 local function getLocalTeam()
 	local id = LocalPlayer:GetAttribute("Team")
-	if id == nil and LocalPlayer.Team then
-		id = LocalPlayer.Team.Name
-	end
 	if id == nil then
 		local record = Players:FindFirstChild(LocalPlayer.Name)
 		if record then
 			id = record:GetAttribute("Team")
 		end
+	end
+	if id == nil then
+		return nil
 	end
 	return normTeam(id)
 end
@@ -131,9 +140,6 @@ local function getTeamFor(name, char)
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player.Name == name then
 			local id = player:GetAttribute("Team")
-			if id == nil and player.Team then
-				id = player.Team.Name
-			end
 			if id ~= nil then
 				return normTeam(id)
 			end
@@ -243,10 +249,8 @@ local function collectTargets()
 		end
 	end
 
-	if getSpawnedFn then
-		for name, char in pairs(getSpawnedFn()) do
-			add(name, char)
-		end
+	for name, char in pairs(getSpawned()) do
+		add(name, char)
 	end
 
 	for _, record in ipairs(Players:GetChildren()) do
@@ -498,4 +502,4 @@ UILib.create({
 
 RunService.RenderStepped:Connect(updateESP)
 
-print("[MicroHub] Gunfight Arena", GAME_BUILD, "— Drawing:", canDraw, "GetSpawned:", getSpawnedFn ~= nil)
+print("[MicroHub] Gunfight Arena", GAME_BUILD, "— Drawing:", canDraw)
