@@ -27,6 +27,7 @@ local function getGenv()
 end
 
 local LOG_ROOT = "hub/tools/bronx3-ac-debug/logs"
+local DEBUG_VERSION = "3-no-global-namecall"
 local FLUSH_INTERVAL = 1.25
 local SAMPLE_INTERVAL = 0.5
 local MARK_COOLDOWN = 0.08
@@ -305,14 +306,12 @@ local function summarizeArgs(...)
 	return table.concat(parts, " | ")
 end
 
-local namecallDepth = 0
-
 local function installKickHook()
-	if typeof(hookfunction) ~= "function" or typeof(newcclosure) ~= "function" then
-		push("HOOK", "kick hook unavailable")
+	if session.hooks.kick then
 		return
 	end
-	if session.hooks.kick then
+	if typeof(hookfunction) ~= "function" then
+		push("HOOK", "kick hook unavailable")
 		return
 	end
 
@@ -323,25 +322,19 @@ local function installKickHook()
 	end
 
 	local originalKick
-	originalKick = hookfunction(
-		kickFn,
-		newcclosure(function(self, ...)
-			if self == LocalPlayer then
-				local args = table.pack(...)
-				task.defer(function()
-					push("KICK", "LocalPlayer:Kick called", {
-						args = summarizeArgs(table.unpack(args, 1, args.n)),
-						caller = callerHint(),
-						snapshot = getCharacterSnapshot(),
-					})
-				end)
-			end
-			if typeof(originalKick) ~= "function" then
-				return
-			end
-			return originalKick(self, ...)
-		end, "Bronx3ACDebug.Kick")
-	)
+	originalKick = hookfunction(kickFn, function(self, ...)
+		if self == LocalPlayer then
+			local args = table.pack(...)
+			task.defer(function()
+				push("KICK", "LocalPlayer:Kick called", {
+					args = summarizeArgs(table.unpack(args, 1, args.n)),
+					caller = callerHint(),
+					snapshot = getCharacterSnapshot(),
+				})
+			end)
+		end
+		return originalKick(self, ...)
+	end)
 	if typeof(originalKick) ~= "function" then
 		push("HOOK", "Kick hook failed - original missing")
 		return
@@ -350,89 +343,92 @@ local function installKickHook()
 	push("HOOK", "LocalPlayer.Kick hooked")
 end
 
-local function installNamecallHook()
-	if typeof(getnamecallmethod) ~= "function" then
-		push("HOOK", "namecall hook unavailable (getnamecallmethod)")
+local function hookRemoteInstance(remote)
+	if typeof(remote) ~= "Instance" then
 		return
 	end
-	if session.hooks.namecall then
+	if not remote:IsA("RemoteEvent") and not remote:IsA("RemoteFunction") then
 		return
 	end
 
-	local oldNamecall
-	local function onNamecall(self, ...)
-		if namecallDepth > 0 then
-			return oldNamecall(self, ...)
-		end
-		if typeof(oldNamecall) ~= "function" then
+	local fullName = remote:GetFullName()
+	if session.hooks.remotes[fullName] then
+		return
+	end
+	if not shouldLogRemote(remote.Name, fullName) then
+		return
+	end
+	if typeof(hookfunction) ~= "function" then
+		return
+	end
+
+	if remote:IsA("RemoteEvent") then
+		local fireServer = remote.FireServer
+		if typeof(fireServer) ~= "function" then
 			return
 		end
-
-		namecallDepth += 1
-		local method = getnamecallmethod()
-		local packed = table.pack(...)
-
-		if method == "Kick" and self == LocalPlayer then
-			task.defer(function()
-				push("KICK", "__namecall Kick", {
-					args = summarizeArgs(table.unpack(packed, 1, packed.n)),
-					caller = callerHint(),
-					snapshot = getCharacterSnapshot(),
-				})
-			end)
-		elseif method == "FireServer" or method == "InvokeServer" then
-			local target = self
-			task.defer(function()
-				if typeof(target) ~= "Instance" then
-					return
-				end
-				local isEvent = method == "FireServer" and target:IsA("RemoteEvent")
-				local isFunction = method == "InvokeServer" and target:IsA("RemoteFunction")
-				if not isEvent and not isFunction then
-					return
-				end
-				if shouldLogRemote(target.Name, target:GetFullName()) then
-					push("REMOTE", method .. " " .. target:GetFullName(), {
-						args = summarizeArgs(table.unpack(packed, 1, packed.n)),
+		local originalFire
+		originalFire = hookfunction(fireServer, function(self, ...)
+			if self == remote then
+				local args = table.pack(...)
+				task.defer(function()
+					push("REMOTE", "FireServer " .. fullName, {
+						args = summarizeArgs(table.unpack(args, 1, args.n)),
 						caller = callerHint(),
 					})
-				end
-			end)
-		end
-
-		local results = table.pack(oldNamecall(self, ...))
-		namecallDepth -= 1
-		return table.unpack(results, 1, results.n)
-	end
-
-	local hookFn = typeof(newcclosure) == "function"
-		and newcclosure(onNamecall, "Bronx3ACDebug.Namecall")
-		or onNamecall
-
-	if typeof(hookmetamethod) == "function" then
-		oldNamecall = hookmetamethod(game, "__namecall", hookFn)
-	elseif typeof(hookfunction) == "function" and typeof(getrawmetatable) == "function" then
-		local mt = getrawmetatable(game)
-		if not mt or typeof(mt.__namecall) ~= "function" then
-			push("HOOK", "game __namecall unavailable")
+				end)
+			end
+			return originalFire(self, ...)
+		end)
+		if typeof(originalFire) ~= "function" then
+			push("HOOK", "FireServer hook failed for " .. fullName)
 			return
 		end
-		oldNamecall = hookfunction(mt.__namecall, hookFn)
-	else
-		push("HOOK", "namecall hook unavailable")
+		session.hooks.remotes[fullName] = originalFire
+		push("HOOK", "hooked FireServer " .. fullName)
+	elseif remote:IsA("RemoteFunction") then
+		local invokeServer = remote.InvokeServer
+		if typeof(invokeServer) ~= "function" then
+			return
+		end
+		local originalInvoke
+		originalInvoke = hookfunction(invokeServer, function(self, ...)
+			if self == remote then
+				local args = table.pack(...)
+				task.defer(function()
+					push("REMOTE", "InvokeServer " .. fullName, {
+						args = summarizeArgs(table.unpack(args, 1, args.n)),
+						caller = callerHint(),
+					})
+				end)
+			end
+			return originalInvoke(self, ...)
+		end)
+		if typeof(originalInvoke) ~= "function" then
+			push("HOOK", "InvokeServer hook failed for " .. fullName)
+			return
+		end
+		session.hooks.remotes[fullName] = originalInvoke
+		push("HOOK", "hooked InvokeServer " .. fullName)
+	end
+end
+
+local function installRemoteHooks()
+	session.hooks.remotes = session.hooks.remotes or {}
+
+	for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+		hookRemoteInstance(remote)
+	end
+
+	if session.hooks.remoteScanConn then
 		return
 	end
 
-	if typeof(oldNamecall) ~= "function" then
-		push("HOOK", "namecall hook failed - original missing")
-		return
-	end
-
-	session.hooks.namecall = oldNamecall
-	push(
-		"HOOK",
-		"__namecall hooked via " .. (typeof(hookmetamethod) == "function" and "hookmetamethod" or "hookfunction")
-	)
+	session.hooks.remoteScanConn = ReplicatedStorage.DescendantAdded:Connect(function(desc)
+		hookRemoteInstance(desc)
+	end)
+	addConn(session.hooks.remoteScanConn)
+	push("HOOK", "remote scan active (no global __namecall)")
 end
 
 local function bindCharacter(character)
@@ -546,10 +542,11 @@ function Bronx3ACDebug.start(ctx)
 		userId = LocalPlayer.UserId,
 		executor = executorName,
 		version = executorVersion,
+		debugVersion = DEBUG_VERSION,
 	})
 
 	installKickHook()
-	installNamecallHook()
+	installRemoteHooks()
 
 	table.insert(session.conns, LocalPlayer.AttributeChanged:Connect(function(name)
 		local value = LocalPlayer:GetAttribute(name)
