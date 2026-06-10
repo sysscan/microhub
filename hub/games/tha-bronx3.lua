@@ -40,9 +40,10 @@ local Config = {
 	RunSpeed = 16,
 }
 
--- Server sets LocalPlayer._Y while tracking vertical movement; flying far above it triggers removal.
-local FLY_AC_MAX_ABOVE_Y = 18
-local GAME_BUILD = "10-fly-step-ref"
+-- Server sets LocalPlayer._Y while tracking vertical movement; it chases upward during flight.
+-- Freeze acGroundY (never follow rising _Y) and hard-cap height to stay under AC tolerance.
+local FLY_AC_MAX_ABOVE_Y = 12
+local GAME_BUILD = "11-fly-y-freeze"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -407,6 +408,27 @@ local flyBypassState = {
 	acGroundY = LocalPlayer:GetAttribute("_Y"),
 }
 
+local function getFlyAcCeiling()
+	local acY = flyBypassState.acGroundY
+	if typeof(acY) ~= "number" then
+		return nil
+	end
+	return acY + FLY_AC_MAX_ABOVE_Y
+end
+
+local function syncAcGroundYFromAttr()
+	local y = LocalPlayer:GetAttribute("_Y")
+	if typeof(y) ~= "number" then
+		return
+	end
+	local current = flyBypassState.acGroundY
+	if typeof(current) ~= "number" or y < current then
+		flyBypassState.acGroundY = y
+	end
+end
+
+syncAcGroundYFromAttr()
+
 local function getFlyMoveDirection(camera)
 	if not camera then
 		return Vector3.zero
@@ -435,13 +457,12 @@ local function getFlyMoveDirection(camera)
 end
 
 local function clampFlyMoveForAc(root, move)
-	local acY = flyBypassState.acGroundY
-	if typeof(acY) ~= "number" or move.Magnitude <= 0 then
+	local ceiling = getFlyAcCeiling()
+	if not ceiling or not root or move.Magnitude <= 0 then
 		return move
 	end
 
-	local ceiling = acY + FLY_AC_MAX_ABOVE_Y
-	if root.Position.Y < ceiling or move.Y <= 0 then
+	if root.Position.Y < ceiling - 0.5 or move.Y <= 0 then
 		return move
 	end
 
@@ -450,6 +471,19 @@ local function clampFlyMoveForAc(root, move)
 		return flat
 	end
 	return Vector3.zero
+end
+
+local function enforceFlyHeightCap(root)
+	local ceiling = getFlyAcCeiling()
+	if not root or not ceiling or root.Position.Y <= ceiling then
+		return
+	end
+	local pos = root.Position
+	root.CFrame = CFrame.new(pos.X, ceiling, pos.Z) * (root.CFrame - root.CFrame.Position)
+	local vel = root.AssemblyLinearVelocity
+	if vel.Y > 0 then
+		root.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
+	end
 end
 
 -- Returns true when fly input is actively driving movement this frame.
@@ -476,8 +510,14 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 	local speed = Config.FlySpeed
 
 	if withBypass then
+		enforceFlyHeightCap(root)
 		humanoid.PlatformStand = true
-		root.AssemblyLinearVelocity = direction * speed
+		local velocity = direction * speed
+		local ceiling = getFlyAcCeiling()
+		if ceiling and root.Position.Y >= ceiling - 0.25 and velocity.Y > 0 then
+			velocity = Vector3.new(velocity.X, 0, velocity.Z)
+		end
+		root.AssemblyLinearVelocity = velocity
 		root.AssemblyAngularVelocity = Vector3.zero
 		acDebugMark("fly_move", {
 			mode = "bypass_velocity",
@@ -571,6 +611,13 @@ local function applyMovementBypass(character)
 	bypassSession.character = character
 	bypassSession.rootPart = rootPart
 
+	local attrY = LocalPlayer:GetAttribute("_Y")
+	if typeof(attrY) == "number" then
+		flyBypassState.acGroundY = attrY
+	elseif rootPart then
+		flyBypassState.acGroundY = rootPart.Position.Y
+	end
+
 	bypassSession.preConn = RunService.PreSimulation:Connect(function()
 		local root = bypassSession.rootPart
 		local char = bypassSession.character
@@ -609,8 +656,16 @@ local function applyMovementBypass(character)
 			humanoid.PlatformStand = false
 		end
 
-		if flyActive then
-			acDebugMark("bypass_post_fly", { anchored = root.Anchored, acY = flyBypassState.acGroundY })
+		if flyActive or Config.Fly then
+			if Config.Fly then
+				enforceFlyHeightCap(root)
+			end
+			acDebugMark("bypass_post_fly", {
+				anchored = root.Anchored,
+				acY = flyBypassState.acGroundY,
+				ceiling = getFlyAcCeiling(),
+				flyActive = flyActive,
+			})
 			return
 		end
 
@@ -1839,7 +1894,7 @@ local HubUI = UILib.create({
 
 LocalPlayer.AttributeChanged:Connect(function(name)
 	if name == "_Y" then
-		flyBypassState.acGroundY = LocalPlayer:GetAttribute("_Y")
+		syncAcGroundYFromAttr()
 	end
 end)
 
