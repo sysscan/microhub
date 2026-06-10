@@ -48,6 +48,11 @@ local chamsCache = {}
 local closestTarget = nil
 local installedIndexHook = false
 local oldIndex = nil
+local ammoUpvalueCache = nil
+local aimUpvalueCache = nil
+local silentAimStepBound = false
+local processInputHookInstalled = false
+local originalProcessInput = nil
 
 local VORTEX_PATH = { "PlayerScripts", "Vortex" }
 
@@ -294,6 +299,93 @@ end
 
 local vortexEnv = nil
 local lastRestockAt = 0
+local INFINITE_RESERVE = 99999
+
+local function hasSetupvalue()
+	return debug and typeof(debug.getupvalue) == "function" and typeof(debug.setupvalue) == "function"
+end
+
+local function clearAmmoCache()
+	ammoUpvalueCache = nil
+end
+
+local function hasHookFunction()
+	return typeof(hookfunction) == "function" and typeof(newcclosure) == "function"
+end
+
+local function clearAimCache()
+	aimUpvalueCache = nil
+end
+
+local function findUpvalueIndex(fn, targetName)
+	if typeof(fn) ~= "function" or not hasSetupvalue() then
+		return nil
+	end
+	for index = 1, 256 do
+		local ok, name = pcall(debug.getupvalue, fn, index)
+		if not ok or name == nil then
+			break
+		end
+		if name == targetName then
+			return index
+		end
+	end
+	return nil
+end
+
+local function readUpvalue(fn, index)
+	if not index then
+		return nil
+	end
+	local ok, value = pcall(debug.getupvalue, fn, index)
+	if ok then
+		return value
+	end
+	return nil
+end
+
+local function writeUpvalue(fn, index, value)
+	if not index then
+		return false
+	end
+	return pcall(debug.setupvalue, fn, index, value)
+end
+
+local function syncWeaponStoredAmmo(weaponModule)
+	if not weaponModule then
+		return
+	end
+	local variables = weaponModule:FindFirstChild("Variables")
+	local stored = variables and variables:FindFirstChild("StoredAmmo")
+	if stored and stored:IsA("NumberValue") and stored.Value < INFINITE_RESERVE then
+		stored.Value = INFINITE_RESERVE
+	end
+end
+
+local function resolveAmmoUpvalues(env)
+	if ammoUpvalueCache then
+		return ammoUpvalueCache
+	end
+	local candidates = { "Restock", "Fire", "Reload", "WeaponRender", "GetAmmoData", "MoveAction" }
+	for _, name in ipairs(candidates) do
+		local fn = env[name]
+		if typeof(fn) == "function" then
+			local magIndex = findUpvalueIndex(fn, "v44")
+			local reserveIndex = findUpvalueIndex(fn, "v18")
+			if magIndex and reserveIndex then
+				ammoUpvalueCache = {
+					fn = fn,
+					mag = magIndex,
+					reserve = reserveIndex,
+					clip = findUpvalueIndex(fn, "v40"),
+					weapon = findUpvalueIndex(fn, "v83"),
+				}
+				return ammoUpvalueCache
+			end
+		end
+	end
+	return nil
+end
 
 local function getVortexEnv()
 	if not hasGetsenv() then
@@ -302,6 +394,8 @@ local function getVortexEnv()
 	local vortex = getVortex()
 	if not vortex or not vortex.Enabled then
 		vortexEnv = nil
+		clearAmmoCache()
+		clearAimCache()
 		return nil
 	end
 	if vortexEnv then
@@ -310,31 +404,72 @@ local function getVortexEnv()
 	local ok, env = pcall(getsenv, vortex)
 	if ok and typeof(env) == "table" then
 		vortexEnv = env
+		clearAmmoCache()
+		clearAimCache()
+		processInputHookInstalled = false
 		return env
 	end
 	return nil
 end
 
-local function maintainStoredAmmo()
+local function maintainStoredAmmoValues()
+	local weapons = ReplicatedStorage:FindFirstChild("Weapons")
+	if not weapons then
+		return
+	end
+	local primary = LocalPlayer:GetAttribute("Primary")
+	local secondary = LocalPlayer:GetAttribute("Secondary")
+	for _, weaponName in ipairs({ primary, secondary }) do
+		if typeof(weaponName) == "string" and weaponName ~= "" then
+			syncWeaponStoredAmmo(weapons:FindFirstChild(weaponName))
+		end
+	end
+end
+
+local function maintainInfiniteAmmo()
 	if not Config.InfiniteAmmo then
 		return
 	end
-	local vortex = getVortex()
-	if not vortex then
-		return
-	end
-	for _, inst in ipairs(vortex:GetDescendants()) do
-		if inst:IsA("NumberValue") and inst.Name == "StoredAmmo" and inst.Value < 1e9 then
-			inst.Value = 1e9
+	ensureIndexHook()
+	local env = getVortexEnv()
+	if env and hasSetupvalue() then
+		local cache = resolveAmmoUpvalues(env)
+		if cache then
+			local clipSize = readUpvalue(cache.fn, cache.clip)
+			local weaponModule = readUpvalue(cache.fn, cache.weapon)
+			if (typeof(clipSize) ~= "number" or clipSize <= 0) and weaponModule then
+				local variables = weaponModule:FindFirstChild("Variables")
+				local clipValue = variables and variables:FindFirstChild("ClipSize")
+				if clipValue and clipValue:IsA("NumberValue") then
+					clipSize = clipValue.Value
+				end
+				local exClip = variables and variables:FindFirstChild("ExClipSize")
+				if exClip and exClip:IsA("NumberValue") and exClip.Value > clipSize then
+					clipSize = exClip.Value
+				end
+			end
+			writeUpvalue(cache.fn, cache.reserve, INFINITE_RESERVE)
+			if typeof(clipSize) == "number" and clipSize > 0 then
+				local magazine = readUpvalue(cache.fn, cache.mag)
+				if typeof(magazine) ~= "number" or magazine < clipSize then
+					writeUpvalue(cache.fn, cache.mag, clipSize)
+				end
+			end
+			syncWeaponStoredAmmo(weaponModule)
+			return
 		end
 	end
+	maintainStoredAmmoValues()
 end
 
 local function restockAmmo()
 	if not Config.InfiniteAmmo then
 		return
 	end
-	maintainStoredAmmo()
+	maintainInfiniteAmmo()
+	if hasSetupvalue() and ammoUpvalueCache then
+		return
+	end
 	local now = os.clock()
 	if now - lastRestockAt < 0.15 then
 		return
@@ -378,6 +513,100 @@ local function updateMouseHitSpot()
 	end
 end
 
+local function resolveAimUpvalues(env)
+	if aimUpvalueCache then
+		return aimUpvalueCache
+	end
+	local candidates = { "Fire", "AimAssist", "WeaponRender", "ProcessInput" }
+	for _, name in ipairs(candidates) do
+		local fn = env[name]
+		if typeof(fn) == "function" then
+			local targetIndex = findUpvalueIndex(fn, "v67")
+			if targetIndex then
+				aimUpvalueCache = {
+					fn = fn,
+					target = targetIndex,
+					strength = findUpvalueIndex(fn, "v50"),
+				}
+				return aimUpvalueCache
+			end
+		end
+	end
+	return nil
+end
+
+local function applySilentAimUpvalues()
+	if not Config.SilentAim or not closestTarget then
+		return
+	end
+	local targetPart = getTargetPart(closestTarget)
+	if not targetPart then
+		return
+	end
+	updateMouseHitSpot()
+	if not hasSetupvalue() then
+		return
+	end
+	local env = getVortexEnv()
+	if not env then
+		return
+	end
+	local cache = resolveAimUpvalues(env)
+	if not cache then
+		return
+	end
+	writeUpvalue(cache.fn, cache.target, targetPart)
+	if cache.strength then
+		writeUpvalue(cache.fn, cache.strength, 2)
+	end
+end
+
+local function installProcessInputHook()
+	if processInputHookInstalled or not hasHookFunction() then
+		return
+	end
+	local env = getVortexEnv()
+	if not env or typeof(env.ProcessInput) ~= "function" then
+		return
+	end
+	local ok, hooked = pcall(function()
+		local original
+		original = hookfunction(env.ProcessInput, newcclosure(function(...)
+			if Config.SilentAim and closestTarget then
+				applySilentAimUpvalues()
+			end
+			return original(...)
+		end))
+		return original
+	end)
+	if ok and typeof(hooked) == "function" then
+		originalProcessInput = hooked
+		processInputHookInstalled = true
+	end
+end
+
+local function ensureSilentAimStep()
+	if silentAimStepBound or not Config.SilentAim then
+		return
+	end
+	silentAimStepBound = true
+	RunService:BindToRenderStep("MicroHubSilentAim", Enum.RenderPriority.Last.Value, function()
+		if Config.SilentAim then
+			applySilentAimUpvalues()
+		end
+	end)
+end
+
+local function removeSilentAimStep()
+	if not silentAimStepBound then
+		return
+	end
+	silentAimStepBound = false
+	pcall(function()
+		RunService:UnbindFromRenderStep("MicroHubSilentAim")
+	end)
+end
+
 local function cframeValuePosition(cframeValue)
 	if not cframeValue or not cframeValue:IsA("CFrameValue") or not oldIndex then
 		return nil
@@ -390,7 +619,10 @@ local function cframeValuePosition(cframeValue)
 end
 
 local function ensureIndexHook()
-	if installedIndexHook or not hasHookMetamethod() or not Config.SilentAim then
+	if installedIndexHook or not hasHookMetamethod() then
+		return
+	end
+	if not Config.SilentAim and not Config.InfiniteAmmo then
 		return
 	end
 	installedIndexHook = true
@@ -404,12 +636,28 @@ local function ensureIndexHook()
 					end
 				end
 			end
-			if Config.SilentAim and closestTarget and index == "LookVector" and inHitchance() and inFireCallstack(8) then
-				local position = predictedPosition(closestTarget)
-				if position and typeof(self) == "CFrame" then
-					local direction = position - self.Position
-					if direction.Magnitude > 0.01 then
-						return direction.Unit
+			if Config.InfiniteAmmo and index == "Value" then
+				if typeof(self) == "Instance" and self:IsA("NumberValue") and self.Name == "StoredAmmo" then
+					return INFINITE_RESERVE
+				end
+			end
+			if Config.SilentAim and closestTarget and inHitchance() and inFireCallstack(12) then
+				if index == "CFrame" and typeof(self) == "Instance" and self:IsA("Camera") then
+					local position = predictedPosition(closestTarget)
+					if position and oldIndex then
+						local ok, realCFrame = pcall(oldIndex, self, "CFrame")
+						if ok and typeof(realCFrame) == "CFrame" then
+							return CFrame.new(realCFrame.Position, position)
+						end
+					end
+				end
+				if index == "LookVector" and typeof(self) == "CFrame" then
+					local position = predictedPosition(closestTarget)
+					if position then
+						local direction = position - self.Position
+						if direction.Magnitude > 0.01 then
+							return direction.Unit
+						end
 					end
 				end
 			end
@@ -688,8 +936,10 @@ end
 local function updateAim()
 	if Config.SilentAim then
 		ensureIndexHook()
+		ensureSilentAimStep()
+		installProcessInputHook()
 		closestTarget = getClosestTarget(Config.FOVRadius)
-		updateMouseHitSpot()
+		applySilentAimUpvalues()
 	else
 		closestTarget = nil
 	end
@@ -734,7 +984,10 @@ end
 
 local function cleanup()
 	disconnectAll()
+	removeSilentAimStep()
 	vortexEnv = nil
+	clearAmmoCache()
+	clearAimCache()
 	lastRestockAt = 0
 	if fovCircle then
 		removeDrawing(fovCircle)
@@ -874,19 +1127,29 @@ UILib.create({
 	onToggle = function(key, value)
 		if (key == "NoRecoil" or key == "StableAim") and value then
 			applyCombatModifiers()
-		elseif key == "SilentAim" and value then
-			ensureIndexHook()
-			if not hasHookMetamethod() then
-				notify("hookmetamethod missing — silent aim needs it for first-person shots.", "Compatibility", 6)
+		elseif key == "SilentAim" then
+			if value then
+				ensureIndexHook()
+				ensureSilentAimStep()
+				installProcessInputHook()
+				if not hasHookMetamethod() and not hasSetupvalue() then
+					notify("hookmetamethod/debug.setupvalue missing — silent aim may not work on this executor.", "Compatibility", 6)
+				end
+			else
+				removeSilentAimStep()
 			end
 		elseif key == "InfiniteAmmo" then
 			if value then
-				maintainStoredAmmo()
-				if not hasGetsenv() then
-					notify("getsenv missing — restock fallback disabled; reserve ammo is still raised directly.", "Compatibility", 6)
+				ensureIndexHook()
+				maintainInfiniteAmmo()
+				if not hasSetupvalue() and not hasGetsenv() then
+					notify("debug.setupvalue/getsenv missing — infinite ammo may not work on this executor.", "Compatibility", 6)
+				elseif not hasSetupvalue() then
+					notify("debug.setupvalue missing — using StoredAmmo spoof and Restock fallback only.", "Compatibility", 6)
 				end
 			else
 				vortexEnv = nil
+				clearAmmoCache()
 			end
 		end
 	end,
