@@ -7,7 +7,7 @@
 	Dev mode: getgenv().HUB_USE_LOCAL = true  (read hub/ from executor workspace)
 ]]
 
-local LOADER_VERSION = 6
+local LOADER_VERSION = 7
 local DEFAULT_BASE = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 local LOADED_KEY = "__MicroHubLoaded"
 local UI_LIB_KEY = "__MicroHubUILib"
@@ -165,8 +165,27 @@ local success, err = pcall(function()
 	)
 	notify(hubName, (wasLoaded and "Reloading " or "Loading ") .. (entry.name or "script") .. "...")
 
-	if typeof(shared[UI_LIB_KEY]) ~= "table" then
-		shared[UI_LIB_KEY] = hub.loadTable("lib/ui.lua")
+	do
+		local uiSource, uiOrigin = loadModuleSource(base, "lib/ui.lua")
+		if typeof(uiSource) == "string" and uiSource:find("TouchTap", 1, true) then
+			local hint = uiOrigin == "local"
+				and "Update workspace hub/lib/ui.lua or set getgenv().HUB_USE_LOCAL = false."
+				or "GitHub copy is stale — wait a minute and re-run."
+			error("lib/ui.lua outdated (TouchTap). " .. hint, 0)
+		end
+		local uiFn, uiErr = loadstring(uiSource, "lib/ui.lua")
+		if not uiFn then
+			error("compile lib/ui.lua: " .. tostring(uiErr), 0)
+		end
+		local uiOk, uiResult = pcall(uiFn)
+		if not uiOk then
+			error("run lib/ui.lua: " .. tostring(uiResult), 0)
+		end
+		if typeof(uiResult) ~= "table" then
+			error("lib/ui.lua must return a table", 0)
+		end
+		shared[UI_LIB_KEY] = uiResult
+		warn("[MicroHub] UI", uiOrigin, "v" .. tostring(uiResult.version or "?"))
 	end
 
 	local origin = hub.run(entry.module)

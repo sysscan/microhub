@@ -1,5 +1,5 @@
 --[[
-	MicroHub UI v2 — Drawing-based menu for PC + mobile.
+	MicroHub UI v2.0.1 — Drawing-based menu for PC + mobile.
 	Loaded by hub/loader.lua into shared.__MicroHubUILib
 
 	Item types (per section.items or legacy section.toggles):
@@ -1109,6 +1109,7 @@ function HubUI:_draw()
 end
 
 return {
+	version = "2.0.1",
 	create = function(options)
 		return HubUI.new(options)
 	end,
