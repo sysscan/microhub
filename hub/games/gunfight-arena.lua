@@ -60,10 +60,9 @@ local installedIndexHook = false
 local oldIndex = nil
 local ammoUpvalueCache = nil
 local fireRateCache = nil
-local aimUpvalueCache = nil
 local ensureIndexHook
 local ensureNamecallHook
-local INFINITE_RESERVE = 99999
+local STORED_AMMO_SPOOF = 1e36
 local AIM_SCAN_INTERVAL = 0.05
 
 local aimHooksReady = false
@@ -71,29 +70,18 @@ local lastAimScanAt = 0
 local cachedAimOrigin = nil
 local cachedTargetPart = nil
 local cachedTargetPosition = nil
-local fireUpvaluesApplied = false
 
 local VORTEX_PATH = { "PlayerScripts", "Vortex" }
 
 local debugCounters = {
 	fireRewrites = 0,
-	ammoApplies = 0,
+	restockCalls = 0,
 	ammoFailures = 0,
-	moveActionRestores = 0,
 }
 local debugLastSummaryAt = 0
 local debugLastEvents = {}
 local DEBUG_SUMMARY_INTERVAL = 2
 local MAX_DEBUG_EVENTS = 12
-
-local vortexHooksInstalled = false
-local hookedVortexFire = false
-local hookedVortexINVK = false
-local hookedVortexMoveAction = false
-local oldVortexMoveAction = nil
-local oldVortexFire = nil
-local oldVortexINVK = nil
-local moveActionHookBusy = false
 
 local VORTEX_UPVALUE_NAMES = {
 	mag = { "v44" },
@@ -128,13 +116,6 @@ end
 
 local function hasHookFunction()
 	return typeof(hookfunction) == "function"
-end
-
-local function wrapClosure(fn)
-	if typeof(newcclosure) == "function" then
-		return newcclosure(fn)
-	end
-	return fn
 end
 
 local function getGenv()
@@ -181,7 +162,6 @@ end
 local function clearAimSnapshot()
 	cachedTargetPart = nil
 	cachedTargetPosition = nil
-	fireUpvaluesApplied = false
 end
 
 local function screenDistanceSq(x, y, origin)
@@ -364,16 +344,93 @@ local function refreshAimSnapshot()
 	end
 end
 
-local function getSilentAimDirection(originCFrame)
-	if not cachedTargetPosition then
+local function getSilentAimTargetPart()
+	if cachedTargetPart and cachedTargetPart.Parent then
+		return cachedTargetPart
+	end
+	if closestTarget then
+		return getTargetPart(closestTarget)
+	end
+	return nil
+end
+
+local function isLocalSyncShooter(caller)
+	if caller == LocalPlayer then
+		return true
+	end
+	if typeof(caller) ~= "Instance" then
+		return false
+	end
+	if caller.Name == LocalPlayer.Name then
+		return true
+	end
+	return string.find(caller.Name, LocalPlayer.Name, 1, true) ~= nil
+end
+
+local function syncMouseHitSpot(targetPart)
+	if not targetPart then
+		return
+	end
+	local position = predictedPosition(targetPart.Parent) or targetPart.Position
+	_G.MouseHitSpot = position
+	getGenv().MouseHitSpot = position
+end
+
+local function aimCFrameAtTarget(originalCFrame, targetPart, usePartCFrame)
+	if typeof(originalCFrame) ~= "CFrame" or not targetPart then
 		return nil
 	end
-	local direction = cachedTargetPosition - originCFrame.Position
-	local magnitude = direction.Magnitude
-	if magnitude <= 0.01 then
+	if usePartCFrame then
+		return targetPart.CFrame
+	end
+	local targetPos = predictedPosition(targetPart.Parent) or targetPart.Position
+	return CFrame.new(originalCFrame.Position, targetPos)
+end
+
+local function tryRedirectSilentAim(args)
+	if not Config.SilentAim or not inHitchance() then
 		return nil
 	end
-	return direction / magnitude
+	local targetPart = getSilentAimTargetPart()
+	if not targetPart then
+		return nil
+	end
+	syncMouseHitSpot(targetPart)
+
+	-- Actor Sync: Fire(caller, "ShootEvent", ammo, cframe, id, weapon, projectile, ...)
+	if args[2] == "ShootEvent" and isLocalSyncShooter(args[1]) and typeof(args[4]) == "CFrame" then
+		local redirected = aimCFrameAtTarget(args[4], targetPart, true)
+		if redirected then
+			args[4] = redirected
+			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+			debugEvent("Sync ShootEvent redirected")
+			return args
+		end
+	end
+
+	-- Vortex Sync:Fire(LocalPlayer, actorRef, cartridge, shotCFrame, velocity, weapon, hitables, extra)
+	if args[1] == LocalPlayer and typeof(args[4]) == "CFrame" then
+		local redirected = aimCFrameAtTarget(args[4], targetPart, false)
+		if redirected then
+			args[4] = redirected
+			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+			debugEvent("Sync Vortex shot redirected")
+			return args
+		end
+	end
+
+	-- Network:FireServer("Fire", weapon, clock, aimCFrame, suppressor, thirdPerson)
+	if args[1] == "Fire" and typeof(args[4]) == "CFrame" then
+		local redirected = aimCFrameAtTarget(args[4], targetPart, false)
+		if redirected then
+			args[4] = redirected
+			debugCounters.fireRewrites = debugCounters.fireRewrites + 1
+			debugEvent("FireServer Fire redirected")
+			return args
+		end
+	end
+
+	return nil
 end
 
 local function resetCFrameModifier(modifiers, name)
@@ -403,7 +460,6 @@ local function applyCombatModifiers()
 end
 
 local vortexEnv = nil
-local lastRestockAt = 0
 local installedNamecallHook = false
 local oldNamecall = nil
 
@@ -414,10 +470,6 @@ end
 local function clearAmmoCache()
 	ammoUpvalueCache = nil
 	fireRateCache = nil
-end
-
-local function clearAimCache()
-	aimUpvalueCache = nil
 end
 
 local function findUpvalueIndex(fn, targetName)
@@ -482,17 +534,6 @@ local function writeUpvalue(fn, index, value)
 		return false
 	end
 	return pcall(debug.setupvalue, fn, index, value)
-end
-
-local function syncWeaponStoredAmmo(weaponModule)
-	if not weaponModule then
-		return
-	end
-	local variables = weaponModule:FindFirstChild("Variables")
-	local stored = variables and variables:FindFirstChild("StoredAmmo")
-	if stored and stored:IsA("NumberValue") and stored.Value < INFINITE_RESERVE then
-		stored.Value = INFINITE_RESERVE
-	end
 end
 
 local function resolveAmmoUpvaluesHeuristic(fn)
@@ -623,39 +664,6 @@ local function getClipSizeFromWeapon(weaponModule, fallbackClip)
 	return clipSize
 end
 
-local function syncInventoryAmmoString(clipSize, weaponModule)
-	if not weaponModule or typeof(clipSize) ~= "number" or clipSize <= 0 then
-		return
-	end
-	local vortex = getVortex()
-	local inventory = vortex and vortex:FindFirstChild("Inventory")
-	if not inventory then
-		return
-	end
-	local entry = inventory:FindFirstChild(weaponModule.Name)
-	if entry and entry:IsA("StringValue") then
-		entry.Value = tostring(clipSize) .. ":" .. tostring(INFINITE_RESERVE)
-	end
-end
-
-local function applyInfiniteAmmoState(cache, clipSize, weaponModule)
-	local reserveOk = writeUpvalue(cache.fn, cache.reserve, INFINITE_RESERVE)
-	if typeof(clipSize) == "number" and clipSize > 0 then
-		local magOk = writeUpvalue(cache.fn, cache.mag, clipSize)
-		local chamberOk = true
-		if cache.chamber then
-			chamberOk = writeUpvalue(cache.fn, cache.chamber, true)
-		end
-		if not magOk or not reserveOk or not chamberOk then
-			debugCounters.ammoFailures = debugCounters.ammoFailures + 1
-		else
-			debugCounters.ammoApplies = debugCounters.ammoApplies + 1
-		end
-	end
-	syncWeaponStoredAmmo(weaponModule)
-	syncInventoryAmmoString(clipSize, weaponModule)
-end
-
 local function getVortexEnv()
 	if not hasGetsenv() then
 		return nil
@@ -664,7 +672,6 @@ local function getVortexEnv()
 	if not vortex or not vortex.Enabled then
 		vortexEnv = nil
 		clearAmmoCache()
-		clearAimCache()
 		return nil
 	end
 	if vortexEnv then
@@ -674,44 +681,41 @@ local function getVortexEnv()
 	if ok and typeof(env) == "table" then
 		vortexEnv = env
 		clearAmmoCache()
-		clearAimCache()
 		return env
 	end
 	return nil
 end
 
-local function maintainStoredAmmoValues()
-	local weapons = ReplicatedStorage:FindFirstChild("Weapons")
-	if not weapons then
-		return
+local function isStoredAmmoInstance(instance, property)
+	if property ~= "Value" or not Config.InfiniteAmmo then
+		return false
 	end
-	local primary = LocalPlayer:GetAttribute("Primary")
-	local secondary = LocalPlayer:GetAttribute("Secondary")
-	for _, weaponName in ipairs({ primary, secondary }) do
-		if typeof(weaponName) == "string" and weaponName ~= "" then
-			syncWeaponStoredAmmo(weapons:FindFirstChild(weaponName))
-		end
+	if tostring(instance) == "StoredAmmo" then
+		return true
 	end
+	return typeof(instance) == "Instance" and instance:IsA("NumberValue") and instance.Name == "StoredAmmo"
 end
 
-local function maintainInfiniteAmmo(skipHookInstall)
+local function runInfiniteAmmoRestock()
 	if not Config.InfiniteAmmo then
 		return
 	end
-	if not skipHookInstall then
-		ensureIndexHook()
+	local vortex = getVortex()
+	if not vortex or not vortex.Enabled then
+		return
+	end
+	if not hasGetsenv() then
+		return
 	end
 	local env = getVortexEnv()
-	if env and hasSetupvalue() then
-		local cache = resolveAmmoUpvalues(env)
-		if cache then
-			local weaponModule = readUpvalue(cache.fn, cache.weapon)
-			local clipSize = getClipSizeFromWeapon(weaponModule, readUpvalue(cache.fn, cache.clip))
-			applyInfiniteAmmoState(cache, clipSize, weaponModule)
-			return
+	if env and typeof(env.Restock) == "function" then
+		local ok = pcall(env.Restock)
+		if ok then
+			debugCounters.restockCalls = debugCounters.restockCalls + 1
+		else
+			debugCounters.ammoFailures = debugCounters.ammoFailures + 1
 		end
 	end
-	maintainStoredAmmoValues()
 end
 
 local function applyRapidFire()
@@ -753,24 +757,6 @@ local function applyCombatExtras()
 	applyRapidFire()
 end
 
-local function restockAmmo()
-	if not Config.InfiniteAmmo then
-		return
-	end
-	if hasSetupvalue() and ammoUpvalueCache then
-		return
-	end
-	local now = os.clock()
-	if now - lastRestockAt < 0.15 then
-		return
-	end
-	lastRestockAt = now
-	local env = getVortexEnv()
-	if env and typeof(env.Restock) == "function" then
-		pcall(env.Restock)
-	end
-end
-
 local ALLY_FORCEFIELD_COLOR = Color3.fromRGB(0, 102, 255)
 
 local function removeEnemyForcefields()
@@ -791,163 +777,6 @@ local function removeEnemyForcefields()
 			end
 		end
 	end
-end
-
-local function resolveAimUpvalues(env)
-	if aimUpvalueCache then
-		return aimUpvalueCache
-	end
-	local candidates = { "Fire", "AimAssist", "WeaponRender", "ProcessInput" }
-	for _, name in ipairs(candidates) do
-		local fn = env[name]
-		if typeof(fn) == "function" then
-			local targetIndex = findUpvalueIndex(fn, "v67")
-			if targetIndex then
-				aimUpvalueCache = {
-					fn = fn,
-					target = targetIndex,
-					strength = findUpvalueIndex(fn, "v50"),
-				}
-				return aimUpvalueCache
-			end
-		end
-	end
-	return nil
-end
-
-local function applyFireUpvalues()
-	if fireUpvaluesApplied or not cachedTargetPart or not hasSetupvalue() then
-		return
-	end
-	local cache = aimUpvalueCache
-	if not cache then
-		local env = getVortexEnv()
-		if not env then
-			return
-		end
-		cache = resolveAimUpvalues(env)
-	end
-	if not cache then
-		return
-	end
-	writeUpvalue(cache.fn, cache.target, cachedTargetPart)
-	if cache.strength then
-		writeUpvalue(cache.fn, cache.strength, 2)
-	end
-	fireUpvaluesApplied = true
-end
-
-local function pushSilentAimMouseSpot()
-	if not Config.SilentAim or not cachedTargetPosition then
-		return
-	end
-	_G.MouseHitSpot = cachedTargetPosition
-	getGenv().MouseHitSpot = cachedTargetPosition
-end
-
-local function rewriteSilentAimCFrame(originCFrame)
-	if not cachedTargetPosition or typeof(originCFrame) ~= "CFrame" then
-		return nil
-	end
-	if not inHitchance() then
-		return nil
-	end
-	pushSilentAimMouseSpot()
-	applyFireUpvalues()
-	local direction = getSilentAimDirection(originCFrame)
-	if not direction then
-		return nil
-	end
-	debugCounters.fireRewrites = debugCounters.fireRewrites + 1
-	return CFrame.new(originCFrame.Position, originCFrame.Position + direction)
-end
-
-local function trySilentAimLookVector(self)
-	if not Config.SilentAim or typeof(self) ~= "CFrame" or not cachedTargetPosition then
-		return nil
-	end
-	return getSilentAimDirection(self)
-end
-
-local function trySilentAimFireServer(args)
-	if not Config.SilentAim or not cachedTargetPosition then
-		return nil
-	end
-	if args[1] ~= "Fire" or typeof(args[4]) ~= "CFrame" then
-		return nil
-	end
-	local rewritten = rewriteSilentAimCFrame(args[4])
-	if not rewritten then
-		return nil
-	end
-	args[4] = rewritten
-	debugEvent("FireServer Fire redirected")
-	return args
-end
-
-local function ensureVortexHooks()
-	if not hasHookFunction() then
-		return
-	end
-	if not Config.SilentAim and not Config.InfiniteAmmo then
-		return
-	end
-	local env = getVortexEnv()
-	if not env then
-		return
-	end
-
-	if Config.InfiniteAmmo and typeof(env.MoveAction) == "function" and not hookedVortexMoveAction then
-		hookedVortexMoveAction = true
-		oldVortexMoveAction = hookfunction(env.MoveAction, wrapClosure(function(...)
-			if moveActionHookBusy then
-				return oldVortexMoveAction(...)
-			end
-			moveActionHookBusy = true
-			local results = { oldVortexMoveAction(...) }
-			moveActionHookBusy = false
-			if Config.InfiniteAmmo then
-				maintainInfiniteAmmo(true)
-				debugCounters.moveActionRestores = debugCounters.moveActionRestores + 1
-			end
-			return unpack(results)
-		end))
-		debugEvent("hooked Vortex MoveAction")
-	end
-
-	if typeof(env.Fire) == "function" and not hookedVortexFire then
-		hookedVortexFire = true
-		oldVortexFire = hookfunction(env.Fire, wrapClosure(function(...)
-			if Config.InfiniteAmmo then
-				maintainInfiniteAmmo(true)
-			end
-			if Config.SilentAim and cachedTargetPosition then
-				pushSilentAimMouseSpot()
-				applyFireUpvalues()
-			end
-			return oldVortexFire(...)
-		end))
-		debugEvent("hooked Vortex Fire")
-	end
-
-	if typeof(env.INVK) == "function" and not hookedVortexINVK then
-		hookedVortexINVK = true
-		oldVortexINVK = hookfunction(env.INVK, wrapClosure(function(action, ...)
-			local args = { ... }
-			if Config.SilentAim and action == "Fire" and typeof(args[3]) == "CFrame" then
-				local rewritten = rewriteSilentAimCFrame(args[3])
-				if rewritten then
-					args[3] = rewritten
-					debugEvent("INVK Fire redirected")
-					return oldVortexINVK(action, unpack(args))
-				end
-			end
-			return oldVortexINVK(action, ...)
-		end))
-		debugEvent("hooked Vortex INVK")
-	end
-
-	vortexHooksInstalled = hookedVortexFire or hookedVortexINVK or hookedVortexMoveAction
 end
 
 local function getAmmoDebugSnapshot()
@@ -985,13 +814,12 @@ local function dumpDebugReport()
 		"vortexEnv=" .. tostring(env ~= nil),
 		"indexHook=" .. tostring(installedIndexHook),
 		"namecallHook=" .. tostring(installedNamecallHook),
-		"vortexHooks=" .. tostring(vortexHooksInstalled) .. " fire=" .. tostring(hookedVortexFire) .. " invk=" .. tostring(hookedVortexINVK) .. " move=" .. tostring(hookedVortexMoveAction),
 		"silentAim=" .. tostring(Config.SilentAim) .. " infiniteAmmo=" .. tostring(Config.InfiniteAmmo),
 		"target=" .. tostring(closestTarget and closestTarget.Name or "none"),
 		"targetPos=" .. tostring(cachedTargetPosition),
 		"fireRewrites=" .. tostring(debugCounters.fireRewrites),
-		"ammoApplies=" .. tostring(debugCounters.ammoApplies) .. " ammoFailures=" .. tostring(debugCounters.ammoFailures),
-		"moveRestores=" .. tostring(debugCounters.moveActionRestores),
+		"restockCalls=" .. tostring(debugCounters.restockCalls),
+		"ammoFailures=" .. tostring(debugCounters.ammoFailures),
 	}
 	local ammo = getAmmoDebugSnapshot()
 	if ammo then
@@ -1046,12 +874,12 @@ local function runDebugSummary()
 		ammoText = string.format("mag=%s/%s reserve=%s chamber=%s", tostring(ammo.mag), tostring(ammo.clip), tostring(ammo.reserve), tostring(ammo.chamber))
 	end
 	warn(string.format(
-		"[GunfightArena:Debug] target=%s hooks(index=%s,namecall=%s,vortex=%s) rewrites=%d %s",
+		"[GunfightArena:Debug] target=%s hooks(index=%s,namecall=%s) rewrites=%d restocks=%d %s",
 		closestTarget and closestTarget.Name or "none",
 		tostring(installedIndexHook),
 		tostring(installedNamecallHook),
-		tostring(vortexHooksInstalled),
 		debugCounters.fireRewrites,
+		debugCounters.restockCalls,
 		ammoText
 	))
 end
@@ -1071,7 +899,7 @@ ensureIndexHook = function()
 	if installedIndexHook or not hasHookMetamethod() then
 		return
 	end
-	if not Config.SilentAim and not Config.InfiniteAmmo then
+	if not Config.InfiniteAmmo then
 		return
 	end
 	installedIndexHook = true
@@ -1084,15 +912,8 @@ ensureIndexHook = function()
 						return position
 					end
 				end
-			elseif index == "Value" and Config.InfiniteAmmo then
-				if typeof(self) == "Instance" and self:IsA("NumberValue") and self.Name == "StoredAmmo" then
-					return INFINITE_RESERVE
-				end
-			elseif index == "LookVector" and Config.SilentAim then
-				local direction = trySilentAimLookVector(self)
-				if direction then
-					return direction
-				end
+			elseif isStoredAmmoInstance(self, index) then
+				return STORED_AMMO_SPOOF
 			end
 			if oldIndex then
 				return oldIndex(self, index)
@@ -1121,9 +942,15 @@ ensureNamecallHook = function()
 			end
 			if Config.SilentAim then
 				local method = getnamecallmethod()
-				if method == "FireServer" then
+				if method == "Fire" and typeof(self) == "Instance" and self.Name == "Sync" then
 					local args = { ... }
-					local rewritten = trySilentAimFireServer(args)
+					local rewritten = tryRedirectSilentAim(args)
+					if rewritten then
+						return oldNamecall(self, unpack(rewritten))
+					end
+				elseif method == "FireServer" then
+					local args = { ... }
+					local rewritten = tryRedirectSilentAim(args)
 					if rewritten then
 						return oldNamecall(self, unpack(rewritten))
 					end
@@ -1405,10 +1232,8 @@ local function updateAim()
 		return
 	end
 	if not aimHooksReady then
-		ensureIndexHook()
 		ensureNamecallHook()
-		ensureVortexHooks()
-		aimHooksReady = installedIndexHook and (installedNamecallHook or hookedVortexINVK or not hasNamecallHook())
+		aimHooksReady = installedNamecallHook or not hasNamecallHook()
 	end
 	local now = os.clock()
 	if now - lastAimScanAt < AIM_SCAN_INTERVAL then
@@ -1418,12 +1243,6 @@ local function updateAim()
 	cachedAimOrigin = getAimOrigin()
 	closestTarget = getClosestTarget(Config.FOVRadius, cachedAimOrigin)
 	refreshAimSnapshot()
-	if not aimUpvalueCache then
-		local env = getVortexEnv()
-		if env then
-			resolveAimUpvalues(env)
-		end
-	end
 end
 
 local function getNames(folderName)
@@ -1467,8 +1286,6 @@ local function cleanup()
 	disconnectAll()
 	vortexEnv = nil
 	clearAmmoCache()
-	clearAimCache()
-	lastRestockAt = 0
 	MovementData.WalkSpeed = BASE_WALK_SPEED
 	MovementData.RunSpeed = BASE_RUN_SPEED
 	if fovCircle then
@@ -1502,8 +1319,8 @@ genv.__GunfightArenaUnload = cleanup
 if not hasDrawing() then
 	notify("Drawing API missing — ESP and FOV circle will be unavailable.", "Compatibility", 6)
 end
-if not hasHookMetamethod() then
-	notify("hookmetamethod missing — silent aim is unavailable.", "Compatibility", 6)
+if not hasHookMetamethod() or not hasNamecallHook() then
+	notify("hookmetamethod/getnamecallmethod missing — silent aim will be unavailable.", "Compatibility", 6)
 end
 
 UILib.create({
@@ -1617,13 +1434,11 @@ UILib.create({
 			applyCombatModifiers()
 		elseif key == "SilentAim" then
 			if value then
-				ensureIndexHook()
 				ensureNamecallHook()
-				ensureVortexHooks()
-				aimHooksReady = installedIndexHook and (installedNamecallHook or hookedVortexINVK or not hasNamecallHook())
+				aimHooksReady = installedNamecallHook or not hasNamecallHook()
 				lastAimScanAt = 0
-				if not hasHookMetamethod() and not hasHookFunction() then
-					notify("hookmetamethod/hookfunction missing — silent aim needs one for fire redirection.", "Compatibility", 6)
+				if not hasHookMetamethod() or not hasNamecallHook() then
+					notify("hookmetamethod/getnamecallmethod missing — silent aim needs both.", "Compatibility", 6)
 				end
 			else
 				closestTarget = nil
@@ -1632,12 +1447,12 @@ UILib.create({
 		elseif key == "InfiniteAmmo" then
 			if value then
 				ensureIndexHook()
-				maintainInfiniteAmmo()
-				ensureVortexHooks()
-				if not hasSetupvalue() and not hasGetsenv() then
-					notify("debug.setupvalue/getsenv missing — infinite ammo may not work on this executor.", "Compatibility", 6)
-				elseif not hasSetupvalue() then
-					notify("debug.setupvalue missing — using StoredAmmo spoof and Restock fallback only.", "Compatibility", 6)
+				runInfiniteAmmoRestock()
+				if not hasHookMetamethod() then
+					notify("hookmetamethod missing — StoredAmmo spoof will not work.", "Compatibility", 6)
+				end
+				if not hasGetsenv() then
+					notify("getsenv missing — Restock() loop will not work.", "Compatibility", 6)
 				end
 			else
 				vortexEnv = nil
@@ -1657,11 +1472,7 @@ UILib.create({
 })
 
 table.insert(sessionConns, RunService.Heartbeat:Connect(function()
-	if Config.InfiniteAmmo then
-		maintainInfiniteAmmo(true)
-	end
 	applyCombatExtras()
-	ensureVortexHooks()
 	runDebugSummary()
 end))
 
@@ -1669,12 +1480,9 @@ table.insert(sessionConns, RunService.RenderStepped:Connect(function()
 	Camera = workspace.CurrentCamera
 	updateFovCircle()
 	updateAim()
-	if Config.SilentAim then
-		pushSilentAimMouseSpot()
-	end
 	applyCombatModifiers()
 	applyMovementSpeed()
-	restockAmmo()
+	runInfiniteAmmoRestock()
 	removeEnemyForcefields()
 	updateVisuals()
 end))

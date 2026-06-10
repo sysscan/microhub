@@ -6,7 +6,7 @@ Script hub for Roblox — auto-loads the right script per game.
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.16"
+local MIN_LOADER = "1.6.18"
 
 local function okStatus(res)
 	if typeof(res) ~= "table" then
