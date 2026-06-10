@@ -727,6 +727,9 @@ local installedInvkHook = false
 local invkHookHostFn = nil
 local invkHookIndex = nil
 local originalInvk = nil
+local firePathKind = nil
+local networkClient = nil
+local originalNetworkFireServer = nil
 local oldNamecall = nil
 
 local function hasSetupvalue()
@@ -802,35 +805,190 @@ local function writeUpvalue(fn, index, value)
 	return pcall(debug.setupvalue, fn, index, value)
 end
 
-local function findInvkUpvalue(env)
+local VORTEX_ENV_SCAN_FUNCTIONS = {
+	"Fire",
+	"Restock",
+	"Reload",
+	"WeaponRender",
+	"ProcessInput",
+	"FireMelee",
+	"MoveAction",
+	"GetAmmoData",
+}
+
+local function isNetworkClient(value)
+	return typeof(value) == "table"
+		and typeof(value.FireServer) == "function"
+		and (typeof(value.OnEvent) == "function" or typeof(value.InvokeServer) == "function")
+end
+
+local function functionUpvalueReferences(fn, target)
+	if typeof(fn) ~= "function" or target == nil or not hasSetupvalue() then
+		return false
+	end
+	for index = 1, 256 do
+		local ok, _, value = pcall(debug.getupvalue, fn, index)
+		if not ok then
+			break
+		end
+		if value == target then
+			return true
+		end
+	end
+	return false
+end
+
+local function looksLikeInvkFunction(fn, networkRef)
+	if typeof(fn) ~= "function" then
+		return false
+	end
+	if networkRef and functionUpvalueReferences(fn, networkRef) then
+		return true
+	end
+	if debug and typeof(debug.getconstants) == "function" then
+		local ok, constants = pcall(debug.getconstants, fn)
+		if ok and typeof(constants) == "table" then
+			for _, constant in ipairs(constants) do
+				if constant == "FireServer" then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function findNetworkClientFromEnv(env)
 	if not env then
 		return nil
 	end
-	local candidates = { "Fire", "Restock", "Reload", "WeaponRender", "ProcessInput", "FireMelee" }
-	for _, name in ipairs(candidates) do
+	for _, name in ipairs(VORTEX_ENV_SCAN_FUNCTIONS) do
 		local fn = env[name]
 		if typeof(fn) == "function" then
-			local index = findUpvalueIndex(fn, "INVK")
-			if index then
-				return fn, index
+			for index = 1, 256 do
+				local ok, _, value = pcall(debug.getupvalue, fn, index)
+				if not ok then
+					break
+				end
+				if isNetworkClient(value) then
+					return value, fn, index, name
+				end
 			end
 		end
 	end
 	return nil
 end
 
+local function findInvkFunctionFromEnv(env, networkRef)
+	if not env then
+		return nil
+	end
+	for _, name in ipairs(VORTEX_ENV_SCAN_FUNCTIONS) do
+		local fn = env[name]
+		if typeof(fn) == "function" then
+			local namedIndex = findUpvalueIndex(fn, "INVK")
+			if namedIndex then
+				return fn, namedIndex, name
+			end
+			for index = 1, 256 do
+				local ok, _, value = pcall(debug.getupvalue, fn, index)
+				if not ok then
+					break
+				end
+				if looksLikeInvkFunction(value, networkRef) then
+					return fn, index, name
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function findInvkUpvalue(env)
+	return findInvkFunctionFromEnv(env, networkClient or findNetworkClientFromEnv(env))
+end
+
 local function restoreInvkHook()
+	if networkClient and originalNetworkFireServer then
+		networkClient.FireServer = originalNetworkFireServer
+	end
 	if installedInvkHook and invkHookHostFn and invkHookIndex and originalInvk then
 		writeUpvalue(invkHookHostFn, invkHookIndex, originalInvk)
 	end
 	installedInvkHook = false
+	firePathKind = nil
+	networkClient = nil
+	originalNetworkFireServer = nil
 	invkHookHostFn = nil
 	invkHookIndex = nil
 	originalInvk = nil
 end
 
+local function hookNetworkFireServer(client)
+	if typeof(client.FireServer) ~= "function" then
+		return false
+	end
+	if networkClient == client and originalNetworkFireServer and installedInvkHook then
+		return true
+	end
+	restoreInvkHook()
+	networkClient = client
+	originalNetworkFireServer = client.FireServer
+	client.FireServer = function(self, eventName, ...)
+		local packed = table.pack(...)
+		if eventName == "Fire" then
+			if AgentDebugger.shouldTrace() then
+				AgentDebugger.recordInvkFire(packed)
+			end
+			if Config.EnableSilentAim and isInvkFirePayload(packed) then
+				tryRedirectInvkFire(packed)
+			end
+		end
+		return originalNetworkFireServer(self, eventName, table.unpack(packed, 1, packed.n))
+	end
+	installedInvkHook = true
+	firePathKind = "network"
+	debugEvent("hooked Vortex Network.FireServer")
+	return true
+end
+
+local function hookInvkUpvalue(hostFn, invkIndex)
+	local currentInvk = readUpvalue(hostFn, invkIndex)
+	if typeof(currentInvk) ~= "function" then
+		return false
+	end
+	if originalInvk and currentInvk == originalInvk and installedInvkHook then
+		return true
+	end
+	originalInvk = currentInvk
+	invkHookHostFn = hostFn
+	invkHookIndex = invkIndex
+	local function invkRedirect(eventName, ...)
+		local packed = table.pack(...)
+		if eventName == "Fire" then
+			if AgentDebugger.shouldTrace() then
+				AgentDebugger.recordInvkFire(packed)
+			end
+			if Config.EnableSilentAim and isInvkFirePayload(packed) then
+				tryRedirectInvkFire(packed)
+			end
+		end
+		return originalInvk(eventName, table.unpack(packed, 1, packed.n))
+	end
+	if not writeUpvalue(hostFn, invkIndex, invkRedirect) then
+		originalInvk = nil
+		invkHookHostFn = nil
+		invkHookIndex = nil
+		return false
+	end
+	installedInvkHook = true
+	firePathKind = "invk"
+	debugEvent("hooked Vortex INVK upvalue")
+	return true
+end
+
 local function silentAimHooksReady()
-	return installedInvkHook or installedNamecallHook
+	return installedInvkHook
 end
 
 local function resolveAmmoUpvaluesHeuristic(fn)
@@ -1153,7 +1311,8 @@ local function probeVortexInventory()
 		envFunctions = envKeys,
 		hasRestock = env ~= nil and typeof(env.Restock) == "function",
 		hasFire = env ~= nil and typeof(env.Fire) == "function",
-		hasInvkUpvalue = env ~= nil and findInvkUpvalue(env) ~= nil,
+		hasNetworkClient = env ~= nil and findNetworkClientFromEnv(env) ~= nil,
+		hasInvkUpvalue = env ~= nil and findInvkFunctionFromEnv(env, findNetworkClientFromEnv(env)) ~= nil,
 	}
 end
 
@@ -1231,8 +1390,12 @@ local function buildFeatureVerdicts(report)
 			"missing sUNC: " .. table.concat(report.sunc.groups.silentAim.missing, ", "),
 			"Remove silent aim or gate behind capability check"
 		)
-	elseif not report.hooks.invkHook and not report.hooks.namecallHook then
-		add("EnableSilentAim", "REWRITE", "INVK/namecall hooks not installed", "Ensure Vortex is enabled and getsenv resolves INVK upvalue")
+	elseif not report.hooks.invkHook then
+		if report.vortex.hasNetworkClient then
+			add("EnableSilentAim", "REWRITE", "Network client found but hook not installed", "Retry ensureInvkHook after Vortex enables")
+		else
+			add("EnableSilentAim", "REWRITE", "Vortex Network client not found in upvalues", "Scan Fire/Restock closures for Network table")
+		end
 	elseif report.runtime.namecallStats.sync_fire_total == 0 and report.runtime.namecallStats.invk_fire_total == 0 and report.runtime.namecallStats.fireserver_total == 0 then
 		add(
 			"EnableSilentAim",
@@ -1331,6 +1494,7 @@ local function buildAgentReport()
 			indexHook = installedIndexHook,
 			namecallHook = installedNamecallHook,
 			invkHook = installedInvkHook,
+			firePathKind = firePathKind,
 			aimHooksReady = aimHooksReady,
 		},
 		config = {
@@ -1369,9 +1533,9 @@ local function printAgentReport(report)
 	warn("[GFA_AGENT_SUMMARY]")
 	warn("executor=" .. tostring(report.sunc.executor))
 	warn(string.format(
-		"silentAim_sunc=%s invk_hook=%s target_inFov=%d rewrites=%d",
+		"silentAim_sunc=%s fire_path=%s target_inFov=%d rewrites=%d",
 		tostring(report.sunc.groups.silentAim.ready),
-		tostring(report.hooks.invkHook),
+		tostring(report.hooks.firePathKind or (report.hooks.invkHook and "active" or "none")),
 		report.target.inFov,
 		report.runtime.fireRewrites
 	))
@@ -1541,7 +1705,10 @@ ensureNamecallHook = function()
 end
 
 ensureInvkHook = function()
-	if installedInvkHook or not hasSetupvalue() or not hasGetsenv() then
+	if installedInvkHook then
+		return
+	end
+	if not hasGetsenv() then
 		return
 	end
 	if not Config.EnableSilentAim and not AgentDebugger.shouldTrace() then
@@ -1551,45 +1718,16 @@ ensureInvkHook = function()
 	if not env then
 		return
 	end
-	local hostFn, invkIndex = findInvkUpvalue(env)
-	if not hostFn or not invkIndex then
+	local client = findNetworkClientFromEnv(env)
+	if client and hookNetworkFireServer(client) then
 		return
 	end
-	local currentInvk = readUpvalue(hostFn, invkIndex)
-	if typeof(currentInvk) ~= "function" then
+	if not hasSetupvalue() then
 		return
 	end
-	if originalInvk and currentInvk == originalInvk then
-		installedInvkHook = true
+	local hostFn, invkIndex = findInvkFunctionFromEnv(env, client)
+	if hostFn and invkIndex and hookInvkUpvalue(hostFn, invkIndex) then
 		return
-	end
-	if originalInvk and currentInvk ~= originalInvk and installedInvkHook then
-		restoreInvkHook()
-		currentInvk = readUpvalue(hostFn, invkIndex)
-	end
-	originalInvk = currentInvk
-	invkHookHostFn = hostFn
-	invkHookIndex = invkIndex
-	local function invkRedirect(eventName, ...)
-		local packed = table.pack(...)
-		if eventName == "Fire" then
-			if AgentDebugger.shouldTrace() then
-				AgentDebugger.recordInvkFire(packed)
-			end
-			if Config.EnableSilentAim and isInvkFirePayload(packed) then
-				tryRedirectInvkFire(packed)
-			end
-		end
-		return originalInvk(eventName, table.unpack(packed, 1, packed.n))
-	end
-	if writeUpvalue(hostFn, invkIndex, invkRedirect) then
-		installedInvkHook = true
-		debugEvent("hooked Vortex INVK")
-	else
-		originalInvk = nil
-		invkHookHostFn = nil
-		invkHookIndex = nil
-		warn("[GunfightArena] INVK upvalue hook failed")
 	end
 end
 
@@ -1859,9 +1997,9 @@ local function updateAim()
 		clearAimSnapshot()
 		return
 	end
+	ensureInvkHook()
 	if not aimHooksReady then
 		ensureNamecallHook()
-		ensureInvkHook()
 		aimHooksReady = silentAimHooksReady()
 	end
 	local now = os.clock()
@@ -2074,10 +2212,10 @@ UILib.create({
 				ensureInvkHook()
 				aimHooksReady = silentAimHooksReady()
 				lastAimScanAt = 0
-				if not hasGetsenv() or not hasSetupvalue() then
-					notify("getsenv/debug.setupvalue missing — silent aim needs INVK upvalue hook.", "Compatibility", 6)
+				if not hasGetsenv() then
+					notify("getsenv missing — silent aim needs Vortex env access.", "Compatibility", 6)
 				elseif not installedInvkHook then
-					notify("INVK hook pending — wait for Vortex to load, then toggle Silent Aim again.", "Compatibility", 6)
+					notify("Fire path hook pending — Vortex Network client not resolved yet.", "Compatibility", 6)
 				end
 			else
 				closestTarget = nil
