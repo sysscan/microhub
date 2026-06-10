@@ -42,7 +42,8 @@ local Config = {
 
 -- Server sets LocalPlayer._Y while tracking vertical movement; flying far above it triggers removal.
 local FLY_AC_MAX_ABOVE_Y = 18
-local GAME_BUILD = "9-fly-before-bypass"
+local GAME_BUILD = "10-fly-step-ref"
+warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
 local BOOST_JUMP_POWER = Config.JumpPower
@@ -504,13 +505,20 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 	return true
 end
 
+local genv = getgenv and getgenv() or _G
+genv.__ThaBronx3FlyStep = applyFlyStep
+bypassSession.flyStep = applyFlyStep
+
 local function applyFly(deltaTime)
 	if not Config.Fly or Config.MovementBypass then
 		return
 	end
 	local root = getRootPart()
 	local humanoid = getHumanoid()
-	applyFlyStep(root, humanoid, deltaTime, false)
+	local flyStep = bypassSession.flyStep or genv.__ThaBronx3FlyStep
+	if typeof(flyStep) == "function" then
+		flyStep(root, humanoid, deltaTime, false)
+	end
 end
 
 local function releaseRootPart(rootPart)
@@ -531,6 +539,11 @@ local function teardownMovementBypass()
 	releaseRootPart(bypassSession.rootPart)
 	bypassSession.rootPart = nil
 	bypassSession.character = nil
+	bypassSession.flyStep = nil
+end
+
+genv.__ThaBronx3Unload = function()
+	teardownMovementBypass()
 end
 
 local function rootIsLive(rootPart, character)
@@ -588,7 +601,10 @@ local function applyMovementBypass(character)
 
 		local flyActive = false
 		if Config.Fly then
-			flyActive = applyFlyStep(root, humanoid, deltaTime, true)
+			local flyStep = bypassSession.flyStep or genv.__ThaBronx3FlyStep
+			if typeof(flyStep) == "function" then
+				flyActive = flyStep(root, humanoid, deltaTime, true)
+			end
 		elseif humanoid.PlatformStand then
 			humanoid.PlatformStand = false
 		end
@@ -1815,6 +1831,8 @@ local HubUI = UILib.create({
 			applyStudioFarm()
 		elseif key == "ACDebug" then
 			applyAcDebug()
+		elseif key == "Fly" then
+			refreshMovementBypass()
 		end
 	end,
 })

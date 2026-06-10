@@ -174,6 +174,12 @@ function Runtime.compile(source, chunkName)
 end
 
 function Runtime.run(path, opts)
+	opts = opts or {}
+	local expected = opts.version or Runtime.expectedVersion(path)
+	if typeof(expected) == "string" and expected ~= "" then
+		opts.forceRemote = opts.forceRemote ~= false
+		opts.version = expected
+	end
 	local source, origin = Runtime.fetch(path, opts)
 	local fn = Runtime.compile(source, path)
 	local ok, runErr = pcall(fn)
@@ -220,6 +226,13 @@ function Runtime.unloadAll()
 	genv.__Bronx3ACDebug = nil
 	genv.__Bronx3ACDebugAutoStart = nil
 	genv.__Bronx3ACDebugContext = nil
+
+	local unloadGame = genv.__ThaBronx3Unload
+	if typeof(unloadGame) == "function" then
+		pcall(unloadGame)
+	end
+	genv.__ThaBronx3Unload = nil
+	genv.__ThaBronx3FlyStep = nil
 end
 
 function Runtime.loadModule(path, id, opts)

@@ -280,7 +280,15 @@ local success, err = pcall(function()
 	)
 	notify(hubName, (wasLoaded and "Reloading " or "Loading ") .. (entry.name or "script") .. "...")
 	ensureUILibrary(hub)
-	hub.run(entry.module)
+	local gameOrigin = hub.run(entry.module, { forceRemote = true })
+	local gameBuild = hub.expectedVersion and hub.expectedVersion(entry.module)
+	warn(
+		"[MicroHub]",
+		entry.module,
+		"from",
+		tostring(gameOrigin),
+		gameBuild and ("(need " .. gameBuild .. ")") or ""
+	)
 	shared[LOADED_KEY] = hubName
 	notify(hubName, (entry.name or "Game") .. " loaded (v" .. tostring(config.Version) .. ")")
 end)
