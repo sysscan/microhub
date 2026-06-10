@@ -405,6 +405,8 @@ local flyBypassState = {
 	acGroundY = LocalPlayer:GetAttribute("_Y"),
 }
 
+local applyFlyStep
+
 local function releaseRootPart(rootPart)
 	if rootPart and rootPart.Parent then
 		rootPart.Anchored = false
@@ -1343,7 +1345,7 @@ local function clampFlyMoveForAc(root, move)
 end
 
 -- Returns true when fly input is actively driving movement this frame.
-local function applyFlyStep(root, humanoid, deltaTime, withBypass)
+applyFlyStep = function(root, humanoid, deltaTime, withBypass)
 	if not Config.Fly or not root or not humanoid or humanoid.Health <= 0 then
 		return false
 	end
