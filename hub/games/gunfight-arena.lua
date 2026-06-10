@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "22-sa-debug-combat"
+local GAME_BUILD = "23-sa-live"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -23,6 +23,7 @@ local Config = {
 	AimSmooth = 35,
 	AimPart = "Head",
 	AimFOVCircle = false,
+	SilentAim = false,
 	AimDebugger = false,
 	ESP = true,
 	ESPAllies = true,
@@ -64,6 +65,7 @@ local aimFovSq = Config.AimFOV * Config.AimFOV
 local aimFovCircle: any = nil
 local stickyChar: Model? = nil
 local stickyNeedsRelease = false
+local combatTargetPart: BasePart? = nil
 
 local function setAimFOV(value: number)
 	Config.AimFOV = math.clamp(math.floor(value), 20, 500)
@@ -386,27 +388,26 @@ local function aimAlpha(dt: number): number
 	return 1 - math.exp(-(72 * (1 - t) ^ 1.45 + 1.8) * dt)
 end
 
-local function updateAimbot(dt: number)
-	local origin = aimOrigin()
+local function combatHoldActive(): boolean
+	return not Config.AimHold or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+end
 
-	if aimFovCircle then
-		aimFovCircle.Position = origin
-		aimFovCircle.Radius = Config.AimFOV
-		aimFovCircle.Visible = Config.Aimbot and Config.AimFOVCircle
-	end
+local function combatAimWanted(): boolean
+	return Config.Aimbot or Config.SilentAim
+end
 
-	local holding = not Config.AimHold or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-	if not Config.Aimbot or not holding then
+local function resolveAimTarget(origin: Vector2): BasePart?
+	if not combatHoldActive() then
 		stickyChar = nil
 		stickyNeedsRelease = false
-		return
+		return nil
 	end
 
 	local part: BasePart? = nil
 
 	if Config.AimSticky then
 		if stickyNeedsRelease then
-			return
+			return nil
 		end
 		part = stickyAimPart()
 		if not part then
@@ -416,7 +417,7 @@ local function updateAimbot(dt: number)
 				stickyChar = charFromPart(part)
 			else
 				stickyNeedsRelease = true
-				return
+				return nil
 			end
 		end
 	else
@@ -426,10 +427,37 @@ local function updateAimbot(dt: number)
 	end
 
 	if not part or not part.Parent then
+		return nil
+	end
+	return part
+end
+
+local function updateCombatAim(dt: number)
+	local origin = aimOrigin()
+
+	if aimFovCircle then
+		aimFovCircle.Position = origin
+		aimFovCircle.Radius = Config.AimFOV
+		aimFovCircle.Visible = Config.Aimbot and Config.AimFOVCircle
+	end
+
+	combatTargetPart = nil
+	if combatAimWanted() and combatHoldActive() then
+		combatTargetPart = resolveAimTarget(origin)
+	elseif not combatAimWanted() then
+		stickyChar = nil
+		stickyNeedsRelease = false
+	end
+
+	if Config.SilentAim and combatTargetPart and isThirdPerson() then
+		setMouseHit(combatTargetPart.Position)
+	end
+
+	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
 		return
 	end
 
-	local targetPos = part.Position
+	local targetPos = combatTargetPart.Position
 	local alpha = aimAlpha(dt)
 
 	if isThirdPerson() then
@@ -489,7 +517,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "22-sa-debug-combat"
+local DBG_HOOK_BUILD = "23-sa-live"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -511,6 +539,7 @@ local voltGetgc = dbgVolt("getgc")
 local voltFiltergc = dbgVolt("filtergc")
 local voltCheckcaller = dbgVolt("checkcaller")
 local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
+local combatSyncHooked: { [Instance]: boolean } = {}
 local dbgNextOverlayAt = 0
 local dbgNextSyncScan = 0
 local dbgNextFlameScan = 0
@@ -670,6 +699,10 @@ end
 
 local function dbgHooksActive(): boolean
 	return dbg.networkHooked
+end
+
+local function combatHooksWanted(): boolean
+	return Config.SilentAim or Config.AimDebugger
 end
 
 local function dbgTblGet(tbl: any, key: string): any
@@ -1016,11 +1049,17 @@ local function dbgHookNetworkApi()
 	local original: (...any) -> ...any
 	local ok = pcall(function()
 		original = voltHookfunction(target, dbgWrapHook(function(self, eventName, ...)
-			if Config.AimDebugger and dbgFromGame() then
-				dbgMaybeBindRemote(self)
-				dbgRecordNetworkEvent(eventName, { ... })
+			local payload = { ... }
+			if dbgFromGame() then
+				if Config.SilentAim and eventName == "Fire" then
+					payload = saRewriteFirePayload(payload)
+				end
+				if Config.AimDebugger then
+					dbgMaybeBindRemote(self)
+					dbgRecordNetworkEvent(eventName, payload)
+				end
 			end
-			return original(self, eventName, ...)
+			return original(self, eventName, table.unpack(payload))
 		end))
 	end)
 	if not ok or typeof(original) ~= "function" then
@@ -1034,18 +1073,22 @@ local function dbgHookNetworkApi()
 	dbg.networkHooked = true
 	dbg.hooksReady = true
 	dbg.status = "Network.FireServer hooked"
-	dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
+	if Config.AimDebugger then
+		dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
+	end
 end
 
 local function dbgStartHookWorker()
-	if dbgHookWorkerActive or dbgHooksActive() or not Config.AimDebugger then
+	if dbgHookWorkerActive or dbgHooksActive() or not combatHooksWanted() then
 		return
 	end
-	dbgPrintCaps()
+	if Config.AimDebugger then
+		dbgPrintCaps()
+	end
 	dbgHookWorkerActive = true
 	task.spawn(function()
 		local attempts = 0
-		while Config.AimDebugger and not dbgHooksActive() do
+		while combatHooksWanted() and not dbgHooksActive() do
 			attempts += 1
 			dbgHookNetworkApi()
 			if dbgHooksActive() then
@@ -1085,8 +1128,49 @@ local function dbgOnSyncFire(args: { any })
 	dbgLog("Sync", string.format("#%d %s %s", dbg.syncCount, dbg.lastSyncWeapon, dbgShortCf(shotCf)), 2)
 end
 
-local function dbgHookSync()
-	if not Config.AimDebugger or dbg.syncBound > 0 then
+local function combatInstallSyncHook(sync: BindableEvent)
+	if combatSyncHooked[sync] then
+		return
+	end
+
+	local fireMethod = sync.Fire
+	if typeof(voltHookfunction) == "function" and typeof(fireMethod) == "function" then
+		local original: (...any) -> ...any
+		local ok = pcall(function()
+			original = voltHookfunction(fireMethod, dbgWrapHook(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+				if dbgFromGame() then
+					if Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
+						a4 = saRewriteSyncShot(a4)
+					end
+					if Config.AimDebugger then
+						dbgOnSyncFire({ a1, a2, a3, a4, a5, a6, a7, a8 })
+					end
+				end
+				return original(self, a1, a2, a3, a4, a5, a6, a7, a8)
+			end))
+		end)
+		if ok and typeof(original) == "function" then
+			combatSyncHooked[sync] = true
+			dbg.syncBound += 1
+			local path = sync:GetFullName()
+			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
+			return
+		end
+	end
+
+	if Config.AimDebugger and not dbgSyncConns[sync] then
+		dbgSyncConns[sync] = sync.Event:Connect(function(...)
+			dbgOnSyncFire({ ... })
+		end)
+		combatSyncHooked[sync] = true
+		dbg.syncBound += 1
+		local path = sync:GetFullName()
+		dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
+	end
+end
+
+local function combatHookSync()
+	if not combatHooksWanted() then
 		return
 	end
 
@@ -1102,13 +1186,8 @@ local function dbgHookSync()
 	end
 
 	for _, desc in playerScripts:GetDescendants() do
-		if desc.Name == "Sync" and desc:IsA("BindableEvent") and not dbgSyncConns[desc] then
-			dbgSyncConns[desc] = desc.Event:Connect(function(...)
-				dbgOnSyncFire({ ... })
-			end)
-			dbg.syncBound += 1
-			local path = desc:GetFullName()
-			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
+		if desc.Name == "Sync" and desc:IsA("BindableEvent") then
+			combatInstallSyncHook(desc)
 		end
 	end
 end
@@ -1139,6 +1218,29 @@ local function dbgViewModelFlame(): BasePart?
 
 	dbgCachedFlame = nil
 	return nil
+end
+
+local function saRewriteFirePayload(payload: { any }): { any }
+	local part = combatTargetPart
+	if not part or not Config.SilentAim or not combatHoldActive() then
+		return payload
+	end
+	local flame = dbgViewModelFlame()
+	local serverCf = dbgMaybeDecode(payload[3])
+	if typeof(serverCf) ~= "CFrame" then
+		return payload
+	end
+	local origin = if flame then flame.Position else serverCf.Position
+	payload[3] = CFrame.new(origin, part.Position)
+	return payload
+end
+
+local function saRewriteSyncShot(shotCf: CFrame): CFrame
+	local part = combatTargetPart
+	if not part or not Config.SilentAim or not combatHoldActive() then
+		return shotCf
+	end
+	return CFrame.new(shotCf.Position, part.Position)
 end
 
 local function dbgAngleTo(origin: Vector3, look: Vector3, target: Vector3): number
@@ -1180,14 +1282,17 @@ local function dbgHideOverlay()
 end
 
 local function dbgUpdate()
+	if combatHooksWanted() then
+		dbgStartHookWorker()
+		combatHookSync()
+	end
+
 	if not Config.AimDebugger then
 		dbgHideOverlay()
 		return
 	end
 
 	dbgEnsureOverlay()
-	dbgStartHookWorker()
-	dbgHookSync()
 
 	local now = os.clock()
 	if now < dbgNextOverlayAt then
@@ -1196,7 +1301,7 @@ local function dbgUpdate()
 	dbgNextOverlayAt = now + DBG_OVERLAY_INTERVAL
 
 	local origin = aimOrigin()
-	local part = closestAimPart(origin)
+	local part = combatTargetPart or closestAimPart(origin)
 	local targetNameStr = if part and part.Parent then part.Parent.Name else "—"
 	local mouseHit = _G.MouseHitSpot
 	local mouseHitStr = if typeof(mouseHit) == "Vector3"
@@ -1553,6 +1658,16 @@ UILib.create({
 			label = "Silent Aim",
 			sections = {
 				{
+					title = "Silent Aim",
+					items = {
+						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
+						{
+							type = "hint",
+							text = "Redirects Fire + Sync shots. Uses Combat team check, hold RMB, FOV, bone, sticky.",
+						},
+					},
+				},
+				{
 					title = "Debug",
 					items = {
 						{ type = "toggle", key = "AimDebugger", label = "Debugger", hud = "SA Debug" },
@@ -1590,6 +1705,6 @@ RunService.RenderStepped:Connect(function()
 	updateESP()
 	dbgUpdate()
 end)
-RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateAimbot)
+RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateCombatAim)
 
 print("[MicroHub] Gunfight Arena", GAME_BUILD, "— Drawing:", canDraw)
