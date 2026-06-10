@@ -9,7 +9,7 @@ Loads game scripts by `game.PlaceId`.
 ```lua
 getgenv().HUB_USE_LOCAL = false
 getgenv().HUB_UI_LOCAL = false
-local RELEASE, MIN_LOADER = "v1.4.3", 9
+local RELEASE, MIN_LOADER = "v1.4.4", 9
 local bust = os.time() .. "_" .. math.random(1e5, 1e9)
 local mirrors = {
 	"https://cdn.jsdelivr.net/gh/sysscan/microhub@" .. RELEASE .. "/hub/loader.lua",
@@ -50,7 +50,6 @@ hub/
 ├── config.lua      # Hub version
 ├── manifest.lua    # PlaceId → game module
 ├── lib/ui.lua      # Shared Drawing UI v2 (tabs, sliders, selects, colors)
-├── tools/          # Optional modules (AC debug)
 └── games/          # Per-game scripts
 ```
 
@@ -92,7 +91,3 @@ UILib.create({
 1. Add `games/my-game.lua`
 2. Register in `manifest.lua`
 3. Push to GitHub
-
-## Tha Bronx 3 AC debug
-
-Enable **AC Debug** in UTILITIES. Logs: `hub/tools/bronx3-ac-debug/logs/`

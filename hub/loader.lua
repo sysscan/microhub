@@ -8,7 +8,7 @@
 ]]
 
 local LOADER_VERSION = 9
-local HUB_RELEASE = "v1.4.3"
+local HUB_RELEASE = "v1.4.4"
 local LOADED_KEY = "__MicroHubLoaded"
 local UI_LIB_KEY = "__MicroHubUILib"
 

@@ -6,7 +6,7 @@
 getgenv().HUB_USE_LOCAL = false
 getgenv().HUB_UI_LOCAL = false
 
-local RELEASE = "v1.4.3"
+local RELEASE = "v1.4.4"
 local MIN_LOADER = 9
 local bust = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999999))
 

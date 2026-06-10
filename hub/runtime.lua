@@ -32,7 +32,7 @@ local function basesFromConfig(config)
 	if typeof(config.Repository) == "string" and config.Repository ~= "" then
 		return { config.Repository:gsub("/+$", "") }
 	end
-	return { "https://cdn.jsdelivr.net/gh/sysscan/microhub@v1.4.3/hub" }
+	return { "https://cdn.jsdelivr.net/gh/sysscan/microhub@v1.4.4/hub" }
 end
 
 function Runtime.init(config)
@@ -154,9 +154,6 @@ function Runtime.unloadModule(id)
 		pcall(mod.stop)
 	end
 	Runtime._modules[id] = nil
-	if id == "bronx3-ac-debug" then
-		getGenv().__Bronx3ACDebug = nil
-	end
 end
 
 function Runtime.unloadAll()
@@ -165,14 +162,6 @@ function Runtime.unloadAll()
 	end
 
 	local genv = getGenv()
-	local legacy = genv.__Bronx3ACDebug
-	if typeof(legacy) == "table" and typeof(legacy.stop) == "function" then
-		pcall(legacy.stop)
-	end
-	genv.__Bronx3ACDebug = nil
-	genv.__Bronx3ACDebugAutoStart = nil
-	genv.__Bronx3ACDebugContext = nil
-
 	local unloadGame = genv.__ThaBronx3Unload
 	if typeof(unloadGame) == "function" then
 		pcall(unloadGame)
@@ -192,7 +181,7 @@ function Runtime.loadModule(path, id)
 		error("run " .. path .. ": " .. tostring(result), 0)
 	end
 
-	local mod = getGenv().__Bronx3ACDebug or result
+	local mod = result
 	if typeof(mod) ~= "table" then
 		error(path .. " must return a table module", 0)
 	end

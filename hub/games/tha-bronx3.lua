@@ -32,7 +32,6 @@ local Config = {
 	NoFallRagdoll = false,
 	FullRagdoll = false,
 	StudioFarm = false,
-	ACDebug = false,
 	ShowHUD = true,
 	WalkSpeed = 32,
 	JumpPower = 60,
@@ -46,7 +45,7 @@ local FLY_AC_MAX_ABOVE_Y = 10
 local FLY_BYPASS_MAX_SPEED = 16
 local FLY_BYPASS_MAX_STEP = 0.32
 local FLY_AC_MAX_BELOW_Y = 2
-local GAME_BUILD = "17-ui-v2"
+local GAME_BUILD = "18-no-ac-debug"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -324,93 +323,6 @@ local function readLastAcStatus()
 end
 
 -- ---------------------------------------------------------------------------
--- AC debug logger (hub/tools/bronx3-ac-debug.lua → Volt workspace file)
--- ---------------------------------------------------------------------------
-
-local acDebugModule = nil
-
-local function getAcDebugContext()
-	return {
-		fly = Config.Fly == true,
-		acBypass = Config.MovementBypass == true,
-		speedBoost = Config.SpeedBoost == true,
-		flySpeed = Config.FlySpeed,
-		walkSpeed = Config.WalkSpeed,
-	}
-end
-
-local function getMicroHub()
-	local genv = getgenv and getgenv() or _G
-	return genv.__MicroHub
-end
-
-local function loadAcDebugModule(forceRefresh)
-	local hub = getMicroHub()
-	if typeof(hub) ~= "table" or typeof(hub.loadModule) ~= "function" then
-		warn("[ThaBronx3] MicroHub runtime missing — re-run the loader")
-		return nil
-	end
-
-	if not forceRefresh and acDebugModule then
-		return acDebugModule
-	end
-
-	local ok, mod = pcall(hub.loadModule, "tools/bronx3-ac-debug.lua", "bronx3-ac-debug")
-	if not ok then
-		warn("[ThaBronx3] AC debug load failed:", mod)
-		return nil
-	end
-	acDebugModule = mod
-	return mod
-end
-
-local function acDebugMark(tag, detail)
-	if not Config.ACDebug or not acDebugModule then
-		return
-	end
-	if typeof(acDebugModule.mark) == "function" then
-		acDebugModule.mark(tag, detail)
-	end
-end
-
-local function applyAcDebug()
-	local mod = loadAcDebugModule(Config.ACDebug == true)
-	if not mod then
-		if Config.ACDebug then
-			notify("AC debug failed to load — re-run the loader.", "AC Debug", 6)
-			Config.ACDebug = false
-		end
-		return
-	end
-	if Config.ACDebug then
-		local running = typeof(mod.isRunning) == "function" and mod.isRunning()
-		if not running and typeof(mod.start) == "function" then
-			mod.start(getAcDebugContext())
-		elseif running and typeof(mod.setContext) == "function" then
-			mod.setContext(getAcDebugContext())
-		end
-		local logPath = typeof(mod.getLogPath) == "function" and mod.getLogPath() or nil
-		local version = typeof(mod.getVersion) == "function" and mod.getVersion() or "unknown"
-		if logPath then
-			notify("AC Debug " .. version .. " → " .. logPath, "AC Debug", 8)
-		end
-	else
-		if typeof(mod.stop) == "function" then
-			mod.stop()
-		end
-	end
-end
-
-local function syncAcDebugContext()
-	if not Config.ACDebug or not acDebugModule then
-		return
-	end
-	if typeof(acDebugModule.setContext) == "function" then
-		acDebugModule.setContext(getAcDebugContext())
-	end
-end
-
--- ---------------------------------------------------------------------------
 -- Movement bypass (Movement Disabler.luau)
 -- ---------------------------------------------------------------------------
 
@@ -619,30 +531,12 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
 		enforceFlyHeightCap(root)
-		acDebugMark("fly_move", {
-			mode = "bypass_cframe",
-			speed = stepSpeed,
-			delta = dt,
-			move = move.Magnitude,
-			pos = root.Position,
-			anchored = root.Anchored,
-			acY = flyBypassState.acGroundY,
-			ceiling = getFlyAcCeiling(),
-		})
 		return true
 	end
 
 	root.CFrame += direction * speed * dt
 	root.AssemblyLinearVelocity = Vector3.zero
 	root.AssemblyAngularVelocity = Vector3.zero
-	acDebugMark("fly_move", {
-		mode = "cframe",
-		speed = speed,
-		delta = dt,
-		move = move.Magnitude,
-		pos = root.Position,
-		anchored = root.Anchored,
-	})
 	return true
 end
 
@@ -716,8 +610,6 @@ local function teardownAllFeatures()
 	ltkDupeRunning = false
 	fullCycleRunning = false
 	Config.StudioFarm = false
-	Config.ACDebug = false
-	applyAcDebug()
 	flyBypassState.groundLatched = false
 	flyBypassState.lastFlyActive = false
 	if hubUiInstance and typeof(hubUiInstance.destroy) == "function" then
@@ -782,7 +674,6 @@ local function applyMovementBypass(character)
 		if Config.Fly then
 			enforceFlyHeightCap(root)
 		end
-		acDebugMark("bypass_pre", { anchored = root.Anchored, idleFly = idleFlyHover })
 	end)
 
 	bypassSession.postConn = RunService.PostSimulation:Connect(function(deltaTime)
@@ -822,12 +713,6 @@ local function applyMovementBypass(character)
 			elseif not root.Anchored then
 				root.Anchored = true
 			end
-			acDebugMark(flyActive and "bypass_post_fly" or "bypass_post_idle", {
-				anchored = root.Anchored,
-				acY = flyBypassState.acGroundY,
-				ceiling = getFlyAcCeiling(),
-				flyActive = flyActive,
-			})
 			return
 		end
 
@@ -836,7 +721,6 @@ local function applyMovementBypass(character)
 		if not root.Anchored then
 			root.Anchored = true
 		end
-		acDebugMark("bypass_post", { anchored = root.Anchored })
 	end)
 end
 
@@ -2209,9 +2093,7 @@ hubUiInstance = UILib.create({
 					title = "UTILITIES",
 					items = {
 						{ type = "toggle", key = "InstantPrompts", label = "Inst Prompts", hud = "Inst Prompts" },
-						{ type = "toggle", key = "ACDebug", label = "AC Debug", hud = "AC Debug" },
 						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
-						{ type = "hint", text = "AC Debug → hub/tools/bronx3-ac-debug/logs/" },
 						{ type = "hint", text = "WASD+Space/Ctrl fly | Sprint = always run" },
 						{ type = "hint", text = "LastACPos nil = bypass active" },
 					},
@@ -2262,8 +2144,6 @@ hubUiInstance = UILib.create({
 			applyNoInjuredHook()
 		elseif key == "StudioFarm" then
 			applyStudioFarm()
-		elseif key == "ACDebug" then
-			applyAcDebug()
 		elseif key == "Fly" then
 			if Config.Fly then
 				if not Config.MovementBypass then
@@ -2318,7 +2198,6 @@ table.insert(sessionConns, LocalPlayer.PlayerGui.ChildAdded:Connect(function(chi
 end))
 
 table.insert(sessionConns, RunService.Heartbeat:Connect(function(deltaTime)
-	syncAcDebugContext()
 	applySurvivalBypasses()
 	applyMovementBoosts()
 	applyAlwaysSprint()
