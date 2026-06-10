@@ -246,20 +246,35 @@ local function setFOV(value)
 	FOVSquared = Config.FOV * Config.FOV
 end
 
--- Drawing objects
-local Tracer = Drawing.new("Line")
-Tracer.Visible = false
-Tracer.Color = Color3.fromRGB(255, 255, 255)
-Tracer.Thickness = 1.5
-Tracer.Transparency = 0
+local function hasDrawing()
+	return typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
+end
 
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Visible = false
-FOVCircle.Thickness = 1
-FOVCircle.NumSides = 48
-FOVCircle.Filled = false
-FOVCircle.Transparency = 0.5
-FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+local function createDrawing(kind)
+	if not hasDrawing() then
+		return nil
+	end
+	return Drawing.new(kind)
+end
+
+-- Drawing-backed visuals are optional because not every sUNC target exposes Drawing.
+local Tracer = createDrawing("Line")
+if Tracer then
+	Tracer.Visible = false
+	Tracer.Color = Color3.fromRGB(255, 255, 255)
+	Tracer.Thickness = 1.5
+	Tracer.Transparency = 0
+end
+
+local FOVCircle = createDrawing("Circle")
+if FOVCircle then
+	FOVCircle.Visible = false
+	FOVCircle.Thickness = 1
+	FOVCircle.NumSides = 48
+	FOVCircle.Filled = false
+	FOVCircle.Transparency = 0.5
+	FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+end
 
 local flightKeys = {
 	[Enum.KeyCode.W] = false,
@@ -668,55 +683,58 @@ local function removeDroneEsp(model)
 end
 
 local function ensureEsp(player)
+	if not hasDrawing() then
+		return nil
+	end
 	if espCache[player] then
 		return espCache[player]
 	end
 
-	local box = Drawing.new("Square")
+	local box = createDrawing("Square")
 	box.Filled = false
 	box.Thickness = 1.5
 	box.Visible = false
 
-	local name = Drawing.new("Text")
+	local name = createDrawing("Text")
 	name.Size = 14
 	name.Outline = true
 	name.Center = true
 	name.Visible = false
 
-	local team = Drawing.new("Text")
+	local team = createDrawing("Text")
 	team.Size = 12
 	team.Outline = true
 	team.Center = true
 	team.Visible = false
 
-	local healthText = Drawing.new("Text")
+	local healthText = createDrawing("Text")
 	healthText.Size = 12
 	healthText.Outline = true
 	healthText.Center = true
 	healthText.Visible = false
 
-	local healthBarBg = Drawing.new("Square")
+	local healthBarBg = createDrawing("Square")
 	healthBarBg.Filled = true
 	healthBarBg.Thickness = 1
 	healthBarBg.Color = Color3.fromRGB(30, 30, 30)
 	healthBarBg.Visible = false
 
-	local healthBarFill = Drawing.new("Square")
+	local healthBarFill = createDrawing("Square")
 	healthBarFill.Filled = true
 	healthBarFill.Thickness = 1
 	healthBarFill.Visible = false
 
-	local distance = Drawing.new("Text")
+	local distance = createDrawing("Text")
 	distance.Size = 12
 	distance.Outline = true
 	distance.Center = true
 	distance.Visible = false
 
-	local snapline = Drawing.new("Line")
+	local snapline = createDrawing("Line")
 	snapline.Thickness = 1
 	snapline.Visible = false
 
-	local head = Drawing.new("Circle")
+	local head = createDrawing("Circle")
 	head.Filled = true
 	head.NumSides = 12
 	head.Radius = 3
@@ -737,16 +755,19 @@ local function ensureEsp(player)
 end
 
 local function ensureDroneEsp(model)
+	if not hasDrawing() then
+		return nil
+	end
 	if droneEspCache[model] then
 		return droneEspCache[model]
 	end
 
-	local box = Drawing.new("Square")
+	local box = createDrawing("Square")
 	box.Filled = false
 	box.Thickness = 1.5
 	box.Visible = false
 
-	local label = Drawing.new("Text")
+	local label = createDrawing("Text")
 	label.Size = 12
 	label.Outline = true
 	label.Center = true
@@ -821,6 +842,9 @@ local function drawPlayerEsp(player, character, humanoid)
 	end
 
 	local entry = ensureEsp(player)
+	if not entry then
+		return
+	end
 	local centerX = topLeft.X + boxSize.X * 0.5
 	local bottomY = topLeft.Y + boxSize.Y
 
@@ -939,6 +963,9 @@ local function updateDroneESP()
 		end
 
 		local entry = ensureDroneEsp(model)
+		if not entry then
+			continue
+		end
 		entry.Box.Position = topLeft
 		entry.Box.Size = boxSize
 		entry.Box.Color = color
@@ -958,6 +985,9 @@ local function updateDroneESP()
 end
 
 local function updateESP()
+	if not hasDrawing() then
+		return
+	end
 	if not Config.ESP then
 		for _, entry in pairs(espCache) do
 			hideEspEntry(entry)
@@ -1471,16 +1501,18 @@ RunService.RenderStepped:Connect(function(dt)
 	local viewport = Camera.ViewportSize
 	local center = Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
 
-	FOVCircle.Position = center
-	FOVCircle.Radius = Config.FOV
-	FOVCircle.Visible = Config.FOVCircle and Config.SilentAim
+	if FOVCircle then
+		FOVCircle.Position = center
+		FOVCircle.Radius = Config.FOV
+		FOVCircle.Visible = Config.FOVCircle and Config.SilentAim
+	end
 
-	if Config.Tracer and currentTarget then
+	if Tracer and Config.Tracer and currentTarget then
 		Tracer.From = Vector2.new(center.X, viewport.Y)
 		Tracer.To = currentTarget.screenPos
 		Tracer.Color = getTargetColor(currentTarget)
 		Tracer.Visible = true
-	else
+	elseif Tracer then
 		Tracer.Visible = false
 	end
 end)
@@ -1501,6 +1533,10 @@ local RECOIL_CAMERA_NAMES = {
 }
 
 local hookedRecoilFunctions = {}
+
+local function hasFunctionHooks()
+	return typeof(hookfunction) == "function" and typeof(newcclosure) == "function"
+end
 
 local function isRecoilControllerModule(moduleTable)
 	return typeof(moduleTable) == "table"
@@ -1619,20 +1655,23 @@ end
 
 local function hookModuleMethod(moduleTable, methodName, handler)
 	local target = moduleTable[methodName]
-	if typeof(target) ~= "function" or hookedRecoilFunctions[target] then
+	if typeof(target) ~= "function" or hookedRecoilFunctions[target] or not hasFunctionHooks() then
 		return
 	end
-	if isfunctionhooked(target) then
-		restorefunction(target)
-	end
 	local old
-	old = hookfunction(
-		target,
-		newcclosure(function(...)
-			return handler(old, ...)
-		end, methodName)
-	)
-	hookedRecoilFunctions[target] = true
+	local ok, err = pcall(function()
+		old = hookfunction(
+			target,
+			newcclosure(function(...)
+				return handler(old, ...)
+			end, methodName)
+		)
+	end)
+	if ok then
+		hookedRecoilFunctions[target] = true
+	else
+		warn("[MicroHub][Warfare] hook failed:", methodName, err)
+	end
 end
 
 local function installStableAimHooks()
@@ -2288,7 +2327,10 @@ local function installMovementHooks()
 end
 
 local function spawnHitMarker(worldPos, isHeadshot, damage)
-	local circle = Drawing.new("Circle")
+	if not hasDrawing() then
+		return
+	end
+	local circle = createDrawing("Circle")
 	circle.Filled = false
 	circle.Thickness = 2
 	circle.NumSides = 24
@@ -2296,7 +2338,7 @@ local function spawnHitMarker(worldPos, isHeadshot, damage)
 	circle.Color = isHeadshot and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 230, 80)
 	circle.Visible = true
 
-	local text = Drawing.new("Text")
+	local text = createDrawing("Text")
 	text.Size = 14
 	text.Outline = true
 	text.Center = true
@@ -2929,7 +2971,7 @@ local function applySilentAim(muzzleCF, initialSpeed)
 end
 
 local function installSimulateHook(simulateMethod, label, applyAim)
-	if typeof(simulateMethod) ~= "function" or not hookfunction or not newcclosure then
+	if typeof(simulateMethod) ~= "function" or not hasFunctionHooks() or typeof(checkcaller) ~= "function" then
 		return
 	end
 

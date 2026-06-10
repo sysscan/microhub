@@ -540,7 +540,14 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 	return true
 end
 
-local genv = getgenv and getgenv() or _G
+local function getGenv()
+	if typeof(getgenv) == "function" then
+		return getgenv()
+	end
+	return _G
+end
+
+local genv = getGenv()
 genv.__ThaBronx3FlyStep = applyFlyStep
 bypassSession.flyStep = applyFlyStep
 

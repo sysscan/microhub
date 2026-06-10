@@ -6,82 +6,52 @@ Script hub for Roblox — auto-loads the right script per game.
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.4"
-
-local function isFn(value)
-	return typeof(value) == "function"
-end
-
-local function addTransport(list, fn, mode)
-	if isFn(fn) then
-		list[#list + 1] = { fn = fn, mode = mode }
-	end
-end
-
-local function transports()
-	local list = {}
-	addTransport(list, request, "request")
-	addTransport(list, http_request, "request")
-	addTransport(list, httprequest, "request")
-	addTransport(list, syn and syn.request, "request")
-	addTransport(list, http and http.request, "request")
-	addTransport(list, http and http.request_async, "request")
-	addTransport(list, fluxus and fluxus.request, "request")
-	addTransport(list, krnl and krnl.request, "request")
-	addTransport(list, electron and electron.request, "request")
-	addTransport(list, function(url) return game:HttpGetAsync(url, true) end, "url")
-	addTransport(list, function(url) return game:HttpGet(url, true) end, "url")
-	return list
-end
-
-local function bodyOf(res)
-	if typeof(res) == "string" then
-		return res
-	end
-	return res and (res.Body or res.body or res.Response or res.response or res.Data or res.data)
-end
+local MIN_LOADER = "1.6.6"
 
 local function okStatus(res)
 	if typeof(res) ~= "table" then
 		return true
 	end
-	local status = tonumber(res.StatusCode or res.Status or res.status_code)
-	return status == nil or (status >= 200 and status < 300)
-end
-
-local function payload(url, headers)
-	local data = { Url = url, url = url, Method = "GET", method = "GET" }
-	if headers then
-		data.Headers = {
-			["Accept"] = "application/json, text/plain",
-			["Cache-Control"] = "no-cache, no-store",
-			["Pragma"] = "no-cache",
-			["User-Agent"] = "MicroHub",
-		}
-		data.headers = data.Headers
+	local status = tonumber(res.StatusCode)
+	if status ~= nil then
+		return status >= 200 and status < 300
 	end
-	return data
+	return res.Success ~= false
 end
 
 local function get(url)
 	url = url .. (url:find("?", 1, true) and "&" or "?") .. "t=" .. os.time() .. "_" .. math.random(1e5, 1e9)
 	local errors = {}
-	for _, transport in ipairs(transports()) do
-		local ok, res
-		if transport.mode == "request" then
-			ok, res = pcall(transport.fn, payload(url, true))
-			if not ok then
-				ok, res = pcall(transport.fn, payload(url, false))
-			end
-		else
-			ok, res = pcall(transport.fn, url)
-		end
-		local body = ok and bodyOf(res)
-		if ok and okStatus(res) and typeof(body) == "string" and #body > 0 then
-			return body
+	if typeof(request) == "function" then
+		local ok, res = pcall(request, {
+			Url = url,
+			Method = "GET",
+			Headers = {
+				["Accept"] = "application/json, text/plain",
+				["Cache-Control"] = "no-cache, no-store",
+				["Pragma"] = "no-cache",
+				["User-Agent"] = "MicroHub",
+			},
+		})
+		if ok and okStatus(res) and typeof(res) == "table" and typeof(res.Body) == "string" and #res.Body > 0 then
+			return res.Body
 		end
 		errors[#errors + 1] = tostring(res)
 	end
+	local okAsync, bodyAsync = pcall(function()
+		return game:HttpGetAsync(url, true)
+	end)
+	if okAsync and typeof(bodyAsync) == "string" and #bodyAsync > 0 then
+		return bodyAsync
+	end
+	errors[#errors + 1] = tostring(bodyAsync)
+	local okSync, bodySync = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if okSync and typeof(bodySync) == "string" and #bodySync > 0 then
+		return bodySync
+	end
+	errors[#errors + 1] = tostring(bodySync)
 	error("download failed: " .. table.concat(errors, " | "), 0)
 end
 
@@ -94,10 +64,11 @@ loadstring(body, "MicroHub.Loader")()
 
 ## Supported games
 
-| Game        | PlaceId          |
-|-------------|------------------|
-| Warfare     | `83902709332473` |
-| Tha Bronx 3 | `16472538603`    |
+| Game            | PlaceId          |
+|-----------------|------------------|
+| Warfare         | `83902709332473` |
+| Gunfight Arena  | `14518422161`    |
+| Tha Bronx 3     | `16472538603`    |
 
 Tha Bronx 3 includes all scripts from [GetRioToday/16472538603-ThaBronx3](https://github.com/GetRioToday/16472538603-ThaBronx3): AC bypass, instant prompts/equip, no fall ragdoll, studio farm, kool-aid infinite money farm, and LTK money dupe.
 

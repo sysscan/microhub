@@ -41,23 +41,14 @@ local function requestFn()
 	if typeof(request) == "function" then
 		return request
 	end
-	if typeof(http_request) == "function" then
-		return http_request
-	end
-	if syn and typeof(syn.request) == "function" then
-		return syn.request
-	end
-	if http and typeof(http.request) == "function" then
-		return http.request
-	end
-	if fluxus and typeof(fluxus.request) == "function" then
-		return fluxus.request
-	end
 	return nil
 end
 
 local function statusOk(res)
-	local status = tonumber(res.StatusCode or res.Status or res.status_code)
+	if typeof(res) ~= "table" then
+		return true
+	end
+	local status = tonumber(res.StatusCode)
 	if status ~= nil then
 		return status >= 200 and status < 300
 	end
@@ -73,17 +64,20 @@ end
 local function fetchUrl(url)
 	local http = requestFn()
 	if typeof(http) == "function" then
-		local ok, res = pcall(http, {
-			Url = url .. "?t=" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
-			Method = "GET",
-			Headers = {
-				["Cache-Control"] = "no-cache, no-store",
-				["Pragma"] = "no-cache",
-				["User-Agent"] = "MicroHub-Cascade/" .. VERSION,
-			},
-		})
-		if ok and res and statusOk(res) and typeof(res.Body or res.body) == "string" then
-			return res.Body or res.body
+		---@cast http fun(options: table): table
+		local ok, res = pcall(function()
+			return http({
+				Url = url .. "?t=" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
+				Method = "GET",
+				Headers = {
+					["Cache-Control"] = "no-cache, no-store",
+					["Pragma"] = "no-cache",
+					["User-Agent"] = "MicroHub-Cascade/" .. VERSION,
+				},
+			})
+		end)
+		if ok and res and statusOk(res) and typeof(res.Body) == "string" then
+			return res.Body
 		end
 	end
 

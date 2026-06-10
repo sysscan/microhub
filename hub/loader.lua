@@ -1,7 +1,7 @@
--- MicroHub loader v1.6.4
+-- MicroHub loader v1.6.6
 -- Remote only. Resolves GitHub main -> immutable commit SHA, then loads every file from that SHA.
 
-local VERSION = "1.6.4"
+local VERSION = "1.6.6"
 local MIN_UI_VERSION = "3.0.0"
 local OWNER = "sysscan"
 local REPO = "microhub"
@@ -11,13 +11,17 @@ local UI_KEY = "__MicroHubUILib"
 
 local GAMES = {
 	{ name = "Warfare", path = "games/warfare.lua", placeIds = { 83902709332473 } },
+	{ name = "Gunfight Arena", path = "games/gunfight-arena.lua", placeIds = { 14518422161 } },
 	{ name = "Tha Bronx 3", path = "games/tha-bronx3.lua", placeIds = { 16472538603, 18642421777 } },
 }
 
 local resolvedSha = nil
 
 local function getGenv()
-	return getgenv and getgenv() or _G
+	if typeof(getgenv) == "function" then
+		return getgenv()
+	end
+	return _G
 end
 
 local function notify(title, text, duration)
@@ -56,45 +60,8 @@ local function executorName()
 		if isCallable(identifyexecutor) then
 			return identifyexecutor()
 		end
-		if isCallable(getexecutorname) then
-			return getexecutorname()
-		end
-		if isCallable(get_executor_name) then
-			return get_executor_name()
-		end
 	end)
 	return ok and tostring(name or "unknown") or "unknown"
-end
-
-local function addCandidate(candidates, label, fn, mode)
-	if isCallable(fn) then
-		table.insert(candidates, {
-			label = label,
-			fn = fn,
-			mode = mode,
-		})
-	end
-end
-
-local function httpCandidates()
-	local candidates = {}
-	addCandidate(candidates, "request", request, "request")
-	addCandidate(candidates, "http_request", http_request, "request")
-	addCandidate(candidates, "httprequest", httprequest, "request")
-	addCandidate(candidates, "syn.request", syn and syn.request, "request")
-	addCandidate(candidates, "http.request", http and http.request, "request")
-	addCandidate(candidates, "http.request_async", http and http.request_async, "request")
-	addCandidate(candidates, "fluxus.request", fluxus and fluxus.request, "request")
-	addCandidate(candidates, "krnl.request", krnl and krnl.request, "request")
-	addCandidate(candidates, "electron.request", electron and electron.request, "request")
-	addCandidate(candidates, "getcustomasset_http_request", getcustomasset_http_request, "request")
-	addCandidate(candidates, "game.HttpGetAsync", function(url)
-		return game:HttpGetAsync(url, true)
-	end, "url")
-	addCandidate(candidates, "game.HttpGet", function(url)
-		return game:HttpGet(url, true)
-	end, "url")
-	return candidates
 end
 
 local function cacheBust()
@@ -105,15 +72,15 @@ local function statusOk(res)
 	if kind(res) ~= "table" then
 		return true
 	end
-	local status = tonumber(res.StatusCode or res.Status or res.status_code)
-	if status ~= nil then
-		return status >= 200 and status < 300
-	end
 	if res.Success == true then
 		return true
 	end
 	if res.Success == false then
 		return false
+	end
+	local status = tonumber(res.StatusCode)
+	if status ~= nil then
+		return status >= 200 and status < 300
 	end
 	return true
 end
@@ -125,61 +92,60 @@ local function responseBody(res)
 	if kind(res) ~= "table" then
 		return nil
 	end
-	return res.Body or res.body or res.Response or res.response or res.Data or res.data
+	return res.Body
 end
 
 local function responseStatus(res)
 	if kind(res) ~= "table" then
 		return "non-table"
 	end
-	return tostring(res.StatusCode or res.Status or res.status_code or res.StatusMessage or res.status_message or "empty")
+	return tostring(res.StatusCode or res.StatusMessage or "empty")
 end
 
-local function requestPayload(url, withHeaders)
-	local payload = {
+local function requestPayload(url)
+	return {
 		Url = url,
-		url = url,
 		Method = "GET",
-		method = "GET",
-	}
-	if withHeaders then
-		payload.Headers = {
+		Headers = {
 			["Accept"] = "application/vnd.github.raw, application/json, text/plain",
 			["Cache-Control"] = "no-cache, no-store, max-age=0",
 			["Pragma"] = "no-cache",
 			["User-Agent"] = "MicroHub/" .. VERSION,
-		}
-		payload.headers = payload.Headers
-	end
-	return payload
-end
-
-local function tryCandidate(candidate, url)
-	if candidate.mode == "request" then
-		local ok, res = pcall(candidate.fn, requestPayload(url, true))
-		if not ok then
-			ok, res = pcall(candidate.fn, requestPayload(url, false))
-		end
-		return ok, res
-	end
-	return pcall(candidate.fn, url)
+		},
+	}
 end
 
 local function httpGet(url)
 	local failures = {}
 
-	for _, candidate in ipairs(httpCandidates()) do
-		local ok, res = tryCandidate(candidate, url)
+	if isCallable(request) then
+		local ok, res = pcall(request, requestPayload(url))
 		if ok and res then
 			local body = responseBody(res)
 			if statusOk(res) and kind(body) == "string" and #body > 0 then
 				return sanitize(body)
 			end
-			table.insert(failures, candidate.label .. " HTTP " .. responseStatus(res))
+			table.insert(failures, "request HTTP " .. responseStatus(res))
 		else
-			table.insert(failures, candidate.label .. " " .. tostring(res))
+			table.insert(failures, "request " .. tostring(res))
 		end
 	end
+
+	local okAsync, bodyAsync = pcall(function()
+		return game:HttpGetAsync(url, true)
+	end)
+	if okAsync and kind(bodyAsync) == "string" and #bodyAsync > 0 then
+		return sanitize(bodyAsync)
+	end
+	table.insert(failures, "HttpGetAsync " .. tostring(bodyAsync))
+
+	local okSync, bodySync = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if okSync and kind(bodySync) == "string" and #bodySync > 0 then
+		return sanitize(bodySync)
+	end
+	table.insert(failures, "HttpGet " .. tostring(bodySync))
 
 	error("download failed on " .. executorName() .. ": " .. table.concat(failures, " | ") .. " -> " .. url, 0)
 end
@@ -290,8 +256,12 @@ local function unloadOld()
 	if typeof(genv.__ThaBronx3Unload) == "function" then
 		pcall(genv.__ThaBronx3Unload)
 	end
+	if typeof(genv.__GunfightArenaUnload) == "function" then
+		pcall(genv.__GunfightArenaUnload)
+	end
 	genv.__ThaBronx3Unload = nil
 	genv.__ThaBronx3FlyStep = nil
+	genv.__GunfightArenaUnload = nil
 	shared[UI_KEY] = nil
 end
 
