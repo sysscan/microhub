@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "17-sa-debug-fire"
+local GAME_BUILD = "18-sa-debug-volt"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -480,6 +480,7 @@ local dbg = {
 	hooksReady = false,
 	networkHooked = false,
 	remoteHooked = false,
+	namecallHooked = false,
 	remotePath = "",
 	syncPath = "",
 	syncBound = 0,
@@ -489,10 +490,31 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
+local DBG_HOOK_BUILD = "18-sa-debug-volt"
 local dbgNetworkHooked = false
 local dbgRemoteHooked = false
+local dbgNamecallHooked = false
 local dbgInitPrinted = false
+local dbgCapsPrinted = false
 local dbgHookWorkerActive = false
+
+local function dbgVolt(name: string): any
+	if typeof(getgenv) == "function" then
+		local value = getgenv()[name]
+		if value ~= nil then
+			return value
+		end
+	end
+	return rawget(_G, name)
+end
+
+local voltHookfunction = dbgVolt("hookfunction")
+local voltHookmetamethod = dbgVolt("hookmetamethod")
+local voltNewcclosure = dbgVolt("newcclosure")
+local voltGetgc = dbgVolt("getgc")
+local voltFiltergc = dbgVolt("filtergc")
+local voltGetnamecallmethod = dbgVolt("getnamecallmethod")
+local voltCheckcaller = dbgVolt("checkcaller")
 local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
 local dbgNextOverlayAt = 0
 local dbgNextSyncScan = 0
@@ -626,36 +648,67 @@ local function dbgSession(): { [string]: any }?
 		return nil
 	end
 	local env = getgenv()
-	if typeof(env[DBG_SESSION_KEY]) ~= "table" then
-		env[DBG_SESSION_KEY] = {}
+	local session = env[DBG_SESSION_KEY]
+	if typeof(session) ~= "table" or session.build ~= DBG_HOOK_BUILD then
+		session = { build = DBG_HOOK_BUILD }
+		env[DBG_SESSION_KEY] = session
 	end
-	return env[DBG_SESSION_KEY]
+	return session
+end
+
+local function dbgWrapHook(fn: (...any) -> ...any): (...any) -> ...any
+	if typeof(voltNewcclosure) == "function" then
+		return voltNewcclosure(fn)
+	end
+	return fn
+end
+
+local function dbgFromGame(): boolean
+	return typeof(voltCheckcaller) ~= "function" or not voltCheckcaller()
 end
 
 local function dbgHooksActive(): boolean
-	return dbg.networkHooked or dbg.remoteHooked
-end
-
-local function dbgTryHookFunction(oldFn: any, newFn: any, sessionKey: string): boolean
-	if typeof(hookfunction) ~= "function" then
-		return false
-	end
-	local session = dbgSession()
-	if session and session[sessionKey] == oldFn then
-		return true
-	end
-	hookfunction(oldFn, newFn)
-	if session then
-		session[sessionKey] = oldFn
-	end
-	return true
+	return dbg.networkHooked or dbg.remoteHooked or dbg.namecallHooked
 end
 
 local function dbgRecordRemoteFire(args: { any })
-	if typeof(args[2]) ~= "string" then
+	local eventName: string? = nil
+	local payloadStart: number? = nil
+
+	if typeof(args[1]) == "string" and (args[1] == "Fire" or args[1] == "Hitcheck") then
+		eventName = args[1]
+		payloadStart = 2
+	elseif typeof(args[2]) == "string" then
+		eventName = args[2]
+		payloadStart = 3
+	else
+		for i = 1, math.min(#args, 8) do
+			local value = args[i]
+			if value == "Fire" or value == "Hitcheck" then
+				eventName = value
+				payloadStart = i + 1
+				break
+			end
+		end
+	end
+
+	if not eventName or not payloadStart then
+		dbgLog(
+			"FireRaw",
+			table.concat(
+				{ dbgShortVal(args[1]), dbgShortVal(args[2]), dbgShortVal(args[3]) },
+				" | "
+			),
+			3
+		)
 		return
 	end
-	dbgRecordNetworkEvent(args[2], { args[3], args[4], args[5], args[6], args[7], args[8] })
+
+	local payload: { any } = {}
+	for i = payloadStart, #args do
+		table.insert(payload, args[i])
+	end
+	dbgRecordNetworkEvent(eventName, payload)
 end
 
 local function dbgIsNetworkApi(tbl: any): boolean
@@ -675,6 +728,27 @@ local function dbgCombatRemote(): RemoteEvent?
 	return nil
 end
 
+local function dbgPrintCaps()
+	if dbgCapsPrinted or not Config.AimDebugger then
+		return
+	end
+	dbgCapsPrinted = true
+	local remote = dbgCombatRemote()
+	print(
+		"[GFA-DBG] caps",
+		"hookfunction:",
+		typeof(voltHookfunction),
+		"hookmetamethod:",
+		typeof(voltHookmetamethod),
+		"filtergc:",
+		typeof(voltFiltergc),
+		"getgc:",
+		typeof(voltGetgc),
+		"remote:",
+		if remote then remote:GetFullName() else "nil"
+	)
+end
+
 local function dbgRemoteScore(remote: RemoteEvent): number
 	local parent = remote.Parent
 	if parent == LocalPlayer then
@@ -690,37 +764,69 @@ local function dbgRemoteScore(remote: RemoteEvent): number
 	return 0
 end
 
-local function dbgFindNetworkApi(): (any, RemoteEvent?)
-	if typeof(getgc) ~= "function" then
-		return nil, nil
-	end
-
+local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
 	local combatRemote = dbgCombatRemote()
 	local bestApi: any = nil
 	local bestRemote: RemoteEvent? = nil
 	local bestScore = 0
 
-	for _, obj in getgc(true) do
-		if not dbgIsNetworkApi(obj) then
-			continue
+	local function consider(tbl: any)
+		if not dbgIsNetworkApi(tbl) then
+			return
 		end
-		local remote = rawget(obj, "RE")
+		local remote = rawget(tbl, "RE")
 		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
-			continue
+			return
 		end
 		if combatRemote and remote == combatRemote then
-			return obj, combatRemote
+			if callback(tbl, combatRemote) then
+				return true
+			end
 		end
 		local score = dbgRemoteScore(remote)
 		if score > bestScore then
-			bestApi, bestRemote, bestScore = obj, remote, score
+			bestApi, bestRemote, bestScore = tbl, remote, score
+		end
+		return false
+	end
+
+	if typeof(voltFiltergc) == "function" then
+		local ok, tables = pcall(voltFiltergc, "table", {
+			Keys = { "FireServer", "OnEvent", "EncodeData", "DecodeData", "RE" },
+		})
+		if ok and typeof(tables) == "table" then
+			for _, tbl in tables do
+				if consider(tbl) then
+					return
+				end
+			end
 		end
 	end
 
-	if bestScore >= 90 then
-		return bestApi, bestRemote
+	if typeof(voltGetgc) == "function" then
+		local ok, objects = pcall(voltGetgc, true)
+		if ok and typeof(objects) == "table" then
+			for _, obj in objects do
+				if consider(obj) then
+					return
+				end
+			end
+		end
 	end
-	return nil, nil
+
+	if bestScore >= 90 and bestApi and bestRemote then
+		callback(bestApi, bestRemote)
+	end
+end
+
+local function dbgFindNetworkApi(): (any, RemoteEvent?)
+	local foundApi: any = nil
+	local foundRemote: RemoteEvent? = nil
+	dbgScanNetworkTables(function(api, remote)
+		foundApi, foundRemote = api, remote
+		return true
+	end)
+	return foundApi, foundRemote
 end
 
 local function dbgPrintInit(label: string, path: string)
@@ -736,29 +842,40 @@ local function dbgHookNetworkApi()
 		return
 	end
 
-	if typeof(newcclosure) ~= "function" then
-		dbg.status = "newcclosure unavailable"
-		return
-	end
-
 	local api, remote = dbgFindNetworkApi()
 	if not api or not remote or dbgRemoteScore(remote) < 90 then
 		return
 	end
 
 	dbg.remotePath = remote:GetFullName()
-	local oldFireServer = api.FireServer
-	if not dbgTryHookFunction(
-		oldFireServer,
-		newcclosure(function(self, eventName, ...)
-			if Config.AimDebugger then
+	local target = api.FireServer
+	local session = dbgSession()
+	if session and session.networkFireFn == target then
+		dbgNetworkHooked = true
+		dbg.networkHooked = true
+		dbg.hooksReady = true
+		dbg.status = "Network.FireServer hooked"
+		dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
+		return
+	end
+	if typeof(voltHookfunction) ~= "function" then
+		return
+	end
+
+	local original: (...any) -> ...any
+	local ok = pcall(function()
+		original = voltHookfunction(target, dbgWrapHook(function(self, eventName, ...)
+			if Config.AimDebugger and dbgFromGame() then
 				dbgRecordNetworkEvent(eventName, { ... })
 			end
-			return oldFireServer(self, eventName, ...)
-		end),
-		"networkFireFn"
-	) then
+			return original(self, eventName, ...)
+		end))
+	end)
+	if not ok or typeof(original) ~= "function" then
 		return
+	end
+	if session then
+		session.networkFireFn = target
 	end
 
 	dbgNetworkHooked = true
@@ -773,11 +890,6 @@ local function dbgHookRemoteFireServer()
 		return
 	end
 
-	if typeof(newcclosure) ~= "function" then
-		dbg.status = "newcclosure unavailable"
-		return
-	end
-
 	local remote = dbgCombatRemote()
 	if not remote then
 		return
@@ -788,18 +900,36 @@ local function dbgHookRemoteFireServer()
 		dbg.remotePath = path
 	end
 
-	local oldFire = remote.FireServer
-	if not dbgTryHookFunction(
-		oldFire,
-		newcclosure(function(self, ...)
-			if Config.AimDebugger and self == remote then
+	local target = remote.FireServer
+	local session = dbgSession()
+	if session and session.remoteFireFn == target then
+		dbgRemoteHooked = true
+		dbg.remoteHooked = true
+		dbg.hooksReady = true
+		if not dbg.networkHooked then
+			dbg.status = "RemoteEvent.FireServer hooked"
+			dbgPrintInit("RemoteEvent.FireServer hooked", path)
+		end
+		return
+	end
+	if typeof(voltHookfunction) ~= "function" then
+		return
+	end
+
+	local original: (...any) -> ...any
+	local ok = pcall(function()
+		original = voltHookfunction(target, dbgWrapHook(function(self, ...)
+			if Config.AimDebugger and dbgFromGame() and self == remote then
 				dbgRecordRemoteFire({ ... })
 			end
-			return oldFire(self, ...)
-		end),
-		"remoteFireFn"
-	) then
+			return original(self, ...)
+		end))
+	end)
+	if not ok or typeof(original) ~= "function" then
 		return
+	end
+	if session then
+		session.remoteFireFn = target
 	end
 
 	dbgRemoteHooked = true
@@ -813,22 +943,97 @@ local function dbgHookRemoteFireServer()
 	end
 end
 
+local function dbgHookNamecallCombat()
+	if dbgNamecallHooked then
+		return
+	end
+
+	if typeof(voltHookmetamethod) ~= "function" then
+		return
+	end
+
+	local remote = dbgCombatRemote()
+	if not remote then
+		return
+	end
+
+	local session = dbgSession()
+	if session and session.namecallHooked then
+		dbgNamecallHooked = true
+		dbg.namecallHooked = true
+		dbg.hooksReady = true
+		if dbg.remotePath == "" then
+			dbg.remotePath = remote:GetFullName()
+		end
+		dbg.status = "namecall FireServer active"
+		return
+	end
+
+	local oldNamecall: (...any) -> ...any
+	local ok = pcall(function()
+		oldNamecall = voltHookmetamethod(
+			game,
+			"__namecall",
+			dbgWrapHook(function(self, ...)
+				if Config.AimDebugger and dbgFromGame() then
+					if typeof(voltGetnamecallmethod) == "function" and voltGetnamecallmethod() == "FireServer" and self == remote then
+						dbgRecordRemoteFire({ ... })
+					end
+				end
+				return oldNamecall(self, ...)
+			end)
+		)
+	end)
+
+	if not ok or typeof(oldNamecall) ~= "function" then
+		return
+	end
+
+	if session then
+		session.namecallHooked = true
+	end
+
+	dbgNamecallHooked = true
+	dbg.namecallHooked = true
+	dbg.hooksReady = true
+	if dbg.remotePath == "" then
+		dbg.remotePath = remote:GetFullName()
+	end
+	if not dbg.networkHooked and not dbg.remoteHooked then
+		dbg.status = "namecall FireServer hooked"
+		dbgPrintInit("namecall FireServer hooked", remote:GetFullName())
+	end
+end
+
 local function dbgStartHookWorker()
 	if dbgHookWorkerActive or dbgHooksActive() or not Config.AimDebugger then
 		return
 	end
+	dbgPrintCaps()
 	dbgHookWorkerActive = true
 	task.spawn(function()
+		local attempts = 0
 		while Config.AimDebugger and not dbgHooksActive() do
+			attempts += 1
 			dbgHookNetworkApi()
 			dbgHookRemoteFireServer()
+			if not dbgHooksActive() then
+				dbgHookNamecallCombat()
+			end
 			if dbgHooksActive() then
 				break
 			end
 			if dbgCombatRemote() then
-				dbg.status = "waiting for Network API"
+				if typeof(voltHookfunction) ~= "function" then
+					dbg.status = "hookfunction missing (Volt genv?)"
+				else
+					dbg.status = "waiting for Network API"
+				end
 			else
 				dbg.status = "waiting for player RemoteEvent"
+			end
+			if attempts == 5 and not dbgHooksActive() then
+				dbgLog("init-fail", dbg.status, 0)
 			end
 			task.wait(DBG_HOOK_RETRY)
 		end
@@ -987,9 +1192,10 @@ local function dbgUpdate()
 	local lines = {
 		"── Silent Aim Debugger ──",
 		string.format(
-			"Hooks: net:%s remote:%s sync:%d | %s",
+			"Hooks: net:%s fn:%s nc:%s sync:%d | %s",
 			if dbg.networkHooked then "OK" else "—",
 			if dbg.remoteHooked then "OK" else "—",
+			if dbg.namecallHooked then "OK" else "—",
 			dbg.syncBound,
 			dbg.status
 		),
