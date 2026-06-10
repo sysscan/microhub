@@ -412,9 +412,15 @@ local function getClosestAimTarget(origin)
 	return closest
 end
 
+-- 1 = snap, 100 = glide. Frame-rate independent via exponential decay.
 local function aimAlpha(dt)
 	local smooth = math.clamp(Config.AimSmooth or 35, 1, 100)
-	return math.clamp(dt * (101 - smooth) * 0.14, 0.04, 1)
+	if smooth <= 1 then
+		return 1
+	end
+	local t = (smooth - 1) / 99
+	local speed = 72 * (1 - t) ^ 1.45 + 1.8
+	return 1 - math.exp(-speed * dt)
 end
 
 local function shouldAimActive()
@@ -448,12 +454,19 @@ local function updateAimbot(dt)
 	end
 
 	local targetPos = aimTarget.part.Position
-	syncMouseHitSpot(targetPos)
+	local alpha = aimAlpha(dt)
 
-	if not isThirdPerson() then
+	if isThirdPerson() then
+		local current = _G.MouseHitSpot
+		if typeof(current) ~= "Vector3" then
+			current = targetPos
+		end
+		syncMouseHitSpot(current:Lerp(targetPos, alpha))
+	else
+		syncMouseHitSpot(targetPos)
 		local camPos = Camera.CFrame.Position
 		local goal = CFrame.new(camPos, targetPos)
-		Camera.CFrame = Camera.CFrame:Lerp(goal, aimAlpha(dt))
+		Camera.CFrame = Camera.CFrame:Lerp(goal, alpha)
 	end
 end
 
@@ -728,7 +741,7 @@ UILib.create({
 						{ type = "slider", key = "AimFOV", label = "FOV", min = 20, max = 500, step = 10, onChange = setAimFOV },
 						{ type = "slider", key = "AimSmooth", label = "Smoothness", min = 1, max = 100, step = 1 },
 						{ type = "toggle", key = "AimFOVCircle", label = "FOV Circle", hud = "FOV Circle" },
-						{ type = "hint", text = "Hold RMB to aim. Works in 1st and 3rd person." },
+						{ type = "hint", text = "Smoothness: 1 = snap, 100 = glide. Hold RMB to aim." },
 					},
 				},
 			},
