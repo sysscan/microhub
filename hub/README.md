@@ -8,25 +8,31 @@ Paste this. It asks GitHub for the latest `main` commit SHA first, then download
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.1"
+local MIN_LOADER = "1.6.2"
 
 local function requestFunction()
 	return request or http_request or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request)
 end
 
 local function get(url)
-	local r = assert(requestFunction(), "request() unavailable")({
-		Url = url .. (url:find("?", 1, true) and "&" or "?") .. "t=" .. os.time() .. "_" .. math.random(1e5, 1e9),
-		Method = "GET",
-		Headers = {
-			["Accept"] = "application/json, text/plain",
-			["Cache-Control"] = "no-cache, no-store",
-			["Pragma"] = "no-cache",
-			["User-Agent"] = "MicroHub",
-		},
-	})
-	assert(r and (r.Success == true or tonumber(r.StatusCode) == 200), r and (r.StatusMessage or r.StatusCode) or "download failed")
-	return r.Body or r.body
+	url = url .. (url:find("?", 1, true) and "&" or "?") .. "t=" .. os.time() .. "_" .. math.random(1e5, 1e9)
+	local requestFn = requestFunction()
+	if requestFn then
+		local r = requestFn({
+			Url = url,
+			Method = "GET",
+			Headers = {
+				["Accept"] = "application/json, text/plain",
+				["Cache-Control"] = "no-cache, no-store",
+				["Pragma"] = "no-cache",
+				["User-Agent"] = "MicroHub",
+			},
+		})
+		local status = r and tonumber(r.StatusCode or r.Status or r.status_code)
+		assert(r and ((status and status >= 200 and status < 300) or r.Success == true), r and (r.StatusMessage or r.StatusCode) or "download failed")
+		return r.Body or r.body
+	end
+	return game:HttpGetAsync(url, true)
 end
 
 local ref = get("https://api.github.com/repos/" .. OWNER .. "/" .. REPO .. "/commits/" .. BRANCH)
@@ -36,7 +42,7 @@ assert(body:find('VERSION = "' .. MIN_LOADER .. '"', 1, true), "stale loader bod
 loadstring(body, "MicroHub.Loader")()
 ```
 
-You should see `[MicroHub] v1.6.1 @ <commit> -> ...` and `ready — UI 3.0.0`. Re-run anytime.
+You should see `[MicroHub] v1.6.2 @ <commit> -> ...` and `ready — UI 3.0.0`. Re-run anytime.
 
 ## Layout
 

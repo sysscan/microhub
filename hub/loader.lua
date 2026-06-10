@@ -1,7 +1,7 @@
--- MicroHub loader v1.6.1
+-- MicroHub loader v1.6.2
 -- Remote only. Resolves GitHub main -> immutable commit SHA, then loads every file from that SHA.
 
-local VERSION = "1.6.1"
+local VERSION = "1.6.2"
 local MIN_UI_VERSION = "3.0.0"
 local OWNER = "sysscan"
 local REPO = "microhub"
@@ -65,41 +65,61 @@ end
 
 local function statusOk(res)
 	local status = tonumber(res.StatusCode or res.Status or res.status_code)
+	if status ~= nil then
+		return status >= 200 and status < 300
+	end
 	if res.Success == true then
 		return true
 	end
 	if res.Success == false then
 		return false
 	end
-	return status ~= nil and status >= 200 and status < 300
+	return true
 end
 
 local function httpGet(url)
 	local http = requestFn()
-	if typeof(http) ~= "function" then
-		error("request() unavailable", 0)
+	local failures = {}
+
+	if typeof(http) == "function" then
+		local ok, res = pcall(http, {
+			Url = url,
+			Method = "GET",
+			Headers = {
+				["Accept"] = "application/vnd.github.raw, application/json, text/plain",
+				["Cache-Control"] = "no-cache, no-store, max-age=0",
+				["Pragma"] = "no-cache",
+				["User-Agent"] = "MicroHub/" .. VERSION,
+			},
+		})
+		if ok and res then
+			local body = res.Body or res.body
+			if statusOk(res) and typeof(body) == "string" and #body > 0 then
+				return sanitize(body)
+			end
+			table.insert(failures, "request HTTP " .. tostring(res.StatusCode or res.Status or res.StatusMessage or "empty"))
+		else
+			table.insert(failures, "request " .. tostring(res))
+		end
 	end
 
-	local ok, res = pcall(http, {
-		Url = url,
-		Method = "GET",
-		Headers = {
-			["Accept"] = "application/vnd.github.raw, application/json, text/plain",
-			["Cache-Control"] = "no-cache, no-store, max-age=0",
-			["Pragma"] = "no-cache",
-			["User-Agent"] = "MicroHub/" .. VERSION,
-		},
-	})
-	if not ok or not res then
-		error("request failed: " .. tostring(res), 0)
+	local okAsync, bodyAsync = pcall(function()
+		return game:HttpGetAsync(url, true)
+	end)
+	if okAsync and typeof(bodyAsync) == "string" and #bodyAsync > 0 then
+		return sanitize(bodyAsync)
 	end
+	table.insert(failures, "HttpGetAsync " .. tostring(bodyAsync))
 
-	local body = res.Body or res.body
-	if not statusOk(res) or typeof(body) ~= "string" or #body == 0 then
-		error("HTTP " .. tostring(res.StatusCode or res.Status or res.StatusMessage or "empty") .. ": " .. url, 0)
+	local okSync, bodySync = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if okSync and typeof(bodySync) == "string" and #bodySync > 0 then
+		return sanitize(bodySync)
 	end
+	table.insert(failures, "HttpGet " .. tostring(bodySync))
 
-	return sanitize(body)
+	error("download failed: " .. table.concat(failures, " | ") .. " -> " .. url, 0)
 end
 
 local function addBust(url)
@@ -138,15 +158,15 @@ local function rawUrl(sha, path)
 	return "https://raw.githubusercontent.com/" .. OWNER .. "/" .. REPO .. "/" .. sha .. "/" .. HUB_DIR .. "/" .. path
 end
 
-local function contentsUrl(sha, path)
-	return "https://api.github.com/repos/" .. OWNER .. "/" .. REPO .. "/contents/" .. HUB_DIR .. "/" .. path .. "?ref=" .. sha
+local function jsdelivrUrl(sha, path)
+	return "https://cdn.jsdelivr.net/gh/" .. OWNER .. "/" .. REPO .. "@" .. sha .. "/" .. HUB_DIR .. "/" .. path
 end
 
 local function fetch(path)
 	local sha = resolvedSha or resolveLatestSha()
 	local urls = {
 		rawUrl(sha, path),
-		contentsUrl(sha, path),
+		jsdelivrUrl(sha, path),
 	}
 	local failures = {}
 	for _, url in ipairs(urls) do

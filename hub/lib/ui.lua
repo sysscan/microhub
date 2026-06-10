@@ -8,7 +8,6 @@
 	Cascade windows, tabs, forms, rows, and controls.
 ]]
 
-local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
 local CASCADE_VERSION = "v1.4.0"
@@ -59,13 +58,16 @@ end
 
 local function statusOk(res)
 	local status = tonumber(res.StatusCode or res.Status or res.status_code)
+	if status ~= nil then
+		return status >= 200 and status < 300
+	end
 	if res.Success == true then
 		return true
 	end
 	if res.Success == false then
 		return false
 	end
-	return status ~= nil and status >= 200 and status < 300
+	return true
 end
 
 local function fetchUrl(url)
