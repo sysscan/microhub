@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "19-sa-debug-remote"
+local GAME_BUILD = "20-sa-debug-safe"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -24,7 +24,7 @@ local Config = {
 	AimPart = "Head",
 	AimFOVCircle = false,
 	AimDebugger = false,
-	ESP = true,
+	ESP = ,
 	ESPAllies = true,
 	ESPSnaplines = true,
 	ShowHUD = true,
@@ -445,7 +445,8 @@ end
 
 local DBG_CONSOLE_INTERVAL = 4
 local DBG_LINE_COUNT = 14
-local DBG_HOOK_RETRY = 2
+local DBG_HOOK_RETRY = 3
+local DBG_GC_SCAN_INTERVAL = 6
 local DBG_OVERLAY_INTERVAL = 0.12
 local DBG_SYNC_SCAN_INTERVAL = 1
 local DBG_FLAME_CACHE_INTERVAL = 0.5
@@ -479,8 +480,6 @@ local dbg = {
 	logCooldowns = {} :: { [string]: number },
 	hooksReady = false,
 	networkHooked = false,
-	remoteHooked = false,
-	namecallHooked = false,
 	remotePath = "",
 	syncPath = "",
 	syncBound = 0,
@@ -490,10 +489,8 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "19-sa-debug-remote"
+local DBG_HOOK_BUILD = "20-sa-debug-safe"
 local dbgNetworkHooked = false
-local dbgRemoteHooked = false
-local dbgNamecallHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
 local dbgHookWorkerActive = false
@@ -509,18 +506,19 @@ local function dbgVolt(name: string): any
 end
 
 local voltHookfunction = dbgVolt("hookfunction")
-local voltHookmetamethod = dbgVolt("hookmetamethod")
 local voltNewcclosure = dbgVolt("newcclosure")
 local voltGetgc = dbgVolt("getgc")
 local voltFiltergc = dbgVolt("filtergc")
-local voltGetnamecallmethod = dbgVolt("getnamecallmethod")
-local voltCheckcaller = dbgVolt("checkcaller")
+lselocal voltCheckcaller = dbgVolt("checkcaller")
 local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
 local dbgNextOverlayAt = 0
 local dbgNextSyncScan = 0
 local dbgNextFlameScan = 0
 local dbgCachedFlame: BasePart? = nil
 local dbgCachedCombatRemote: RemoteEvent? = nil
+local dbgGcCachedApi: any = nil
+local dbgGcCachedRemote: RemoteEvent? = nil
+local dbgNextGcScan = 0
 
 local function dbgShortCf(cf: any): string
 	if typeof(cf) ~= "CFrame" then
@@ -669,47 +667,7 @@ local function dbgFromGame(): boolean
 end
 
 local function dbgHooksActive(): boolean
-	return dbg.networkHooked or dbg.remoteHooked or dbg.namecallHooked
-end
-
-local function dbgRecordRemoteFire(args: { any })
-	local eventName: string? = nil
-	local payloadStart: number? = nil
-
-	if typeof(args[1]) == "string" and (args[1] == "Fire" or args[1] == "Hitcheck") then
-		eventName = args[1]
-		payloadStart = 2
-	elseif typeof(args[2]) == "string" then
-		eventName = args[2]
-		payloadStart = 3
-	else
-		for i = 1, math.min(#args, 8) do
-			local value = args[i]
-			if value == "Fire" or value == "Hitcheck" then
-				eventName = value
-				payloadStart = i + 1
-				break
-			end
-		end
-	end
-
-	if not eventName or not payloadStart then
-		dbgLog(
-			"FireRaw",
-			table.concat(
-				{ dbgShortVal(args[1]), dbgShortVal(args[2]), dbgShortVal(args[3]) },
-				" | "
-			),
-			3
-		)
-		return
-	end
-
-	local payload: { any } = {}
-	for i = payloadStart, #args do
-		table.insert(payload, args[i])
-	end
-	dbgRecordNetworkEvent(eventName, payload)
+	return dbg.networkHooked
 end
 
 local function dbgIsNetworkApi(tbl: any): boolean
@@ -790,8 +748,6 @@ local function dbgPrintCaps()
 		"[GFA-DBG] caps",
 		"hookfunction:",
 		typeof(voltHookfunction),
-		"hookmetamethod:",
-		typeof(voltHookmetamethod),
 		"filtergc:",
 		typeof(voltFiltergc),
 		"getgc:",
@@ -883,12 +839,26 @@ local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
 end
 
 local function dbgFindNetworkApi(): (any, RemoteEvent?)
+	if dbgGcCachedApi and dbgGcCachedRemote and dbgGcCachedRemote.Parent then
+		return dbgGcCachedApi, dbgGcCachedRemote
+	end
+
+	local now = os.clock()
+	if now < dbgNextGcScan then
+		return nil, nil
+	end
+	dbgNextGcScan = now + DBG_GC_SCAN_INTERVAL
+
 	local foundApi: any = nil
 	local foundRemote: RemoteEvent? = nil
 	dbgScanNetworkTables(function(api, remote)
 		foundApi, foundRemote = api, remote
 		return true
 	end)
+	if foundApi and foundRemote then
+		dbgGcCachedApi = foundApi
+		dbgGcCachedRemote = foundRemote
+	end
 	return foundApi, foundRemote
 end
 
@@ -906,9 +876,10 @@ local function dbgHookNetworkApi()
 	end
 
 	local api, remote = dbgFindNetworkApi()
-	if not api or not remote or dbgRemoteScore(remote) <= 0 then
+	if not api or not remote or dbgIsBadRemote(remote) then
 		return
 	end
+	dbgAcceptCombatRemote(remote)
 
 	dbg.remotePath = remote:GetFullName()
 	local target = api.FireServer
@@ -948,126 +919,6 @@ local function dbgHookNetworkApi()
 	dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
 end
 
-local function dbgHookRemoteFireServer()
-	if dbgRemoteHooked then
-		return
-	end
-
-	local remote = dbgCombatRemote()
-	if not remote then
-		return
-	end
-
-	local path = remote:GetFullName()
-	if dbg.remotePath == "" then
-		dbg.remotePath = path
-	end
-
-	local target = remote.FireServer
-	local session = dbgSession()
-	if session and session.remoteFireFn == target then
-		dbgRemoteHooked = true
-		dbg.remoteHooked = true
-		dbg.hooksReady = true
-		if not dbg.networkHooked then
-			dbg.status = "RemoteEvent.FireServer hooked"
-			dbgPrintInit("RemoteEvent.FireServer hooked", path)
-		end
-		return
-	end
-	if typeof(voltHookfunction) ~= "function" then
-		return
-	end
-
-	local original: (...any) -> ...any
-	local ok = pcall(function()
-		original = voltHookfunction(target, dbgWrapHook(function(self, ...)
-			if Config.AimDebugger and dbgFromGame() and self == remote then
-				dbgRecordRemoteFire({ ... })
-			end
-			return original(self, ...)
-		end))
-	end)
-	if not ok or typeof(original) ~= "function" then
-		return
-	end
-	if session then
-		session.remoteFireFn = target
-	end
-
-	dbgRemoteHooked = true
-	dbg.remoteHooked = true
-	dbg.hooksReady = true
-	if dbg.networkHooked then
-		dbg.status = "Network + RemoteEvent FireServer hooked"
-	else
-		dbg.status = "RemoteEvent.FireServer hooked"
-		dbgPrintInit("RemoteEvent.FireServer hooked", path)
-	end
-end
-
-local function dbgHookNamecallCombat()
-	if dbgNamecallHooked then
-		return
-	end
-
-	if typeof(voltHookmetamethod) ~= "function" then
-		return
-	end
-
-	local remote = dbgCombatRemote()
-	if not remote then
-		return
-	end
-
-	local session = dbgSession()
-	if session and session.namecallHooked then
-		dbgNamecallHooked = true
-		dbg.namecallHooked = true
-		dbg.hooksReady = true
-		if dbg.remotePath == "" then
-			dbg.remotePath = remote:GetFullName()
-		end
-		dbg.status = "namecall FireServer active"
-		return
-	end
-
-	local oldNamecall: (...any) -> ...any
-	local ok = pcall(function()
-		oldNamecall = voltHookmetamethod(
-			game,
-			"__namecall",
-			dbgWrapHook(function(self, ...)
-				if Config.AimDebugger and dbgFromGame() then
-					if typeof(voltGetnamecallmethod) == "function" and voltGetnamecallmethod() == "FireServer" and self == remote then
-						dbgRecordRemoteFire({ ... })
-					end
-				end
-				return oldNamecall(self, ...)
-			end)
-		)
-	end)
-
-	if not ok or typeof(oldNamecall) ~= "function" then
-		return
-	end
-
-	if session then
-		session.namecallHooked = true
-	end
-
-	dbgNamecallHooked = true
-	dbg.namecallHooked = true
-	dbg.hooksReady = true
-	if dbg.remotePath == "" then
-		dbg.remotePath = remote:GetFullName()
-	end
-	if not dbg.networkHooked and not dbg.remoteHooked then
-		dbg.status = "namecall FireServer hooked"
-		dbgPrintInit("namecall FireServer hooked", remote:GetFullName())
-	end
-end
-
 local function dbgStartHookWorker()
 	if dbgHookWorkerActive or dbgHooksActive() or not Config.AimDebugger then
 		return
@@ -1079,19 +930,13 @@ local function dbgStartHookWorker()
 		while Config.AimDebugger and not dbgHooksActive() do
 			attempts += 1
 			dbgHookNetworkApi()
-			dbgHookRemoteFireServer()
-			if not dbgHooksActive() then
-				dbgHookNamecallCombat()
-			end
 			if dbgHooksActive() then
 				break
 			end
 			if typeof(voltHookfunction) ~= "function" then
 				dbg.status = "hookfunction missing (Volt genv?)"
-			elseif dbgCombatRemote() then
-				dbg.status = "waiting for Network API (gc)"
 			else
-				dbg.status = "waiting for Network API + RemoteEvent"
+				dbg.status = "waiting for Network API (gc)"
 			end
 			if attempts == 5 and not dbgHooksActive() then
 				dbgLog("init-fail", dbg.status, 0)
@@ -1253,10 +1098,8 @@ local function dbgUpdate()
 	local lines = {
 		"── Silent Aim Debugger ──",
 		string.format(
-			"Hooks: net:%s fn:%s nc:%s sync:%d | %s",
+			"Hooks: net:%s sync:%d | %s",
 			if dbg.networkHooked then "OK" else "—",
-			if dbg.remoteHooked then "OK" else "—",
-			if dbg.namecallHooked then "OK" else "—",
 			dbg.syncBound,
 			dbg.status
 		),
