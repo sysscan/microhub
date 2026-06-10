@@ -17,36 +17,36 @@ if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
 end
 
 local Config = {
-	SilentAim = false,
-	TeamCheck = true,
-	Prediction = false,
-	NoRecoil = false,
-	StableAim = false,
-	InfiniteAmmo = false,
-	AutoReload = false,
-	RapidFire = false,
-	SpeedBoost = false,
+	EnableSilentAim = false,
+	FilterTeammates = true,
+	EnableAimPrediction = false,
+	DisableWeaponRecoil = false,
+	EnableStableAim = false,
+	EnableInfiniteAmmo = false,
+	EnableAutoReload = false,
+	EnableRapidFire = false,
+	EnableMovementBoost = false,
 	SpeedMultiplier = 1.35,
-	RemoveForcefields = false,
-	FOVCircle = false,
+	RemoveSpawnForcefields = false,
+	ShowAimFovCircle = false,
 	FOVRadius = 100,
 	Hitchance = 100,
 	ProjectileSpeed = 1000,
 	HitPart = "Head",
-	BoxESP = false,
-	NameESP = false,
-	DistanceESP = false,
-	HealthESP = false,
-	TracerESP = false,
-	Chams = false,
+	ShowEspBoxes = false,
+	ShowEspNames = false,
+	ShowEspDistance = false,
+	ShowEspHealth = false,
+	ShowEspTracers = false,
+	ShowEspChams = false,
 	ESPDistance = 325,
 	TracerOrigin = "Bottom Screen",
 	Primary = "",
 	Secondary = "",
 	PrimaryCamo = "",
 	SecondaryCamo = "",
-	ShowHUD = true,
-	Debug = false,
+	ShowModuleHud = true,
+	EnableDebugLogs = false,
 }
 
 local sessionConns = {}
@@ -104,7 +104,7 @@ local function notify(text, title, duration)
 end
 
 local function debugEvent(message)
-	if not Config.Debug then
+	if not Config.EnableDebugLogs then
 		return
 	end
 	table.insert(debugLastEvents, 1, os.date("%X") .. " " .. message)
@@ -219,7 +219,7 @@ local function getTeam(entity)
 end
 
 local function isSameTeam(character)
-	if not Config.TeamCheck then
+	if not Config.FilterTeammates then
 		return false
 	end
 	local myTeam = LocalPlayer:GetAttribute("Team") or LocalPlayer.Team
@@ -275,7 +275,7 @@ local function predictedPosition(character)
 	if not targetPart then
 		return nil
 	end
-	if not Config.Prediction then
+	if not Config.EnableAimPrediction then
 		return targetPart.Position
 	end
 	local root = getCharacterRoot(character)
@@ -388,7 +388,7 @@ local function aimCFrameAtTarget(originalCFrame, targetPart, usePartCFrame)
 end
 
 local function tryRedirectSilentAim(args)
-	if not Config.SilentAim or not inHitchance() then
+	if not Config.EnableSilentAim or not inHitchance() then
 		return nil
 	end
 	local targetPart = getSilentAimTargetPart()
@@ -446,13 +446,13 @@ local function applyCombatModifiers()
 	if not modifiers then
 		return
 	end
-	if Config.NoRecoil then
+	if Config.DisableWeaponRecoil then
 		local steadiness = modifiers:FindFirstChild("Steadiness")
 		if steadiness and steadiness:IsA("NumberValue") and steadiness.Value ~= 0 then
 			steadiness.Value = 0
 		end
 	end
-	if Config.NoRecoil or Config.StableAim then
+	if Config.DisableWeaponRecoil or Config.EnableStableAim then
 		resetCFrameModifier(modifiers, "Impulse")
 		resetCFrameModifier(modifiers, "WeaponMod")
 		resetCFrameModifier(modifiers, "CameraMod")
@@ -687,7 +687,7 @@ local function getVortexEnv()
 end
 
 local function isStoredAmmoInstance(instance, property)
-	if property ~= "Value" or not Config.InfiniteAmmo then
+	if property ~= "Value" or not Config.EnableInfiniteAmmo then
 		return false
 	end
 	if tostring(instance) == "StoredAmmo" then
@@ -697,7 +697,7 @@ local function isStoredAmmoInstance(instance, property)
 end
 
 local function runInfiniteAmmoRestock()
-	if not Config.InfiniteAmmo then
+	if not Config.EnableInfiniteAmmo then
 		return
 	end
 	local vortex = getVortex()
@@ -719,7 +719,7 @@ local function runInfiniteAmmoRestock()
 end
 
 local function applyRapidFire()
-	if not Config.RapidFire then
+	if not Config.EnableRapidFire then
 		return
 	end
 	local env = getVortexEnv()
@@ -733,17 +733,17 @@ local function applyRapidFire()
 end
 
 local function applyAutoReload()
-	if Config.InfiniteAmmo then
+	if Config.EnableInfiniteAmmo then
 		GlobalAPI.Settings.AutoReload = false
 		return
 	end
-	if Config.AutoReload then
+	if Config.EnableAutoReload then
 		GlobalAPI.Settings.AutoReload = true
 	end
 end
 
 local function applyMovementSpeed()
-	if Config.SpeedBoost then
+	if Config.EnableMovementBoost then
 		MovementData.WalkSpeed = BASE_WALK_SPEED * Config.SpeedMultiplier
 		MovementData.RunSpeed = BASE_RUN_SPEED * Config.SpeedMultiplier
 	else
@@ -760,7 +760,7 @@ end
 local ALLY_FORCEFIELD_COLOR = Color3.fromRGB(0, 102, 255)
 
 local function removeEnemyForcefields()
-	if not Config.RemoveForcefields then
+	if not Config.RemoveSpawnForcefields then
 		return
 	end
 	local env = workspace:FindFirstChild("Env")
@@ -814,7 +814,7 @@ local function dumpDebugReport()
 		"vortexEnv=" .. tostring(env ~= nil),
 		"indexHook=" .. tostring(installedIndexHook),
 		"namecallHook=" .. tostring(installedNamecallHook),
-		"silentAim=" .. tostring(Config.SilentAim) .. " infiniteAmmo=" .. tostring(Config.InfiniteAmmo),
+		"enableSilentAim=" .. tostring(Config.EnableSilentAim) .. " enableInfiniteAmmo=" .. tostring(Config.EnableInfiniteAmmo),
 		"target=" .. tostring(closestTarget and closestTarget.Name or "none"),
 		"targetPos=" .. tostring(cachedTargetPosition),
 		"fireRewrites=" .. tostring(debugCounters.fireRewrites),
@@ -860,7 +860,7 @@ local function dumpDebugReport()
 end
 
 local function runDebugSummary()
-	if not Config.Debug then
+	if not Config.EnableDebugLogs then
 		return
 	end
 	local now = os.clock()
@@ -899,7 +899,7 @@ ensureIndexHook = function()
 	if installedIndexHook or not hasHookMetamethod() then
 		return
 	end
-	if not Config.InfiniteAmmo then
+	if not Config.EnableInfiniteAmmo then
 		return
 	end
 	installedIndexHook = true
@@ -931,7 +931,7 @@ ensureNamecallHook = function()
 	if installedNamecallHook or not hasHookMetamethod() or not hasNamecallHook() then
 		return
 	end
-	if not Config.SilentAim then
+	if not Config.EnableSilentAim then
 		return
 	end
 	installedNamecallHook = true
@@ -940,7 +940,7 @@ ensureNamecallHook = function()
 			if isExecutorCall() then
 				return oldNamecall(self, ...)
 			end
-			if Config.SilentAim then
+			if Config.EnableSilentAim then
 				local method = getnamecallmethod()
 				if method == "Fire" and typeof(self) == "Instance" and self.Name == "Sync" then
 					local args = { ... }
@@ -984,7 +984,7 @@ local function updateFovCircle()
 	end
 	fovCircle.Position = cachedAimOrigin or getAimOrigin()
 	fovCircle.Radius = Config.FOVRadius
-	fovCircle.Visible = Config.FOVCircle
+	fovCircle.Visible = Config.ShowAimFovCircle
 end
 
 local function makeBoxEsp()
@@ -1087,8 +1087,8 @@ local function hideBoxEsp(esp)
 end
 
 local function updateVisuals()
-	local anyBox = Config.BoxESP or Config.NameESP or Config.DistanceESP
-	if not (anyBox or Config.HealthESP or Config.TracerESP or Config.Chams) then
+	local anyBox = Config.ShowEspBoxes or Config.ShowEspNames or Config.ShowEspDistance
+	if not (anyBox or Config.ShowEspHealth or Config.ShowEspTracers or Config.ShowEspChams) then
 		for character in pairs(espCache) do
 			clearBoxEsp(character)
 		end
@@ -1145,13 +1145,13 @@ local function updateVisuals()
 				local center = vector2(rootPos.X, (headPos.Y + bottomPos.Y) / 2)
 				esp.Box.Size = vector2(width, height)
 				esp.Box.Position = center - vector2(width / 2, height / 2)
-				esp.Box.Visible = Config.BoxESP
+				esp.Box.Visible = Config.ShowEspBoxes
 				esp.Name.Text = (Players:GetPlayerFromCharacter(character) or character).Name
 				esp.Name.Position = vector2(rootPos.X, headPos.Y - 20)
-				esp.Name.Visible = Config.NameESP
+				esp.Name.Visible = Config.ShowEspNames
 				esp.Distance.Text = tostring(math.floor(distance)) .. " studs"
 				esp.Distance.Position = vector2(rootPos.X, bottomPos.Y + 5)
-				esp.Distance.Visible = Config.DistanceESP
+				esp.Distance.Visible = Config.ShowEspDistance
 			elseif esp then
 				hideBoxEsp(esp)
 			end
@@ -1159,7 +1159,7 @@ local function updateVisuals()
 			clearBoxEsp(character)
 		end
 
-		if Config.HealthESP then
+		if Config.ShowEspHealth then
 			if not healthCache[character] then
 				healthCache[character] = makeHealthEsp()
 			end
@@ -1183,7 +1183,7 @@ local function updateVisuals()
 			clearHealthEsp(character)
 		end
 
-		if Config.TracerESP then
+		if Config.ShowEspTracers then
 			if not tracerCache[character] then
 				tracerCache[character] = makeTracer()
 			end
@@ -1207,7 +1207,7 @@ local function updateVisuals()
 			clearTracer(character)
 		end
 
-		if Config.Chams then
+		if Config.ShowEspChams then
 			if not chamsCache[character] then
 				local highlight = Instance.new("Highlight")
 				highlight.FillColor = Color3.fromRGB(255, 0, 0)
@@ -1226,7 +1226,7 @@ local function updateVisuals()
 end
 
 local function updateAim()
-	if not Config.SilentAim then
+	if not Config.EnableSilentAim then
 		closestTarget = nil
 		clearAimSnapshot()
 		return
@@ -1333,14 +1333,14 @@ UILib.create({
 				{
 					title = "AIM",
 					items = {
-						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "toggle", key = "Prediction", label = "Prediction", hud = "Prediction" },
-						{ type = "toggle", key = "FOVCircle", label = "FOV Circle", hud = "FOV Circle" },
+						{ type = "toggle", key = "EnableSilentAim", label = "Silent Aim", hud = "Silent Aim" },
+						{ type = "toggle", key = "EnableAimPrediction", label = "Aim Prediction", hud = "Aim Prediction" },
+						{ type = "toggle", key = "ShowAimFovCircle", label = "Show FOV Circle", hud = "FOV Circle" },
 						{ type = "select", key = "HitPart", label = "Hit Part", options = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" } },
 						{ type = "slider", key = "FOVRadius", label = "FOV Radius", min = 10, max = 1000, step = 10 },
 						{ type = "slider", key = "Hitchance", label = "Hitchance", min = 0, max = 100, step = 5 },
 						{ type = "slider", key = "ProjectileSpeed", label = "Projectile Speed", min = 100, max = 3000, step = 100 },
-						{ type = "toggle", key = "Debug", label = "Debug Logging", hud = "Debug" },
+						{ type = "toggle", key = "EnableDebugLogs", label = "Debug Logging", hud = "Debug Logs" },
 						{ type = "button", id = "dumpDebug", label = "Dump Debug Report", onClick = dumpDebugReport },
 					},
 				},
@@ -1352,13 +1352,13 @@ UILib.create({
 				{
 					title = "ESP",
 					items = {
-						{ type = "toggle", key = "BoxESP", label = "Box ESP", hud = "Box ESP" },
-						{ type = "toggle", key = "NameESP", label = "Name ESP", hud = "Name ESP" },
-						{ type = "toggle", key = "DistanceESP", label = "Distance ESP", hud = "Distance ESP" },
-						{ type = "toggle", key = "HealthESP", label = "Health ESP", hud = "Health ESP" },
-						{ type = "toggle", key = "TracerESP", label = "Tracer ESP", hud = "Tracer ESP" },
-						{ type = "toggle", key = "Chams", label = "Chams", hud = "Chams" },
-						{ type = "toggle", key = "TeamCheck", label = "Team Check", hud = "Team Check" },
+						{ type = "toggle", key = "ShowEspBoxes", label = "ESP Boxes", hud = "ESP Boxes" },
+						{ type = "toggle", key = "ShowEspNames", label = "ESP Names", hud = "ESP Names" },
+						{ type = "toggle", key = "ShowEspDistance", label = "ESP Distance", hud = "ESP Distance" },
+						{ type = "toggle", key = "ShowEspHealth", label = "ESP Health", hud = "ESP Health" },
+						{ type = "toggle", key = "ShowEspTracers", label = "ESP Tracers", hud = "ESP Tracers" },
+						{ type = "toggle", key = "ShowEspChams", label = "ESP Chams", hud = "ESP Chams" },
+						{ type = "toggle", key = "FilterTeammates", label = "Filter Teammates", hud = "Filter Teams" },
 						{ type = "select", key = "TracerOrigin", label = "Tracer Origin", options = { "Bottom Screen", "Cursor", "Top Screen" } },
 						{ type = "slider", key = "ESPDistance", label = "ESP Distance", min = 50, max = 1500, step = 25 },
 					},
@@ -1371,14 +1371,14 @@ UILib.create({
 				{
 					title = "COMBAT",
 					items = {
-						{ type = "toggle", key = "NoRecoil", label = "No Recoil", hud = "No Recoil" },
-						{ type = "toggle", key = "StableAim", label = "Stable Aim", hud = "Stable Aim" },
-						{ type = "toggle", key = "InfiniteAmmo", label = "Infinite Ammo", hud = "Infinite Ammo" },
-						{ type = "toggle", key = "AutoReload", label = "Auto Reload", hud = "Auto Reload" },
-						{ type = "toggle", key = "RapidFire", label = "Rapid Fire", hud = "Rapid Fire" },
-						{ type = "toggle", key = "SpeedBoost", label = "Speed Boost", hud = "Speed Boost" },
+						{ type = "toggle", key = "DisableWeaponRecoil", label = "Disable Recoil", hud = "No Recoil" },
+						{ type = "toggle", key = "EnableStableAim", label = "Stable Aim", hud = "Stable Aim" },
+						{ type = "toggle", key = "EnableInfiniteAmmo", label = "Infinite Ammo", hud = "Inf Ammo" },
+						{ type = "toggle", key = "EnableAutoReload", label = "Auto Reload", hud = "Auto Reload" },
+						{ type = "toggle", key = "EnableRapidFire", label = "Rapid Fire", hud = "Rapid Fire" },
+						{ type = "toggle", key = "EnableMovementBoost", label = "Movement Boost", hud = "Speed Boost" },
 						{ type = "slider", key = "SpeedMultiplier", label = "Speed Multiplier", min = 1, max = 2.5, step = 0.05 },
-						{ type = "toggle", key = "RemoveForcefields", label = "No Forcefields", hud = "No Forcefields" },
+						{ type = "toggle", key = "RemoveSpawnForcefields", label = "Remove Forcefields", hud = "No Shields" },
 						{ type = "button", id = "applyRespawn", label = "Respawn", onClick = resetCharacter },
 					},
 				},
@@ -1421,18 +1421,18 @@ UILib.create({
 				{
 					title = "MENU",
 					items = {
-						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
+						{ type = "toggle", key = "ShowModuleHud", label = "Module HUD", hud = nil },
 						{ type = "button", id = "cleanup", label = "Unload Features", onClick = cleanup },
 					},
 				},
 			},
 		},
 	},
-	hud = { showKey = "ShowHUD" },
+	hud = { showKey = "ShowModuleHud" },
 	onToggle = function(key, value)
-		if (key == "NoRecoil" or key == "StableAim") and value then
+		if (key == "DisableWeaponRecoil" or key == "EnableStableAim") and value then
 			applyCombatModifiers()
-		elseif key == "SilentAim" then
+		elseif key == "EnableSilentAim" then
 			if value then
 				ensureNamecallHook()
 				aimHooksReady = installedNamecallHook or not hasNamecallHook()
@@ -1444,7 +1444,7 @@ UILib.create({
 				closestTarget = nil
 				clearAimSnapshot()
 			end
-		elseif key == "InfiniteAmmo" then
+		elseif key == "EnableInfiniteAmmo" then
 			if value then
 				ensureIndexHook()
 				runInfiniteAmmoRestock()
@@ -1458,14 +1458,14 @@ UILib.create({
 				vortexEnv = nil
 				clearAmmoCache()
 			end
-		elseif key == "Debug" then
+		elseif key == "EnableDebugLogs" then
 			if value then
 				notify("Debug enabled — status every 2s. Use Dump Debug Report for full details.", "Debug", 6)
 				dumpDebugReport()
 			end
-		elseif key == "AutoReload" or key == "RapidFire" then
+		elseif key == "EnableAutoReload" or key == "EnableRapidFire" then
 			applyCombatExtras()
-		elseif key == "SpeedBoost" or key == "SpeedMultiplier" then
+		elseif key == "EnableMovementBoost" or key == "SpeedMultiplier" then
 			applyMovementSpeed()
 		end
 	end,
