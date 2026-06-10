@@ -43,9 +43,10 @@ local Config = {
 -- Server sets LocalPlayer._Y while tracking vertical movement; it chases upward during flight.
 -- Freeze acGroundY (never follow rising _Y) and hard-cap height to stay under AC tolerance.
 local FLY_AC_MAX_ABOVE_Y = 10
-local FLY_BYPASS_MAX_SPEED = 26
+local FLY_BYPASS_MAX_SPEED = 16
+local FLY_BYPASS_MAX_STEP = 0.32
 local FLY_AC_MAX_BELOW_Y = 2
-local GAME_BUILD = "12-fly-cframe-cap"
+local GAME_BUILD = "13-fly-latch-lock"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -420,6 +421,9 @@ local function getFlyAcCeiling()
 end
 
 local function syncAcGroundYFromAttr()
+	if flyBypassState.groundLatched then
+		return
+	end
 	local y = LocalPlayer:GetAttribute("_Y")
 	if typeof(y) ~= "number" then
 		return
@@ -557,6 +561,10 @@ local function applyFlyStep(root, humanoid, deltaTime, withBypass)
 				step = Vector3.new(step.X, minY - root.Position.Y, step.Z)
 			end
 		end
+		local stepLen = step.Magnitude
+		if stepLen > FLY_BYPASS_MAX_STEP then
+			step = step * (FLY_BYPASS_MAX_STEP / stepLen)
+		end
 		root.CFrame += step
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
@@ -625,8 +633,18 @@ local function teardownMovementBypass()
 	bypassSession.flyStep = nil
 end
 
+local sessionConns = {}
+
+local function disconnectSessionConns()
+	for _, conn in ipairs(sessionConns) do
+		conn:Disconnect()
+	end
+	table.clear(sessionConns)
+end
+
 genv.__ThaBronx3Unload = function()
 	teardownMovementBypass()
+	disconnectSessionConns()
 end
 
 local function rootIsLive(rootPart, character)
@@ -704,9 +722,14 @@ local function applyMovementBypass(character)
 			humanoid.PlatformStand = false
 		end
 
-		if flyActive then
+		if Config.Fly then
+			if not flyActive and humanoid.PlatformStand then
+				humanoid.PlatformStand = false
+			end
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
 			enforceFlyHeightCap(root)
-			acDebugMark("bypass_post_fly", {
+			acDebugMark(flyActive and "bypass_post_fly" or "bypass_post_idle", {
 				anchored = root.Anchored,
 				acY = flyBypassState.acGroundY,
 				ceiling = getFlyAcCeiling(),
@@ -1944,14 +1967,14 @@ local HubUI = UILib.create({
 	end,
 })
 
-LocalPlayer.AttributeChanged:Connect(function(name)
+disconnectSessionConns()
+table.insert(sessionConns, LocalPlayer.AttributeChanged:Connect(function(name)
 	if name == "_Y" then
 		syncAcGroundYFromAttr()
 	end
-end)
-
-LocalPlayer.CharacterAdded:Connect(bindCharacter)
-LocalPlayer.CharacterRemoving:Connect(onCharacterRemoving)
+end))
+table.insert(sessionConns, LocalPlayer.CharacterAdded:Connect(bindCharacter))
+table.insert(sessionConns, LocalPlayer.CharacterRemoving:Connect(onCharacterRemoving))
 
 if LocalPlayer.Character then
 	task.defer(bindCharacter, LocalPlayer.Character)
@@ -1960,18 +1983,18 @@ end
 applyInstantPrompts()
 applyShootBypass()
 
-LocalPlayer.PlayerGui.ChildAdded:Connect(function(child)
+table.insert(sessionConns, LocalPlayer.PlayerGui.ChildAdded:Connect(function(child)
 	if child.Name == "Hunger" and Config.NoHunger then
 		task.defer(applyNoHunger)
 	end
-end)
+end))
 
-RunService.Heartbeat:Connect(function(deltaTime)
+table.insert(sessionConns, RunService.Heartbeat:Connect(function(deltaTime)
 	syncAcDebugContext()
 	applySurvivalBypasses()
 	applyMovementBoosts()
 	applyAlwaysSprint()
 	applyFly(typeof(deltaTime) == "number" and deltaTime or 1 / 60)
-end)
+end))
 
 print("[MicroHub] Tha Bronx 3", GAME_BUILD, "— LastACPos:", readLastAcStatus())

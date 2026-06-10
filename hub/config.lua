@@ -1,10 +1,10 @@
 return {
 	Name = "MicroHub",
-	Version = "1.1.8",
+	Version = "1.1.9",
 	Repository = "https://raw.githubusercontent.com/sysscan/microhub/main/hub",
 	-- Version markers must appear in remote source (see DEBUG_VERSION etc. in each file).
 	ModuleVersions = {
-		["games/tha-bronx3.lua"] = "12-fly-cframe-cap",
+		["games/tha-bronx3.lua"] = "13-fly-latch-lock",
 		["tools/bronx3-ac-debug.lua"] = "8-idempotent-start",
 	},
 }
