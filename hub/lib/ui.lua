@@ -1,18 +1,18 @@
 --[[
-	MicroHub UI v3.0.0 — Cascade-backed adapter.
+	MicroHub UI v4.0.0 — juanitahaxx-backed adapter.
 
-	The game scripts still call:
+	Game scripts call:
 		UILib.create({ title, config, pages, onToggle, onChange, ... })
 
-	This file imports Cascade v1.4.0 and maps MicroHub's small schema onto
-	Cascade windows, tabs, forms, rows, and controls.
+	This file maps MicroHub's schema onto
+	https://github.com/sametexe001/juanitahaxx (Library.lua vendored in lib/juanita/).
 ]]
 
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local CASCADE_VERSION = "v1.4.0"
-local CASCADE_URL = "https://github.com/cascadeui/Cascade/releases/download/" .. CASCADE_VERSION .. "/dist.luau"
-local VERSION = "3.0.0"
+local VERSION = "4.0.0"
+local JUANITA_SOURCE = "lib/juanita/Library.lua"
 
 local COLOR_PRESETS = {
 	{ name = "Red", value = Color3.fromRGB(255, 75, 75) },
@@ -25,7 +25,13 @@ local COLOR_PRESETS = {
 	{ name = "White", value = Color3.fromRGB(255, 255, 255) },
 }
 
-local cascadeCache = nil
+local function importJuanita()
+	local lib = shared.__JuanitaLibrary
+	if typeof(lib) == "table" then
+		return lib
+	end
+	error("Juanita UI library not loaded — run hub/loader.lua", 0)
+end
 
 local function clearTable(tbl)
 	if table.clear then
@@ -35,82 +41,6 @@ local function clearTable(tbl)
 	for key in pairs(tbl) do
 		tbl[key] = nil
 	end
-end
-
-local function requestFn()
-	if typeof(request) == "function" then
-		return request
-	end
-	return nil
-end
-
-local function statusOk(res)
-	if typeof(res) ~= "table" then
-		return true
-	end
-	local status = tonumber(res.StatusCode)
-	if status ~= nil then
-		return status >= 200 and status < 300
-	end
-	if res.Success == true then
-		return true
-	end
-	if res.Success == false then
-		return false
-	end
-	return true
-end
-
-local function fetchUrl(url)
-	local http = requestFn()
-	if typeof(http) == "function" then
-		---@cast http fun(options: table): table
-		local ok, res = pcall(function()
-			return http({
-				Url = url .. "?t=" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
-				Method = "GET",
-				Headers = {
-					["Cache-Control"] = "no-cache, no-store",
-					["Pragma"] = "no-cache",
-					["User-Agent"] = "MicroHub-Cascade/" .. VERSION,
-				},
-			})
-		end)
-		if ok and res and statusOk(res) and typeof(res.Body) == "string" then
-			return res.Body
-		end
-	end
-
-	if game.HttpGetAsync then
-		local ok, body = pcall(function()
-			return game:HttpGetAsync(url, true)
-		end)
-		if ok and typeof(body) == "string" and #body > 0 then
-			return body
-		end
-	end
-
-	error("Unable to download Cascade " .. CASCADE_VERSION, 0)
-end
-
-local function importCascade()
-	if cascadeCache then
-		return cascadeCache
-	end
-
-	local source = fetchUrl(CASCADE_URL)
-	local fn, err = loadstring(source, "Cascade." .. CASCADE_VERSION)
-	if not fn then
-		error("Cascade compile failed: " .. tostring(err), 0)
-	end
-
-	local ok, cascade = pcall(fn)
-	if not ok or typeof(cascade) ~= "table" then
-		error("Cascade load failed: " .. tostring(cascade), 0)
-	end
-
-	cascadeCache = cascade
-	return cascade
 end
 
 local function shallowCopy(tbl)
@@ -191,22 +121,14 @@ local function optionLabel(option)
 	return tostring(option)
 end
 
-local function findOptionIndex(options, value)
-	for index, option in ipairs(options or {}) do
+local function findOptionLabel(options, value)
+	for _, option in ipairs(options or {}) do
 		if optionValue(option) == value then
-			return index
+			return optionLabel(option)
 		end
 	end
-	return 1
-end
-
-local function colorIndex(color, presets)
-	for index, preset in ipairs(presets) do
-		if preset.value == color then
-			return index
-		end
-	end
-	return 1
+	local first = options and options[1]
+	return first and optionLabel(first) or ""
 end
 
 local function clamp(value, minV, maxV)
@@ -226,6 +148,25 @@ local function snap(value, minV, maxV, step)
 	return clamp(value, minV, maxV)
 end
 
+local function stepDecimals(step)
+	step = step or 1
+	local text = tostring(step)
+	local dot = text:find("%.")
+	if not dot then
+		return 0
+	end
+	return #text - dot
+end
+
+local function colorIndex(color, presets)
+	for index, preset in ipairs(presets) do
+		if preset.value == color then
+			return index
+		end
+	end
+	return 1
+end
+
 local HubUI = {}
 HubUI.__index = HubUI
 
@@ -239,108 +180,104 @@ function HubUI:_notify(item, value)
 	if item.type == "toggle" and self.onToggle then
 		self.onToggle(item.key, value)
 	end
-end
-
-function HubUI:_row(form, title, subtitle)
-	local row = form:Row({ SearchIndex = title })
-	local left = row:Left()
-	if left.TitleStack then
-		left:TitleStack({
-			Title = title,
-			Subtitle = subtitle,
-		})
-	else
-		left:Label({ Text = title })
+	if item.type == "toggle" and self._refreshHud then
+		self:_refreshHud()
 	end
-	return row
 end
 
-function HubUI:_addToggle(form, item)
-	local row = self:_row(form, item.label or item.key, item.subtitle)
-	row:Right():Toggle({
-		Value = self.config[item.key] == true,
-		ValueChanged = function(_, value)
+function HubUI:_flag(item)
+	if item.key then
+		return "mh_" .. tostring(item.key)
+	end
+	if item.id then
+		return "mh_" .. tostring(item.id)
+	end
+	return "mh_" .. tostring(item.label or item.type)
+end
+
+function HubUI:_addToggle(section, item)
+	local initial = self.config[item.key] == true
+	self.config[item.key] = initial
+
+	if item.hud then
+		table.insert(self.hudEntries, {
+			key = item.key,
+			label = tostring(item.hud),
+		})
+	end
+
+	section:Toggle({
+		Name = item.label or item.key,
+		Flag = self:_flag(item),
+		Default = initial,
+		Callback = function(value)
 			self.config[item.key] = value == true
 			self:_notify(item, self.config[item.key])
 		end,
 	})
 end
 
-function HubUI:_addSlider(form, item)
+function HubUI:_addSlider(section, item)
 	local minV = item.min or 0
 	local maxV = item.max or 100
 	local step = item.step or 1
 	local initial = snap(tonumber(self.config[item.key]) or minV, minV, maxV, step)
 	self.config[item.key] = initial
 
-	local row = self:_row(form, item.label or item.key, item.subtitle)
-	local valueLabel = row:Right():Label({ Text = tostring(initial) })
-	row:Right():Slider({
-		Minimum = minV,
-		Maximum = maxV,
-		Value = initial,
-		ValueChanged = function(component, value)
+	section:Slider({
+		Name = item.label or item.key,
+		Flag = self:_flag(item),
+		Min = minV,
+		Max = maxV,
+		Default = initial,
+		Decimals = stepDecimals(step),
+		Suffix = item.suffix or "",
+		Callback = function(value)
 			local nextValue = snap(tonumber(value) or minV, minV, maxV, step)
 			self.config[item.key] = nextValue
-			valueLabel.Text = tostring(nextValue)
-			if component and component.Value ~= nextValue then
-				component.Value = nextValue
-			end
 			self:_notify(item, nextValue)
 		end,
 	})
 end
 
-function HubUI:_addNumber(form, item)
-	local minV = item.min or 0
-	local maxV = item.max or 100
-	local step = item.step or 1
-	local initial = snap(tonumber(self.config[item.key]) or minV, minV, maxV, step)
-	self.config[item.key] = initial
-
-	local row = self:_row(form, item.label or item.key, item.subtitle)
-	row:Right():Stepper({
-		Minimum = minV,
-		Maximum = maxV,
-		Step = step,
-		Fielded = true,
-		Value = initial,
-		ValueChanged = function(component, value)
-			local nextValue = snap(tonumber(value) or minV, minV, maxV, step)
-			self.config[item.key] = nextValue
-			if component and component.Value ~= nextValue then
-				component.Value = nextValue
-			end
-			self:_notify(item, nextValue)
-		end,
-	})
+function HubUI:_addNumber(section, item)
+	self:_addSlider(section, item)
 end
 
-function HubUI:_addSelect(form, item)
+function HubUI:_addSelect(section, item)
 	local options = item.options or {}
 	local labels = {}
-	for _, option in ipairs(options) do
-		table.insert(labels, optionLabel(option))
-	end
-	local selected = findOptionIndex(options, self.config[item.key])
+	local labelToValue = {}
 
-	local row = self:_row(form, item.label or item.key, item.subtitle)
-	row:Right():PopUpButton({
-		Options = labels,
-		Value = selected,
-		ValueChanged = function(_, index)
-			local option = options[index]
-			if option == nil then
+	for _, option in ipairs(options) do
+		local label = optionLabel(option)
+		table.insert(labels, label)
+		labelToValue[label] = optionValue(option)
+	end
+
+	local selected = findOptionLabel(options, self.config[item.key])
+	if self.config[item.key] == nil and labels[1] then
+		self.config[item.key] = labelToValue[labels[1]]
+	end
+
+	section:Dropdown({
+		Name = item.label or item.key,
+		Flag = self:_flag(item),
+		Items = labels,
+		Default = selected,
+		Multi = false,
+		Callback = function(value)
+			local mapped = labelToValue[value]
+			if mapped == nil then
 				return
 			end
-			local value = optionValue(option)
-			self.config[item.key] = value
-			self:_notify(item, value)
+			self.config[item.key] = mapped
+			self:_notify(item, mapped)
 		end,
 	})
 end
 
-function HubUI:_addColor(form, item)
+function HubUI:_addColor(section, item)
 	local presets = {}
 	for _, preset in ipairs(item.presets or COLOR_PRESETS) do
 		if typeof(preset) == "Color3" then
@@ -356,33 +293,27 @@ function HubUI:_addColor(form, item)
 		presets = COLOR_PRESETS
 	end
 
-	local labels = {}
-	for _, preset in ipairs(presets) do
-		table.insert(labels, preset.name)
+	local initial = self.config[item.key]
+	if typeof(initial) ~= "Color3" then
+		initial = presets[colorIndex(initial, presets)].value
+		self.config[item.key] = initial
 	end
-	local selected = colorIndex(self.config[item.key], presets)
 
-	local row = self:_row(form, item.label or item.key, item.subtitle or "Color preset")
-	row:Right():PopUpButton({
-		Options = labels,
-		Value = selected,
-		ValueChanged = function(_, index)
-			local preset = presets[index]
-			if not preset then
-				return
-			end
-			self.config[item.key] = preset.value
-			self:_notify(item, preset.value)
+	local label = section:Label({ Name = item.label or item.key })
+	label:Colorpicker({
+		Flag = self:_flag(item),
+		Default = initial,
+		Callback = function(color)
+			self.config[item.key] = color
+			self:_notify(item, color)
 		end,
 	})
 end
 
-function HubUI:_addButton(form, item)
-	local row = self:_row(form, item.label or item.id or "Action", item.subtitle)
-	row:Right():Button({
-		Label = item.getLabel and item.getLabel() or item.label or "Run",
-		State = item.danger == false and "Primary" or (item.state or "Secondary"),
-		Pushed = function()
+function HubUI:_addButton(section, item)
+	section:Button({
+		Name = item.getLabel and item.getLabel() or item.label or item.id or "Run",
+		Callback = function()
 			if item.canClick and not item.canClick() then
 				return
 			end
@@ -393,91 +324,111 @@ function HubUI:_addButton(form, item)
 	})
 end
 
-function HubUI:_addText(form, item)
-	local row = form:Row({ SearchIndex = item.text or item.label or "" })
-	row:Left():Label({
-		Text = item.text or item.label or "",
-		TextXAlignment = Enum.TextXAlignment.Left,
+function HubUI:_addText(section, item)
+	section:Label({
+		Name = item.text or item.label or "",
 	})
 end
 
-function HubUI:_addItem(form, item)
+function HubUI:_addItem(section, item)
 	if item.type == "toggle" and item.key then
-		self:_addToggle(form, item)
+		self:_addToggle(section, item)
 	elseif item.type == "slider" and item.key then
-		self:_addSlider(form, item)
+		self:_addSlider(section, item)
 	elseif item.type == "number" and item.key then
-		self:_addNumber(form, item)
+		self:_addNumber(section, item)
 	elseif item.type == "select" and item.key then
-		self:_addSelect(form, item)
+		self:_addSelect(section, item)
 	elseif item.type == "color" and item.key then
-		self:_addColor(form, item)
+		self:_addColor(section, item)
 	elseif item.type == "button" then
-		self:_addButton(form, item)
+		self:_addButton(section, item)
 	elseif item.type == "hint" or item.type == "label" then
-		self:_addText(form, item)
+		self:_addText(section, item)
 	elseif item.type == "separator" then
-		self:_addText(form, { text = " " })
+		self:_addText(section, { text = " " })
 	end
+end
+
+function HubUI:_setupHud()
+	if not self.watermark then
+		return
+	end
+
+	local showKey = (self.hudOptions and self.hudOptions.showKey) or "ShowHUD"
+	self.hudStatus = self.watermark:Add("")
+
+	function self:_refreshHud()
+		local show = self.config[showKey] ~= false
+		self.watermark:SetVisibility(show)
+		if not show or not self.hudStatus then
+			return
+		end
+
+		local active = {}
+		for _, entry in ipairs(self.hudEntries) do
+			if self.config[entry.key] == true then
+				table.insert(active, entry.label)
+			end
+		end
+
+		if #active == 0 then
+			self.hudStatus:SetText("idle")
+		else
+			self.hudStatus:SetText(table.concat(active, " | "))
+		end
+	end
+
+	self:_refreshHud()
 end
 
 function HubUI:_build()
-	local cascade = importCascade()
-	self.cascade = cascade
+	local Library = importJuanita()
+	self.library = Library
 
-	self.app = cascade.New({
-		WindowPill = true,
-		Theme = cascade.Themes.Dark,
-		Accent = cascade.Accents.Blue,
-	})
+	Library.MenuKeybind = tostring(self.toggleKey)
 
-	local size = UserInputService.TouchEnabled
-		and UDim2.fromOffset(540, 360)
-		or UDim2.fromOffset(820, 520)
+	self.window = Library:Window({ Name = self.title })
+	self.watermark = self.window:Watermark({ Name = self.title })
+	self.hudEntries = {}
 
-	self.window = self.app:Window({
-		Title = self.title,
-		Subtitle = "MicroHub",
-		Size = size,
-		Draggable = true,
-		Resizable = true,
-		CanExit = false,
-		CanMinimize = true,
-		CanZoom = true,
-		Minimized = not self.menuVisible,
-		Dropshadow = true,
-		UIBlur = false,
-	})
-
-	local tabSection = self.window:Section({
-		Title = self.title,
-		Disclosure = false,
-	})
-
+	local builtPages = {}
 	for pageIndex, page in ipairs(self.pages) do
-		local tab = tabSection:Tab({
-			Title = page.label,
-			Selected = pageIndex == self.activePage,
-			Icon = self.cascade.Symbols.squareStack3dUp,
-		})
+		local jPage = self.window:Page({ Name = page.label })
+		builtPages[pageIndex] = jPage
 
+		local side = 1
 		for _, section in ipairs(page.sections or {}) do
-			local formParent = tab
-			if section.title and section.title ~= "" and tab.PageSection then
-				formParent = tab:PageSection({ Title = section.title })
-			end
-			local form = formParent:Form()
+			local jSection = jPage:Section({
+				Name = section.title or "General",
+				Side = side,
+			})
+			side = side == 1 and 2 or 1
+
 			for _, item in ipairs(section.items or {}) do
-				self:_addItem(form, item)
+				self:_addItem(jSection, item)
 			end
 		end
 	end
+
+	local active = builtPages[self.activePage] or builtPages[1]
+	if active then
+		active:Turn()
+	end
+
+	self.window:Init()
+
+	if not self.menuVisible then
+		self.window:SetOpen(false)
+	end
+
+	self:_setupHud()
 end
 
 function HubUI:setMenuVisible(visible)
 	self.menuVisible = visible == true
 	if self.window then
-		self.window.Minimized = not self.menuVisible
+		self.window:SetOpen(self.menuVisible)
 	end
 	if self.onMenuVisible then
 		self.onMenuVisible(self.menuVisible)
@@ -486,7 +437,7 @@ end
 
 function HubUI:isMenuVisible()
 	if self.window then
-		return self.window.Minimized ~= true
+		return self.window.IsOpen == true
 	end
 	return self.menuVisible
 end
@@ -499,18 +450,15 @@ function HubUI:destroy()
 	end
 	clearTable(self.connections)
 
-	if self.window then
+	if self.library and typeof(self.library.Exit) == "function" then
 		pcall(function()
-			self.window:Destroy()
+			self.library:Exit()
 		end)
-		self.window = nil
 	end
-	if self.app then
-		pcall(function()
-			self.app:Destroy()
-		end)
-		self.app = nil
-	end
+
+	self.window = nil
+	self.watermark = nil
+	self.library = nil
 end
 
 local function create(options)
@@ -519,33 +467,37 @@ local function create(options)
 		title = options.title or "MicroHub",
 		config = options.config or {},
 		pages = buildPages(options),
-		activePage = 1,
+		activePage = options.activePage or 1,
 		menuVisible = options.startVisible ~= false,
 		toggleKey = options.toggleKey or Enum.KeyCode.RightShift,
 		mobileToggleKey = options.mobileToggleKey or Enum.KeyCode.ButtonY,
+		hudOptions = options.hud,
 		onToggle = options.onToggle,
 		onChange = options.onChange,
 		onMenuVisible = options.onMenuVisible,
 		connections = {},
+		hudEntries = {},
 	}, HubUI)
 
 	self:_build()
 
-	table.insert(self.connections, UserInputService.InputEnded:Connect(function(input, gameProcessed)
-		if gameProcessed and input.UserInputType ~= Enum.UserInputType.Touch then
-			return
-		end
-		if input.KeyCode == self.toggleKey or input.KeyCode == self.mobileToggleKey then
-			self:setMenuVisible(not self:isMenuVisible())
-		end
-	end))
+	if UserInputService.TouchEnabled then
+		table.insert(self.connections, UserInputService.InputEnded:Connect(function(input, gameProcessed)
+			if gameProcessed and input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+			if input.KeyCode == self.mobileToggleKey then
+				self:setMenuVisible(not self:isMenuVisible())
+			end
+		end))
+	end
 
 	return self
 end
 
 return {
 	version = VERSION,
-	cascadeVersion = CASCADE_VERSION,
+	juanitaSource = JUANITA_SOURCE,
 	create = create,
 	colorPresets = COLOR_PRESETS,
 }

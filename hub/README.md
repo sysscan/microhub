@@ -28,15 +28,17 @@ Push changes to GitHub, re-run the snippet above — nothing else to edit.
 hub/
 ├── bootstrap.lua   # Stable entry — resolves SHA, runs loader
 ├── loader.lua      # Game router + remote fetcher
-├── lib/ui.lua      # Cascade-backed UI adapter
+├── lib/
+│   ├── ui.lua              # juanitahaxx-backed UI adapter
+│   └── juanita/Library.lua # Vendored UI library
 └── games/          # Per-game scripts
 ```
 
 ## UI (`lib/ui.lua`)
 
-- Powered by [Cascade](https://github.com/cascadeui/Cascade), pinned to release `v1.4.0`
-- **PC:** RightShift toggles menu, Cascade handles drag/resize
-- **Mobile:** Cascade window pill and touch-friendly controls
+- Powered by [juanitahaxx](https://github.com/sametexe001/juanitahaxx) (`lib/juanita/Library.lua`)
+- **PC:** RightShift toggles menu (juanita menu keybind)
+- **Mobile:** ButtonY toggles menu; juanita handles touch controls
 - **Tabs:** `pages = { { label = "Combat", sections = { ... } } }`
 - **Items:** `toggle`, `slider`, `select`, `color`, `number`, `button`, `hint`, `label`, `separator`
 - **Legacy:** `sections` + `toggles` + `footer` still work (auto-converted)

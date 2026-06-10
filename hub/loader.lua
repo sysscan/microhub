@@ -240,6 +240,13 @@ local function unloadOld()
 	genv.__ThaBronx3Unload = nil
 	genv.__ThaBronx3FlyStep = nil
 	genv.__GunfightArenaUnload = nil
+	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
+		pcall(function()
+			genv.Library:Exit()
+		end)
+	end
+	genv.Library = nil
+	shared.__JuanitaLibrary = nil
 	shared[UI_KEY] = nil
 end
 
@@ -253,6 +260,12 @@ local ok, err = pcall(function()
 	end
 
 	warn("[MicroHub] v" .. VERSION .. " @ " .. sha:sub(1, 7) .. " -> " .. entry.name)
+
+	local juanita = runSource("lib/juanita/Library.lua")
+	if typeof(juanita) ~= "table" then
+		error("lib/juanita/Library.lua did not return a UI library", 0)
+	end
+	shared.__JuanitaLibrary = juanita
 
 	local ui = runSource("lib/ui.lua")
 	if typeof(ui) ~= "table" or typeof(ui.create) ~= "function" then
