@@ -5,9 +5,8 @@
 	https://docs.voltbz.net/docs/filesystem/appendfile
 
 	Usage (standalone):
-		dofile("hub/tools/bronx3-ac-debug.lua")
-		getgenv().__Bronx3ACDebugAutoStart = true
-		dofile("hub/tools/bronx3-ac-debug.lua")
+		loadstring(readfile("hub/tools/bronx3-ac-debug.lua"))()
+		getgenv().__Bronx3ACDebug.start({ acBypass = true })
 
 	Usage (from hub):
 		Enable the "AC Debug" toggle in Tha Bronx 3 menu.
@@ -34,7 +33,7 @@ do
 end
 
 local LOG_ROOT = "hub/tools/bronx3-ac-debug/logs"
-local DEBUG_VERSION = "7-sync-fix"
+local DEBUG_VERSION = "8-idempotent-start"
 local FLUSH_INTERVAL = 1.25
 local SAMPLE_INTERVAL = 0.5
 local MARK_COOLDOWN = 0.08
@@ -495,7 +494,8 @@ end
 
 function Bronx3ACDebug.start(ctx)
 	if session.running then
-		Bronx3ACDebug.stop()
+		Bronx3ACDebug.setContext(ctx or {})
+		return Bronx3ACDebug
 	end
 	if not canWriteFiles() then
 		warn("[Bronx3ACDebug] appendfile/writefile unavailable — logging disabled")
@@ -633,9 +633,5 @@ function Bronx3ACDebug.getVersion()
 end
 
 getGenv().__Bronx3ACDebug = Bronx3ACDebug
-
-if getGenv().__Bronx3ACDebugAutoStart then
-	Bronx3ACDebug.start(getGenv().__Bronx3ACDebugContext)
-end
 
 return Bronx3ACDebug

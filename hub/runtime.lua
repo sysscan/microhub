@@ -218,6 +218,8 @@ function Runtime.unloadAll()
 		pcall(legacy.stop)
 	end
 	genv.__Bronx3ACDebug = nil
+	genv.__Bronx3ACDebugAutoStart = nil
+	genv.__Bronx3ACDebugContext = nil
 end
 
 function Runtime.loadModule(path, id, opts)

@@ -341,12 +341,11 @@ local function loadAcDebugModule(forceRefresh)
 end
 
 local function acDebugMark(tag, detail)
-	if not Config.ACDebug then
+	if not Config.ACDebug or not acDebugModule then
 		return
 	end
-	local mod = loadAcDebugModule()
-	if mod and typeof(mod.mark) == "function" then
-		mod.mark(tag, detail)
+	if typeof(acDebugModule.mark) == "function" then
+		acDebugModule.mark(tag, detail)
 	end
 end
 
@@ -360,8 +359,11 @@ local function applyAcDebug()
 		return
 	end
 	if Config.ACDebug then
-		if typeof(mod.start) == "function" then
+		local running = typeof(mod.isRunning) == "function" and mod.isRunning()
+		if not running and typeof(mod.start) == "function" then
 			mod.start(getAcDebugContext())
+		elseif running and typeof(mod.setContext) == "function" then
+			mod.setContext(getAcDebugContext())
 		end
 		local logPath = typeof(mod.getLogPath) == "function" and mod.getLogPath() or nil
 		local version = typeof(mod.getVersion) == "function" and mod.getVersion() or "unknown"
