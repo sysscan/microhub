@@ -1,0 +1,13 @@
+# Local game dumps used for script development — not part of the public hub
+Games/
+ReplicatedFirst/
+StarterCharacterScripts/
+StarterPlayerScripts/
+StarterGui/
+ReplicatedStorage/
+ServerScriptService/
+ServerStorage/
+Workspace/
+
+# Local dev / debug tools
+wallbang_debug.lua
