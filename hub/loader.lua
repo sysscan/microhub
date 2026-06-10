@@ -16,19 +16,33 @@ local function notify(title, text)
 	end)
 end
 
+local function sanitize(source)
+	if typeof(source) == "string" and #source >= 3
+		and source:byte(1) == 0xEF
+		and source:byte(2) == 0xBB
+		and source:byte(3) == 0xBF then
+		return source:sub(4)
+	end
+	return source
+end
+
 local function fetch(base, path)
+	local source
+
 	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile("hub/" .. path) then
-		return readfile("hub/" .. path)
+		source = readfile("hub/" .. path)
+	else
+		local url = base .. "/" .. path
+		local res = request({ Url = url, Method = "GET" })
+		if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
+			source = res.Body
+		else
+			local msg = res and (res.StatusMessage or res.StatusCode) or "no response"
+			error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
+		end
 	end
 
-	local url = base .. "/" .. path
-	local res = request({ Url = url, Method = "GET" })
-	if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
-		return res.Body
-	end
-
-	local msg = res and (res.StatusMessage or res.StatusCode) or "no response"
-	error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
+	return sanitize(source)
 end
 
 local function loadTable(base, path)

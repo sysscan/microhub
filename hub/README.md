@@ -17,7 +17,11 @@ hub/
 Per [Volt docs](https://docs.voltbz.net/docs/miscellaneous), use `request` for HTTP:
 
 ```lua
-loadstring(request({Url="https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua", Method="GET"}).Body)()
+local r = request({Url="https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua", Method="GET"})
+assert(r.Success, r.StatusMessage or "download failed")
+local fn = loadstring(r.Body)
+assert(fn, "compile failed")
+fn()
 ```
 
 Or run `load.lua` from the repo root if your workspace is set to this project.

@@ -7,7 +7,11 @@ Script hub for Roblox — auto-loads the right script per game.
 Uses [`request`](https://docs.voltbz.net/docs/miscellaneous) per Volt documentation:
 
 ```lua
-loadstring(request({Url="https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua", Method="GET"}).Body)()
+local r = request({Url="https://raw.githubusercontent.com/sysscan/microhub/main/hub/loader.lua", Method="GET"})
+assert(r.Success, r.StatusMessage or "download failed")
+local fn = loadstring(r.Body)
+assert(fn, "compile failed")
+fn()
 ```
 
 ## Supported games
