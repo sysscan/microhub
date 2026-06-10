@@ -50,9 +50,9 @@ local installedIndexHook = false
 local oldIndex = nil
 local ammoUpvalueCache = nil
 local aimUpvalueCache = nil
-local silentAimStepBound = false
-local processInputHookInstalled = false
-local originalProcessInput = nil
+local ensureIndexHook
+local ensureNamecallHook
+local INFINITE_RESERVE = 99999
 
 local VORTEX_PATH = { "PlayerScripts", "Vortex" }
 
@@ -243,6 +243,22 @@ local function predictedPosition(character)
 	return targetPart.Position + (root.AssemblyLinearVelocity * travelTime)
 end
 
+local function hasNamecallHook()
+	return typeof(getnamecallmethod) == "function"
+		and typeof(checkcaller) == "function"
+end
+
+local function isExecutorCall()
+	return typeof(checkcaller) == "function" and checkcaller()
+end
+
+local function getAimOrigin()
+	if UserInputService.MouseEnabled then
+		return UserInputService:GetMouseLocation()
+	end
+	return Camera.ViewportSize / 2
+end
+
 local function inHitchance()
 	return math.random(1, 100) <= Config.Hitchance
 end
@@ -250,6 +266,7 @@ end
 local function getClosestTarget(radius)
 	local closest = nil
 	local closestDistance = radius or Config.FOVRadius
+	local aimOrigin = getAimOrigin()
 	iterCharacters(function(character)
 		if not isValidTarget(character) then
 			return
@@ -262,13 +279,28 @@ local function getClosestTarget(radius)
 		if not onScreen then
 			return
 		end
-		local distance = (vector2(screenPos.X, screenPos.Y) - (Camera.ViewportSize / 2)).Magnitude
+		local distance = (vector2(screenPos.X, screenPos.Y) - aimOrigin).Magnitude
 		if distance <= closestDistance then
 			closest = character
 			closestDistance = distance
 		end
 	end)
 	return closest
+end
+
+local function getSilentAimDirection(originCFrame)
+	if not closestTarget then
+		return nil
+	end
+	local position = predictedPosition(closestTarget)
+	if not position then
+		return nil
+	end
+	local direction = position - originCFrame.Position
+	if direction.Magnitude <= 0.01 then
+		return nil
+	end
+	return direction.Unit
 end
 
 local function resetCFrameModifier(modifiers, name)
@@ -299,7 +331,9 @@ end
 
 local vortexEnv = nil
 local lastRestockAt = 0
-local INFINITE_RESERVE = 99999
+local installedNamecallHook = false
+local oldNamecall = nil
+local fireAimAppliedAt = 0
 
 local function hasSetupvalue()
 	return debug and typeof(debug.getupvalue) == "function" and typeof(debug.setupvalue) == "function"
@@ -307,10 +341,6 @@ end
 
 local function clearAmmoCache()
 	ammoUpvalueCache = nil
-end
-
-local function hasHookFunction()
-	return typeof(hookfunction) == "function" and typeof(newcclosure) == "function"
 end
 
 local function clearAimCache()
@@ -406,7 +436,6 @@ local function getVortexEnv()
 		vortexEnv = env
 		clearAmmoCache()
 		clearAimCache()
-		processInputHookInstalled = false
 		return env
 	end
 	return nil
@@ -503,16 +532,6 @@ local function removeEnemyForcefields()
 	end
 end
 
-local function updateMouseHitSpot()
-	if not Config.SilentAim or not closestTarget then
-		return
-	end
-	local position = predictedPosition(closestTarget)
-	if position then
-		_G.MouseHitSpot = position
-	end
-end
-
 local function resolveAimUpvalues(env)
 	if aimUpvalueCache then
 		return aimUpvalueCache
@@ -535,16 +554,26 @@ local function resolveAimUpvalues(env)
 	return nil
 end
 
-local function applySilentAimUpvalues()
-	if not Config.SilentAim or not closestTarget then
+local function applySilentAimDuringFire()
+	if not Config.SilentAim or not closestTarget or not inHitchance() or not inFireCallstack(14) then
+		return
+	end
+	local now = os.clock()
+	if now - fireAimAppliedAt < 0.001 then
+		return
+	end
+	fireAimAppliedAt = now
+
+	local position = predictedPosition(closestTarget)
+	if position then
+		_G.MouseHitSpot = position
+	end
+
+	if not hasSetupvalue() then
 		return
 	end
 	local targetPart = getTargetPart(closestTarget)
 	if not targetPart then
-		return
-	end
-	updateMouseHitSpot()
-	if not hasSetupvalue() then
 		return
 	end
 	local env = getVortexEnv()
@@ -561,52 +590,6 @@ local function applySilentAimUpvalues()
 	end
 end
 
-local function installProcessInputHook()
-	if processInputHookInstalled or not hasHookFunction() then
-		return
-	end
-	local env = getVortexEnv()
-	if not env or typeof(env.ProcessInput) ~= "function" then
-		return
-	end
-	local ok, hooked = pcall(function()
-		local original
-		original = hookfunction(env.ProcessInput, newcclosure(function(...)
-			if Config.SilentAim and closestTarget then
-				applySilentAimUpvalues()
-			end
-			return original(...)
-		end))
-		return original
-	end)
-	if ok and typeof(hooked) == "function" then
-		originalProcessInput = hooked
-		processInputHookInstalled = true
-	end
-end
-
-local function ensureSilentAimStep()
-	if silentAimStepBound or not Config.SilentAim then
-		return
-	end
-	silentAimStepBound = true
-	RunService:BindToRenderStep("MicroHubSilentAim", Enum.RenderPriority.Last.Value, function()
-		if Config.SilentAim then
-			applySilentAimUpvalues()
-		end
-	end)
-end
-
-local function removeSilentAimStep()
-	if not silentAimStepBound then
-		return
-	end
-	silentAimStepBound = false
-	pcall(function()
-		RunService:UnbindFromRenderStep("MicroHubSilentAim")
-	end)
-end
-
 local function cframeValuePosition(cframeValue)
 	if not cframeValue or not cframeValue:IsA("CFrameValue") or not oldIndex then
 		return nil
@@ -618,7 +601,7 @@ local function cframeValuePosition(cframeValue)
 	return nil
 end
 
-local function ensureIndexHook()
+ensureIndexHook = function()
 	if installedIndexHook or not hasHookMetamethod() then
 		return
 	end
@@ -641,23 +624,12 @@ local function ensureIndexHook()
 					return INFINITE_RESERVE
 				end
 			end
-			if Config.SilentAim and closestTarget and inHitchance() and inFireCallstack(12) then
-				if index == "CFrame" and typeof(self) == "Instance" and self:IsA("Camera") then
-					local position = predictedPosition(closestTarget)
-					if position and oldIndex then
-						local ok, realCFrame = pcall(oldIndex, self, "CFrame")
-						if ok and typeof(realCFrame) == "CFrame" then
-							return CFrame.new(realCFrame.Position, position)
-						end
-					end
-				end
+			if Config.SilentAim and closestTarget and inHitchance() and inFireCallstack(14) then
+				applySilentAimDuringFire()
 				if index == "LookVector" and typeof(self) == "CFrame" then
-					local position = predictedPosition(closestTarget)
-					if position then
-						local direction = position - self.Position
-						if direction.Magnitude > 0.01 then
-							return direction.Unit
-						end
+					local direction = getSilentAimDirection(self)
+					if direction then
+						return direction
 					end
 				end
 			end
@@ -670,6 +642,41 @@ local function ensureIndexHook()
 	if not ok then
 		installedIndexHook = false
 		warn("[GunfightArena] hook failed:", result)
+	end
+end
+
+ensureNamecallHook = function()
+	if installedNamecallHook or not hasHookMetamethod() or not hasNamecallHook() then
+		return
+	end
+	if not Config.SilentAim then
+		return
+	end
+	installedNamecallHook = true
+	local ok, result = pcall(function()
+		oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+			if isExecutorCall() then
+				return oldNamecall(self, ...)
+			end
+			if Config.SilentAim and closestTarget and inHitchance() and inFireCallstack(14) then
+				local method = getnamecallmethod()
+				if method == "FireServer" then
+					local args = { ... }
+					if args[1] == "Fire" and typeof(args[4]) == "CFrame" then
+						local direction = getSilentAimDirection(args[4])
+						if direction then
+							args[4] = CFrame.new(args[4].Position, args[4].Position + direction)
+							return oldNamecall(self, unpack(args))
+						end
+					end
+				end
+			end
+			return oldNamecall(self, ...)
+		end)
+	end)
+	if not ok then
+		installedNamecallHook = false
+		warn("[GunfightArena] namecall hook failed:", result)
 	end
 end
 
@@ -690,7 +697,7 @@ local function updateFovCircle()
 	if not fovCircle then
 		return
 	end
-	fovCircle.Position = Camera.ViewportSize / 2
+	fovCircle.Position = getAimOrigin()
 	fovCircle.Radius = Config.FOVRadius
 	fovCircle.Visible = Config.FOVCircle
 end
@@ -936,10 +943,8 @@ end
 local function updateAim()
 	if Config.SilentAim then
 		ensureIndexHook()
-		ensureSilentAimStep()
-		installProcessInputHook()
+		ensureNamecallHook()
 		closestTarget = getClosestTarget(Config.FOVRadius)
-		applySilentAimUpvalues()
 	else
 		closestTarget = nil
 	end
@@ -984,7 +989,6 @@ end
 
 local function cleanup()
 	disconnectAll()
-	removeSilentAimStep()
 	vortexEnv = nil
 	clearAmmoCache()
 	clearAimCache()
@@ -1130,13 +1134,10 @@ UILib.create({
 		elseif key == "SilentAim" then
 			if value then
 				ensureIndexHook()
-				ensureSilentAimStep()
-				installProcessInputHook()
-				if not hasHookMetamethod() and not hasSetupvalue() then
-					notify("hookmetamethod/debug.setupvalue missing — silent aim may not work on this executor.", "Compatibility", 6)
+				ensureNamecallHook()
+				if not hasHookMetamethod() then
+					notify("hookmetamethod missing — silent aim needs it for fire-time redirection.", "Compatibility", 6)
 				end
-			else
-				removeSilentAimStep()
 			end
 		elseif key == "InfiniteAmmo" then
 			if value then
