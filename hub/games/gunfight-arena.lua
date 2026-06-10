@@ -315,10 +315,26 @@ local function getVortexEnv()
 	return nil
 end
 
+local function maintainStoredAmmo()
+	if not Config.InfiniteAmmo then
+		return
+	end
+	local vortex = getVortex()
+	if not vortex then
+		return
+	end
+	for _, inst in ipairs(vortex:GetDescendants()) do
+		if inst:IsA("NumberValue") and inst.Name == "StoredAmmo" and inst.Value < 1e9 then
+			inst.Value = 1e9
+		end
+	end
+end
+
 local function restockAmmo()
 	if not Config.InfiniteAmmo then
 		return
 	end
+	maintainStoredAmmo()
 	local now = os.clock()
 	if now - lastRestockAt < 0.15 then
 		return
@@ -362,19 +378,30 @@ local function updateMouseHitSpot()
 	end
 end
 
-local function installIndexHook()
-	if installedIndexHook or not hasHookMetamethod() then
+local function cframeValuePosition(cframeValue)
+	if not cframeValue or not cframeValue:IsA("CFrameValue") or not oldIndex then
+		return nil
+	end
+	local ok, cf = pcall(oldIndex, cframeValue, "Value")
+	if ok and typeof(cf) == "CFrame" then
+		return cf.Position
+	end
+	return nil
+end
+
+local function ensureIndexHook()
+	if installedIndexHook or not hasHookMetamethod() or not Config.SilentAim then
 		return
 	end
 	installedIndexHook = true
 	local ok, result = pcall(function()
 		oldIndex = hookmetamethod(game, "__index", function(self, index)
-			if Config.InfiniteAmmo and index == "Value" then
-				local nameOk, name = pcall(function()
-					return self.Name
-				end)
-				if nameOk and name == "StoredAmmo" then
-					return math.huge
+			if typeof(self) == "Instance" and self:IsA("CFrameValue") then
+				if index == "p" or index == "Position" then
+					local position = cframeValuePosition(self)
+					if position then
+						return position
+					end
 				end
 			end
 			if Config.SilentAim and closestTarget and index == "LookVector" and inHitchance() and inFireCallstack(8) then
@@ -393,6 +420,7 @@ local function installIndexHook()
 		end)
 	end)
 	if not ok then
+		installedIndexHook = false
 		warn("[GunfightArena] hook failed:", result)
 	end
 end
@@ -659,6 +687,7 @@ end
 
 local function updateAim()
 	if Config.SilentAim then
+		ensureIndexHook()
 		closestTarget = getClosestTarget(Config.FOVRadius)
 		updateMouseHitSpot()
 	else
@@ -735,12 +764,11 @@ if typeof(genv.__GunfightArenaUnload) == "function" then
 end
 genv.__GunfightArenaUnload = cleanup
 
-installIndexHook()
 if not hasDrawing() then
 	notify("Drawing API missing — ESP and FOV circle will be unavailable.", "Compatibility", 6)
 end
 if not hasHookMetamethod() then
-	notify("hookmetamethod missing — silent aim and infinite ammo spoof are unavailable.", "Compatibility", 6)
+	notify("hookmetamethod missing — silent aim is unavailable.", "Compatibility", 6)
 end
 
 UILib.create({
@@ -846,10 +874,18 @@ UILib.create({
 	onToggle = function(key, value)
 		if (key == "NoRecoil" or key == "StableAim") and value then
 			applyCombatModifiers()
+		elseif key == "SilentAim" and value then
+			ensureIndexHook()
+			if not hasHookMetamethod() then
+				notify("hookmetamethod missing — silent aim needs it for first-person shots.", "Compatibility", 6)
+			end
 		elseif key == "InfiniteAmmo" then
-			if value and not hasGetsenv() then
-				notify("getsenv missing — restock fallback disabled; StoredAmmo spoof still needs hookmetamethod.", "Compatibility", 6)
-			elseif not value then
+			if value then
+				maintainStoredAmmo()
+				if not hasGetsenv() then
+					notify("getsenv missing — restock fallback disabled; reserve ammo is still raised directly.", "Compatibility", 6)
+				end
+			else
 				vortexEnv = nil
 			end
 		end
