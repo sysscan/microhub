@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "12-sa-debug"
+local GAME_BUILD = "13-sa-debug-fix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -464,6 +464,7 @@ type DbgHit = {
 }
 
 local dbg = {
+	netCount = 0,
 	fireCount = 0,
 	hitCount = 0,
 	syncCount = 0,
@@ -471,16 +472,22 @@ local dbg = {
 	lastHitcheck = nil :: DbgHit?,
 	lastSyncCf = nil :: CFrame?,
 	lastSyncWeapon = nil :: string?,
-	lastConsoleAt = 0,
+	logCooldowns = {} :: { [string]: number },
 	hooksReady = false,
+	networkHooked = false,
+	namecallHooked = false,
 	remotePath = "",
 	syncPath = "",
+	syncBound = 0,
+	lastEvent = "",
 	status = "idle",
 }
 
 local dbgTexts: { any } = {}
-local dbgHookInstalled = false
-local dbgSyncConn: RBXScriptConnection? = nil
+local dbgNamecallHooked = false
+local dbgNetworkHooked = false
+local dbgInitPrinted = false
+local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
 
 local function dbgShortCf(cf: any): string
 	if typeof(cf) ~= "CFrame" then
@@ -521,44 +528,68 @@ local function dbgShortVal(value: any): string
 	return t
 end
 
-local function dbgLogOnce(key: string, message: string)
+local function dbgLog(key: string, message: string, cooldown: number?)
 	if not Config.AimDebugger then
 		return
 	end
+	cooldown = cooldown or DBG_CONSOLE_INTERVAL
 	local now = os.clock()
-	if now - dbg.lastConsoleAt < DBG_CONSOLE_INTERVAL then
+	if cooldown > 0 and now - (dbg.logCooldowns[key] or 0) < cooldown then
 		return
 	end
-	dbg.lastConsoleAt = now
+	dbg.logCooldowns[key] = now
 	print("[GFA-DBG]", key, message)
 end
 
-local function dbgRecordFire(_remote: Instance, args: { any })
-	dbg.fireCount += 1
-	local evt = args[2]
-	if typeof(evt) ~= "string" then
+local function dbgMaybeDecode(value: any): any
+	if typeof(value) ~= "string" or string.sub(value, 1, 1) ~= "~" then
+		return value
+	end
+	local codecModule = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
+	if not codecModule then
+		return value
+	end
+	local ok, codec = pcall(require, codecModule)
+	if not ok or typeof(codec) ~= "table" or typeof(codec.AutoDecode) ~= "function" then
+		return value
+	end
+	local okDecode, decoded = pcall(codec.AutoDecode, value)
+	return if okDecode then decoded else value
+end
+
+local function dbgRecordNetworkEvent(eventName: any, payload: { any })
+	dbg.netCount += 1
+	if typeof(eventName) ~= "string" then
+		dbg.lastEvent = dbgShortVal(eventName)
 		return
 	end
-	if evt == "Fire" then
+
+	dbg.lastEvent = eventName
+
+	if eventName == "Fire" then
+		dbg.fireCount += 1
+		local weapon = dbgMaybeDecode(payload[1])
+		local clock = dbgMaybeDecode(payload[2])
+		local serverCf = dbgMaybeDecode(payload[3])
 		dbg.lastFire = {
 			at = os.clock(),
-			weapon = dbgShortVal(args[3]),
-			clock = if typeof(args[4]) == "number" then args[4] else nil,
-			serverCf = if typeof(args[5]) == "CFrame" then args[5] else nil,
-			suppressed = if typeof(args[6]) == "boolean" then args[6] else nil,
-			ads = if typeof(args[7]) == "boolean" then args[7] else nil,
+			weapon = dbgShortVal(weapon),
+			clock = if typeof(clock) == "number" then clock else nil,
+			serverCf = if typeof(serverCf) == "CFrame" then serverCf else nil,
+			suppressed = if typeof(dbgMaybeDecode(payload[4])) == "boolean" then dbgMaybeDecode(payload[4]) else nil,
+			ads = if typeof(dbgMaybeDecode(payload[5])) == "boolean" then dbgMaybeDecode(payload[5]) else nil,
 		}
-		dbgLogOnce("Fire", string.format("#%d %s %s", dbg.fireCount, dbg.lastFire.weapon, dbgShortCf(dbg.lastFire.serverCf)))
-	elseif evt == "Hitcheck" then
+		dbgLog("Fire", string.format("Fire #%d %s %s", dbg.fireCount, dbg.lastFire.weapon, dbgShortCf(dbg.lastFire.serverCf)), 2)
+	elseif eventName == "Hitcheck" then
 		dbg.hitCount += 1
 		dbg.lastHitcheck = {
 			at = os.clock(),
-			a = args[3],
-			b = args[4],
-			c = args[5],
-			d = args[6],
+			a = dbgMaybeDecode(payload[1]),
+			b = dbgMaybeDecode(payload[2]),
+			c = dbgMaybeDecode(payload[3]),
+			d = dbgMaybeDecode(payload[4]),
 		}
-		dbgLogOnce(
+		dbgLog(
 			"Hitcheck",
 			string.format(
 				"#%d %s | %s | %s | %s",
@@ -567,9 +598,35 @@ local function dbgRecordFire(_remote: Instance, args: { any })
 				dbgShortVal(dbg.lastHitcheck.b),
 				dbgShortVal(dbg.lastHitcheck.c),
 				dbgShortVal(dbg.lastHitcheck.d)
-			)
+			),
+			2
 		)
+	else
+		dbgLog("Net", string.format("%s (net #%d)", eventName, dbg.netCount), 3)
 	end
+end
+
+local function dbgRecordRemoteFire(args: { any })
+	if typeof(args[2]) ~= "string" then
+		return
+	end
+	dbgRecordNetworkEvent(args[2], { args[3], args[4], args[5], args[6], args[7], args[8] })
+end
+
+local function dbgFindNetworkApi(): (any, RemoteEvent?)
+	if typeof(getgc) ~= "function" then
+		return nil, nil
+	end
+	for _, obj in getgc(true) do
+		if typeof(obj) == "table" then
+			local fireServer = rawget(obj, "FireServer")
+			local remote = rawget(obj, "RE")
+			if typeof(fireServer) == "function" and typeof(remote) == "Instance" and remote:IsA("RemoteEvent") then
+				return obj, remote
+			end
+		end
+	end
+	return nil, nil
 end
 
 local function dbgFindNetworkRemote(): RemoteEvent?
@@ -584,22 +641,57 @@ local function dbgFindNetworkRemote(): RemoteEvent?
 	return nil
 end
 
-local function dbgHookRemote()
-	if dbgHookInstalled or typeof(hookmetamethod) ~= "function" or typeof(newcclosure) ~= "function" then
+local function dbgHookNetworkApi()
+	if dbgNetworkHooked or typeof(hookfunction) ~= "function" or typeof(newcclosure) ~= "function" then
+		return
+	end
+
+	local api, remote = dbgFindNetworkApi()
+	if not api or not remote then
+		if dbg.status == "idle" or dbg.status == "waiting for RemoteEvent" then
+			dbg.status = "waiting for Network API"
+		end
+		return
+	end
+
+	dbg.remotePath = remote:GetFullName()
+	local oldFireServer = api.FireServer
+	local hookedFireServer = newcclosure(function(self, eventName, ...)
+		if Config.AimDebugger then
+			dbgRecordNetworkEvent(eventName, { ... })
+		end
+		return oldFireServer(self, eventName, ...)
+	end)
+	api.FireServer = hookfunction(oldFireServer, hookedFireServer)
+
+	dbgNetworkHooked = true
+	dbg.networkHooked = true
+	dbg.hooksReady = true
+	dbg.status = "Network.FireServer hooked"
+
+	if not dbgInitPrinted then
+		dbgInitPrinted = true
+		print("[GFA-DBG] init Network.FireServer hooked @", dbg.remotePath)
+	end
+end
+
+local function dbgHookNamecallFallback()
+	if dbgNamecallHooked or typeof(hookmetamethod) ~= "function" or typeof(newcclosure) ~= "function" then
 		return
 	end
 	if typeof(getnamecallmethod) ~= "function" or typeof(checkcaller) ~= "function" then
-		dbg.status = "executor hooks unavailable"
 		return
 	end
 
 	local remote = dbgFindNetworkRemote()
 	if not remote then
-		dbg.status = "waiting for RemoteEvent"
 		return
 	end
 
-	dbg.remotePath = remote:GetFullName()
+	if dbg.remotePath == "" then
+		dbg.remotePath = remote:GetFullName()
+	end
+
 	local oldNamecall: (...any) -> ...any
 	oldNamecall = hookmetamethod(
 		game,
@@ -608,21 +700,50 @@ local function dbgHookRemote()
 			if Config.AimDebugger and not checkcaller() then
 				local method = getnamecallmethod()
 				if method == "FireServer" and self == remote then
-					dbgRecordFire(self, { ... })
+					dbgRecordRemoteFire({ ... })
 				end
 			end
 			return oldNamecall(self, ...)
 		end)
 	)
 
-	dbgHookInstalled = true
-	dbg.hooksReady = true
-	dbg.status = "remote hook active"
-	dbgLogOnce("init", "RemoteEvent hook installed at " .. dbg.remotePath)
+	dbgNamecallHooked = true
+	dbg.namecallHooked = true
+	if not dbg.hooksReady then
+		dbg.hooksReady = true
+		dbg.status = "namecall fallback only"
+		if not dbgInitPrinted then
+			dbgInitPrinted = true
+			print("[GFA-DBG] init namecall fallback @", dbg.remotePath)
+		end
+	end
+end
+
+local function dbgInstallHooks()
+	dbgHookNetworkApi()
+	dbgHookNamecallFallback()
+end
+
+local function dbgOnSyncFire(args: { any })
+	if not Config.AimDebugger then
+		return
+	end
+	local shooter = args[1]
+	if shooter ~= LocalPlayer then
+		return
+	end
+	local shotCf = args[4]
+	if typeof(shotCf) ~= "CFrame" then
+		return
+	end
+	dbg.syncCount += 1
+	dbg.lastSyncCf = shotCf
+	dbg.lastSyncWeapon = dbgShortVal(args[6] or args[3])
+	dbgLog("Sync", string.format("#%d %s %s", dbg.syncCount, dbg.lastSyncWeapon, dbgShortCf(shotCf)), 2)
 end
 
 local function dbgHookSync()
-	if dbgSyncConn or not Config.AimDebugger then
+	if not Config.AimDebugger then
 		return
 	end
 
@@ -631,43 +752,14 @@ local function dbgHookSync()
 		return
 	end
 
-	local function bindSync(sync: Instance, label: string)
-		if not sync:IsA("BindableEvent") or dbgSyncConn then
-			return
-		end
-		dbg.syncPath = label
-		dbgSyncConn = sync.Event:Connect(function(...)
-			if not Config.AimDebugger then
-				return
-			end
-			local args = { ... }
-			local shooter = args[1]
-			if shooter ~= LocalPlayer then
-				return
-			end
-			local shotCf = args[4]
-			if typeof(shotCf) ~= "CFrame" then
-				return
-			end
-			dbg.syncCount += 1
-			dbg.lastSyncCf = shotCf
-			dbg.lastSyncWeapon = dbgShortVal(args[6] or args[3])
-		end)
-	end
-
-	local vortex = playerScripts:FindFirstChild("Vortex")
-	if vortex then
-		local sync = vortex:FindFirstChild("Sync")
-		if sync then
-			bindSync(sync, vortex:GetFullName() .. ".Sync")
-		end
-	end
-
-	local secondThread = playerScripts:FindFirstChild("SecondThread")
-	if secondThread then
-		local sync = secondThread:FindFirstChild("Sync")
-		if sync and not dbgSyncConn then
-			bindSync(sync, secondThread:GetFullName() .. ".Sync")
+	for _, desc in playerScripts:GetDescendants() do
+		if desc.Name == "Sync" and desc:IsA("BindableEvent") and not dbgSyncConns[desc] then
+			dbgSyncConns[desc] = desc.Event:Connect(function(...)
+				dbgOnSyncFire({ ... })
+			end)
+			dbg.syncBound += 1
+			local path = desc:GetFullName()
+			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
 		end
 	end
 end
@@ -729,7 +821,7 @@ local function dbgUpdate()
 		return
 	end
 
-	dbgHookRemote()
+	dbgInstallHooks()
 	dbgHookSync()
 	dbgEnsureOverlay()
 
@@ -756,9 +848,10 @@ local function dbgUpdate()
 	local lines = {
 		"── Silent Aim Debugger ──",
 		string.format(
-			"Hooks: %s | Sync: %s | %s",
-			if dbg.hooksReady then "OK" else "—",
-			if dbgSyncConn then "OK" else "—",
+			"Hooks: net:%s nc:%s sync:%d | %s",
+			if dbg.networkHooked then "OK" else "—",
+			if dbg.namecallHooked then "OK" else "—",
+			dbg.syncBound,
 			dbg.status
 		),
 		string.format(
@@ -767,7 +860,14 @@ local function dbgUpdate()
 			dbgShortVal(clockOffset),
 			if thirdPerson then "3rd person" else "1st person"
 		),
-		string.format("Counts  Fire:%d  Hitcheck:%d  Sync:%d", dbg.fireCount, dbg.hitCount, dbg.syncCount),
+		string.format(
+			"Counts  net:%d  Fire:%d  Hit:%d  Sync:%d  last:%s",
+			dbg.netCount,
+			dbg.fireCount,
+			dbg.hitCount,
+			dbg.syncCount,
+			if dbg.lastEvent ~= "" then dbg.lastEvent else "—"
+		),
 		string.format("Target: %s | FOV ok: %s", targetNameStr, if part then "yes" else "no"),
 		string.format(
 			"Angles°  cam:%s  server:%s  sync:%s",
