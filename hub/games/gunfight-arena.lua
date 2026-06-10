@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "23-sa-live"
+local GAME_BUILD = "24-sa-safe"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -449,7 +449,7 @@ local function updateCombatAim(dt: number)
 		stickyNeedsRelease = false
 	end
 
-	if Config.SilentAim and combatTargetPart and isThirdPerson() then
+	if Config.SilentAim and combatTargetPart then
 		setMouseHit(combatTargetPart.Position)
 	end
 
@@ -517,7 +517,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "23-sa-live"
+local DBG_HOOK_BUILD = "24-sa-safe"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -539,7 +539,6 @@ local voltGetgc = dbgVolt("getgc")
 local voltFiltergc = dbgVolt("filtergc")
 local voltCheckcaller = dbgVolt("checkcaller")
 local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
-local combatSyncHooked: { [Instance]: boolean } = {}
 local dbgNextOverlayAt = 0
 local dbgNextSyncScan = 0
 local dbgNextFlameScan = 0
@@ -1128,49 +1127,8 @@ local function dbgOnSyncFire(args: { any })
 	dbgLog("Sync", string.format("#%d %s %s", dbg.syncCount, dbg.lastSyncWeapon, dbgShortCf(shotCf)), 2)
 end
 
-local function combatInstallSyncHook(sync: BindableEvent)
-	if combatSyncHooked[sync] then
-		return
-	end
-
-	local fireMethod = sync.Fire
-	if typeof(voltHookfunction) == "function" and typeof(fireMethod) == "function" then
-		local original: (...any) -> ...any
-		local ok = pcall(function()
-			original = voltHookfunction(fireMethod, dbgWrapHook(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
-				if dbgFromGame() then
-					if Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
-						a4 = saRewriteSyncShot(a4)
-					end
-					if Config.AimDebugger then
-						dbgOnSyncFire({ a1, a2, a3, a4, a5, a6, a7, a8 })
-					end
-				end
-				return original(self, a1, a2, a3, a4, a5, a6, a7, a8)
-			end))
-		end)
-		if ok and typeof(original) == "function" then
-			combatSyncHooked[sync] = true
-			dbg.syncBound += 1
-			local path = sync:GetFullName()
-			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
-			return
-		end
-	end
-
-	if Config.AimDebugger and not dbgSyncConns[sync] then
-		dbgSyncConns[sync] = sync.Event:Connect(function(...)
-			dbgOnSyncFire({ ... })
-		end)
-		combatSyncHooked[sync] = true
-		dbg.syncBound += 1
-		local path = sync:GetFullName()
-		dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
-	end
-end
-
-local function combatHookSync()
-	if not combatHooksWanted() then
+local function dbgHookSync()
+	if not Config.AimDebugger then
 		return
 	end
 
@@ -1186,8 +1144,13 @@ local function combatHookSync()
 	end
 
 	for _, desc in playerScripts:GetDescendants() do
-		if desc.Name == "Sync" and desc:IsA("BindableEvent") then
-			combatInstallSyncHook(desc)
+		if desc.Name == "Sync" and desc:IsA("BindableEvent") and not dbgSyncConns[desc] then
+			dbgSyncConns[desc] = desc.Event:Connect(function(...)
+				dbgOnSyncFire({ ... })
+			end)
+			dbg.syncBound += 1
+			local path = desc:GetFullName()
+			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
 		end
 	end
 end
@@ -1235,14 +1198,6 @@ local function saRewriteFirePayload(payload: { any }): { any }
 	return payload
 end
 
-local function saRewriteSyncShot(shotCf: CFrame): CFrame
-	local part = combatTargetPart
-	if not part or not Config.SilentAim or not combatHoldActive() then
-		return shotCf
-	end
-	return CFrame.new(shotCf.Position, part.Position)
-end
-
 local function dbgAngleTo(origin: Vector3, look: Vector3, target: Vector3): number
 	local dir = target - origin
 	if dir.Magnitude < 0.01 then
@@ -1284,7 +1239,6 @@ end
 local function dbgUpdate()
 	if combatHooksWanted() then
 		dbgStartHookWorker()
-		combatHookSync()
 	end
 
 	if not Config.AimDebugger then
@@ -1293,6 +1247,7 @@ local function dbgUpdate()
 	end
 
 	dbgEnsureOverlay()
+	dbgHookSync()
 
 	local now = os.clock()
 	if now < dbgNextOverlayAt then
@@ -1663,7 +1618,7 @@ UILib.create({
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
 						{
 							type = "hint",
-							text = "Redirects Fire + Sync shots. Uses Combat team check, hold RMB, FOV, bone, sticky.",
+							text = "Redirects server Fire + MouseHitSpot (3rd person). Uses Combat hold RMB, FOV, bone, sticky. Rejoin after updates.",
 						},
 					},
 				},
