@@ -11,10 +11,24 @@
 	Re-run the loader anytime — previous hub modules are stopped first.
 ]]
 
-local LOADER_VERSION = 4
+local LOADER_VERSION = 5
 local DEFAULT_BASE = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 local LOADED_KEY = "__MicroHubLoaded"
 local UI_LIB_KEY = "__MicroHubUILib"
+-- Bootstrap must never read cached config/runtime from disk (stale Version pins old modules).
+local BOOTSTRAP_ALWAYS_REMOTE = {
+	["config.lua"] = true,
+	["runtime.lua"] = true,
+}
+local CACHEABLE_HUB_FILES = {
+	"config.lua",
+	"runtime.lua",
+	"manifest.lua",
+	"lib/ui.lua",
+	"games/tha-bronx3.lua",
+	"games/warfare.lua",
+	"tools/bronx3-ac-debug.lua",
+}
 
 local KNOWN_GAME_LIST = {
 	{
@@ -96,11 +110,25 @@ local function fetchHttp(base, path)
 	error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
 end
 
+local function purgeCachedHubFiles()
+	if typeof(delfile) ~= "function" or typeof(isfile) ~= "function" then
+		return
+	end
+	local root = getLocalRoot()
+	for _, rel in ipairs(CACHEABLE_HUB_FILES) do
+		local localPath = root .. "/" .. rel
+		if isfile(localPath) then
+			pcall(delfile, localPath)
+		end
+	end
+end
+
 local function bootstrapFetch(base, path)
 	local localPath = getLocalRoot() .. "/" .. path
 	local source
+	local forceHttp = BOOTSTRAP_ALWAYS_REMOTE[path] == true or getGenv().HUB_FORCE_REMOTE == true
 
-	if useLocalFiles() and isfile(localPath) then
+	if not forceHttp and useLocalFiles() and isfile(localPath) then
 		source = sanitize(readfile(localPath))
 		if hasUtf8Bom(source) then
 			warn("[MicroHub] stale local file has BOM, using remote:", path)
@@ -242,6 +270,10 @@ local function ensureUILibrary(hub)
 end
 
 local success, err = pcall(function()
+	if getGenv().HUB_FORCE_REMOTE == true then
+		purgeCachedHubFiles()
+	end
+
 	local base = DEFAULT_BASE
 	local config = bootstrapLoadTable(base, "config.lua")
 	base = config.Repository or base

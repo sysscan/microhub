@@ -31,6 +31,18 @@ function Runtime.init(config)
 end
 
 function Runtime.purgeStaleLocals()
+	local hubVersion = Runtime._config and Runtime._config.Version
+	if typeof(hubVersion) == "string" and hubVersion ~= "" then
+		local localConfig = Runtime.readLocal("config.lua")
+		if localConfig and not Runtime.sourceHasVersion(localConfig, hubVersion) then
+			local localPath = Runtime._localRoot .. "/config.lua"
+			warn("[MicroHub] purging stale local cache:", localPath, "(need v" .. hubVersion .. ")")
+			if typeof(delfile) == "function" then
+				pcall(delfile, localPath)
+			end
+		end
+	end
+
 	local versions = Runtime._config.ModuleVersions
 	if typeof(versions) ~= "table" then
 		return
