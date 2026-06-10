@@ -46,7 +46,7 @@ local FLY_AC_MAX_ABOVE_Y = 10
 local FLY_BYPASS_MAX_SPEED = 16
 local FLY_BYPASS_MAX_STEP = 0.32
 local FLY_AC_MAX_BELOW_Y = 2
-local GAME_BUILD = "14-fly-idle-anchor"
+local GAME_BUILD = "15-all-features-fix"
 warn("[ThaBronx3] build", GAME_BUILD)
 
 local BOOST_WALK_SPEED = Config.WalkSpeed
@@ -61,6 +61,8 @@ local noopCantRun = function() end
 local disabledHungerScripts = {}
 local cantShootOriginals = {}
 local fullRagdollConn = nil
+local antiGlideConn = nil
+local hubUiInstance = nil
 
 local UILib = shared.__MicroHubUILib
 if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
@@ -187,9 +189,16 @@ local function findItem(name)
 end
 
 local function getStoredFolder()
-	return LocalPlayer:FindFirstChild("stored")
+	local stored = LocalPlayer:FindFirstChild("stored")
 		or LocalPlayer:FindFirstChild("Stored")
 		or findPath(LocalPlayer, "PlayerData", "stored")
+	if stored then
+		return stored
+	end
+	local ok, waited = pcall(function()
+		return LocalPlayer:WaitForChild("stored", 5)
+	end)
+	return ok and waited or nil
 end
 
 local function readNumberValue(parent, names)
@@ -413,6 +422,13 @@ local flyBypassState = {
 	lastFlyActive = false,
 }
 
+local function teardownAntiGlideConn()
+	if antiGlideConn then
+		antiGlideConn:Disconnect()
+		antiGlideConn = nil
+	end
+end
+
 local function syncAntiGlide(character)
 	if not character then
 		return
@@ -421,6 +437,19 @@ local function syncAntiGlide(character)
 	if antiGlide and antiGlide:IsA("LocalScript") then
 		antiGlide.Disabled = Config.Fly == true
 	end
+end
+
+local function bindAntiGlide(character)
+	teardownAntiGlideConn()
+	if not character then
+		return
+	end
+	syncAntiGlide(character)
+	antiGlideConn = character.ChildAdded:Connect(function(child)
+		if child.Name == "Anti-Glide" and child:IsA("LocalScript") then
+			child.Disabled = Config.Fly == true
+		end
+	end)
 end
 
 local function getFlyAcCeiling()
@@ -654,23 +683,42 @@ local sessionConns = {}
 
 local function disconnectSessionConns()
 	for _, conn in ipairs(sessionConns) do
-		conn:Disconnect()
+		pcall(function()
+			conn:Disconnect()
+		end)
 	end
 	table.clear(sessionConns)
 end
 
+local function teardownSurvivalBypasses()
+	restoreHungerScripts()
+	if setCantRunOriginal then
+		shared.SetCantRun = setCantRunOriginal
+		setCantRunOriginal = nil
+	end
+end
+
 local function teardownAllFeatures()
 	teardownMovementBypass()
+	teardownAntiGlideConn()
 	teardownInstantPrompts()
 	teardownGunPatches()
 	teardownNoFallRagdoll()
 	teardownFullRagdoll()
+	teardownSurvivalBypasses()
 	stopStudioFarmThreads()
+	koolAidFarmRunning = false
+	ltkDupeRunning = false
+	fullCycleRunning = false
 	Config.StudioFarm = false
 	Config.ACDebug = false
 	applyAcDebug()
 	flyBypassState.groundLatched = false
 	flyBypassState.lastFlyActive = false
+	if hubUiInstance and typeof(hubUiInstance.destroy) == "function" then
+		hubUiInstance:destroy()
+		hubUiInstance = nil
+	end
 end
 
 genv.__ThaBronx3Unload = function()
@@ -1219,7 +1267,7 @@ local function stopStudioFarmThreads()
 end
 
 local function getStudioFarmData()
-	local container = waitForPath(World, "StudioPay", "Money")
+	local container = findPath(World, "StudioPay", "Money")
 	if not container then
 		return nil
 	end
@@ -1272,18 +1320,23 @@ local function applyStudioFarm()
 		return
 	end
 
-	local stacks, prompts = getStudioFarmData()
-	if not stacks then
-		notify("StudioPay/Money not found — is the studio loaded?", "Studio Farm", 6)
-		Config.StudioFarm = false
-		return
-	end
-
-	for index, prompt in pairs(prompts) do
-		if prompt then
-			table.insert(studioThreads, task.spawn(studioStealLoop, index, prompt, stacks[index]))
+	task.spawn(function()
+		local stacks, prompts = getStudioFarmData()
+		if not Config.StudioFarm then
+			return
 		end
-	end
+		if not stacks then
+			notify("StudioPay/Money not found — is the studio loaded?", "Studio Farm", 6)
+			Config.StudioFarm = false
+			return
+		end
+
+		for index, prompt in pairs(prompts) do
+			if prompt and Config.StudioFarm then
+				table.insert(studioThreads, task.spawn(studioStealLoop, index, prompt, stacks[index]))
+			end
+		end
+	end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1311,12 +1364,29 @@ local function exoticStockAvailable()
 	return true
 end
 
+local function invokeShopRemote(itemName)
+	for _, remoteName in ipairs({ "ExoticShopRemote", "ExoticShopRemote2" }) do
+		local remote = getRemote(remoteName)
+		if remote and remote:IsA("RemoteFunction") then
+			local ok, result = pcall(remote.InvokeServer, remote, itemName)
+			if ok and result ~= false then
+				return true
+			end
+		elseif remote and remote:IsA("RemoteEvent") then
+			if invokeRemote(remoteName, itemName) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function buyKoolAidSupplies()
 	if not exoticStockAvailable() then
 		return false
 	end
 	for _, itemName in ipairs(KOOL_AID_ITEMS) do
-		if not invokeRemote("ExoticShopRemote", itemName) then
+		if not invokeShopRemote(itemName) then
 			return false
 		end
 		sleep(1.25)
@@ -1329,6 +1399,22 @@ local function buyKoolAidSupplies()
 	return true
 end
 
+local function getCookPrompt(cookPart)
+	if not cookPart then
+		return nil
+	end
+	return cookPart:FindFirstChild("ProximityPrompt")
+		or cookPart:FindFirstChildOfClass("ProximityPrompt")
+end
+
+local function getSellPrompt(sellPart)
+	if not sellPart then
+		return nil
+	end
+	return sellPart:FindFirstChild("ProximityPrompt")
+		or sellPart:FindFirstChildOfClass("ProximityPrompt", true)
+end
+
 local function getAvailableCookingPot()
 	local pots = World:FindFirstChild("CookingPots")
 	if not pots then
@@ -1336,9 +1422,16 @@ local function getAvailableCookingPot()
 	end
 	for _, pot in ipairs(pots:GetChildren()) do
 		if pot:IsA("Model") then
-			local ownerTag = findPath(pot, "Owner")
-			local progress = findPath(pot, "CookPart", "Steam", "LoadUI")
-			if ownerTag and progress and not ownerTag.Value and not progress.Enabled then
+			local ownerTag = pot:FindFirstChild("Owner")
+			local cookPart = pot:FindFirstChild("CookPart")
+			local progress = cookPart and findPath(cookPart, "Steam", "LoadUI")
+			if ownerTag
+				and cookPart
+				and getCookPrompt(cookPart)
+				and progress
+				and not ownerTag.Value
+				and not progress.Enabled
+			then
 				return pot
 			end
 		end
@@ -1375,10 +1468,10 @@ local function runKoolAidFarm()
 		end
 
 		local cookPart = cookingPot:WaitForChild("CookPart", 10)
-		local cookPrompt = cookPart and cookPart:FindFirstChildOfClass("ProximityPrompt")
-		local cookProgress = findPath(cookPart, "Steam", "LoadUI")
+		local cookPrompt = getCookPrompt(cookPart)
+		local cookProgress = cookPart and findPath(cookPart, "Steam", "LoadUI")
 		local sellPart = World:FindFirstChild("IceFruit Sell")
-		local sellPrompt = sellPart and sellPart:FindFirstChildOfClass("ProximityPrompt", true)
+		local sellPrompt = getSellPrompt(sellPart)
 
 		if not cookPart or not cookPrompt or not cookProgress or not sellPart or not sellPrompt then
 			notify("Cook or sell prompts missing — game layout may have changed.", "Kool-Aid Farm", 8)
@@ -1414,18 +1507,15 @@ local function runKoolAidFarm()
 		end
 
 		while cookProgress.Enabled do
-			local start = tick()
-			local finished = false
+			local changed = false
 			local conn = cookProgress:GetPropertyChangedSignal("Enabled"):Connect(function()
-				finished = true
+				changed = true
 			end)
-			while not finished and tick() - start < 2.035 do
+			local deadline = tick() + 2.035
+			while cookProgress.Enabled and tick() < deadline and not changed do
 				RunService.Heartbeat:Wait()
 			end
 			conn:Disconnect()
-			if not cookProgress.Enabled then
-				break
-			end
 		end
 
 		teleportTo(cookPart.Position)
@@ -1482,7 +1572,7 @@ local function runLtkMoneyDupe()
 
 	local ok, err = pcall(function()
 		local sellPart = World:FindFirstChild("IceFruit Sell")
-		local sellPrompt = sellPart and sellPart:FindFirstChildOfClass("ProximityPrompt", true)
+		local sellPrompt = getSellPrompt(sellPart)
 		if not sellPart or not sellPrompt then
 			notify("IceFruit Sell prompt not found.", "LTK Money Dupe", 6)
 			return
@@ -1685,30 +1775,50 @@ end
 -- ---------------------------------------------------------------------------
 
 local function applyAlwaysSprint()
-	if not Config.AlwaysSprint or Config.SpeedBoost or Config.Fly then
+	if not Config.AlwaysSprint or Config.SpeedBoost or Config.Fly or Config.MovementBypass then
 		return
 	end
 	local humanoid = getHumanoid()
 	if not humanoid or humanoid.Health <= 0 or shared.Sleeping then
 		return
 	end
-	local sprintHeld = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
-		or UserInputService:IsKeyDown(Enum.KeyCode.ButtonL3)
-	if sprintHeld and humanoid.MoveDirection.Magnitude > 0.1 then
+	if humanoid.MoveDirection.Magnitude > 0.1 then
 		humanoid.WalkSpeed = Config.RunSpeed
+	elseif not Config.NoInjured or humanoid.Health >= 26 then
+		humanoid.WalkSpeed = 16
+	end
+end
+
+local function resetMovementStats()
+	local humanoid = getHumanoid()
+	if not humanoid or humanoid.Health <= 0 or Config.MovementBypass or Config.Fly then
+		return
+	end
+	if not Config.SpeedBoost and not Config.AlwaysSprint then
+		if not Config.NoInjured or humanoid.Health >= 26 then
+			humanoid.WalkSpeed = 16
+		end
+	end
+	if not Config.JumpBoost then
+		if humanoid.UseJumpPower then
+			humanoid.JumpPower = 50
+		else
+			humanoid.JumpHeight = 7.2
+		end
 	end
 end
 
 local function applyMovementBoosts()
-	if not Config.SpeedBoost and not Config.JumpBoost then
-		return
-	end
 	local humanoid = getHumanoid()
 	if not humanoid or humanoid.Health <= 0 then
 		return
 	end
 	if Config.SpeedBoost then
 		humanoid.WalkSpeed = BOOST_WALK_SPEED
+	elseif not Config.AlwaysSprint and not Config.Fly and not Config.MovementBypass then
+		if not Config.NoInjured or humanoid.Health >= 26 then
+			humanoid.WalkSpeed = 16
+		end
 	end
 	if Config.JumpBoost then
 		if humanoid.UseJumpPower then
@@ -1728,7 +1838,7 @@ local function bindCharacter(character)
 	else
 		teardownMovementBypass()
 	end
-	syncAntiGlide(character)
+	bindAntiGlide(character)
 	if Config.NoFallRagdoll or Config.FullRagdoll then
 		applyNoFallRagdoll(character)
 	end
@@ -1749,6 +1859,7 @@ local function onCharacterRemoving(_character)
 	if bypassSession.character == _character then
 		teardownMovementBypass()
 	end
+	teardownAntiGlideConn()
 	teardownNoFallRagdoll()
 	teardownFullRagdoll()
 	if equipCharacterConn then
@@ -1761,7 +1872,7 @@ end
 -- UI
 -- ---------------------------------------------------------------------------
 
-local HubUI = UILib.create({
+hubUiInstance = UILib.create({
 	title = "THA BRONX 3",
 	config = Config,
 	sections = {
@@ -1956,7 +2067,7 @@ local HubUI = UILib.create({
 			},
 			{
 				type = "hint",
-				text = "WASD+Space/Ctrl fly | Shift sprint",
+				text = "WASD+Space/Ctrl fly | Sprint toggle = always run",
 			},
 			{
 				type = "hint",
@@ -1971,7 +2082,7 @@ local HubUI = UILib.create({
 				Config.Fly = false
 				flyBypassState.groundLatched = false
 				flyBypassState.lastFlyActive = false
-				syncAntiGlide(LocalPlayer.Character)
+				bindAntiGlide(LocalPlayer.Character)
 				notify("Fly disabled — requires AC Bypass.", "Movement", 4)
 			end
 			if not value then
@@ -2021,8 +2132,21 @@ local HubUI = UILib.create({
 				flyBypassState.lastFlyActive = false
 				syncAcGroundYFromAttr()
 			end
-			syncAntiGlide(LocalPlayer.Character)
+			bindAntiGlide(LocalPlayer.Character)
 			refreshMovementBypass()
+		elseif key == "SpeedBoost" or key == "JumpBoost" then
+			if value then
+				applyMovementBoosts()
+			else
+				resetMovementStats()
+			end
+		elseif key == "AlwaysSprint" then
+			if not value then
+				resetMovementStats()
+			end
+		elseif key == "NoSleep" and not value then
+			shared.Wokeness = nil
+			shared.Sleeping = nil
 		end
 	end,
 })
