@@ -7,10 +7,11 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "9-aimbot"
+local GAME_BUILD = "10-refine"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -36,24 +37,169 @@ if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
 end
 
 local canDraw = typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
-local esp = {}
+local GREY_TEAM = BrickColor.new("Medium stone grey")
+
+local WHITE = Color3.fromRGB(248, 250, 252)
+local DIM = Color3.fromRGB(148, 156, 168)
+local BAR_BG = Color3.fromRGB(10, 12, 16)
+local BACKDROP = Color3.fromRGB(8, 10, 14)
+
+local CORNER_OFFSETS = {
+	Vector3.new(1, 1, 1),
+	Vector3.new(1, 1, -1),
+	Vector3.new(1, -1, 1),
+	Vector3.new(1, -1, -1),
+	Vector3.new(-1, 1, 1),
+	Vector3.new(-1, 1, -1),
+	Vector3.new(-1, -1, 1),
+	Vector3.new(-1, -1, -1),
+}
+
+local esp: { [Model]: any } = {}
 local wallsFolder = workspace:FindFirstChild("Walls")
 local espNeedsHide = false
-local GREY_TEAM = BrickColor.new("Medium stone grey")
 local aimFovSq = Config.AimFOV * Config.AimFOV
-local aimTarget = nil
-local aimFovCircle = nil
+local aimFovCircle: any = nil
 
-local function setAimFOV(value)
+local function setAimFOV(value: number)
 	Config.AimFOV = math.clamp(math.floor(value), 20, 500)
 	aimFovSq = Config.AimFOV * Config.AimFOV
 end
 
+local function normTeam(value: any): any
+	if value == nil then
+		return nil
+	end
+	return tonumber(value) or value
+end
 
--- Mirror ReplicatedStorage.Network GetSpawned without require() — the module anti-tamper kicks/hangs foreign callers.
-local function getSpawned()
+local function teamsEqual(a: any, b: any): boolean
+	a, b = normTeam(a), normTeam(b)
+	return a ~= nil and b ~= nil and a == b
+end
+
+local function getGameMode(): string
+	local info = workspace:FindFirstChild("GameInfo")
+	local mode = info and info:FindFirstChild("Mode")
+	return if mode and mode:IsA("StringValue") then mode.Value else ""
+end
+
+local function findPlayer(name: string): Player?
+	local child = Players:FindFirstChild(name)
+	if child and child:IsA("Player") then
+		return child
+	end
+	for _, player in Players:GetPlayers() do
+		if player.Name == name then
+			return player
+		end
+	end
+	return nil
+end
+
+local function getLocalTeam(): any
+	local id = LocalPlayer:GetAttribute("Team")
+	if id == nil then
+		local record = Players:FindFirstChild(LocalPlayer.Name)
+		id = record and record:GetAttribute("Team")
+	end
+	return if id == nil then nil else normTeam(id)
+end
+
+local function hasTeamPlay(): boolean
+	if getLocalTeam() == nil or LocalPlayer.TeamColor == GREY_TEAM then
+		return false
+	end
+	local mode = getGameMode()
+	return mode ~= "VOTE" and mode ~= "END"
+end
+
+local function teamColor(rel: string): Color3
+	if rel == "Enemy" then
+		return Config.ESPEnemyColor
+	end
+	if rel == "Ally" then
+		return Config.ESPAllyColor
+	end
+	return Config.ESPNeutralColor
+end
+
+local function getTeamFor(name: string, char: Model?): any
+	local record = Players:FindFirstChild(name)
+	if record then
+		local id = record:GetAttribute("Team")
+		if id ~= nil then
+			return normTeam(id)
+		end
+	end
+	local player = findPlayer(name)
+	if player then
+		local id = player:GetAttribute("Team")
+		if id ~= nil then
+			return normTeam(id)
+		end
+	end
+	return if char then normTeam(char:GetAttribute("Team")) else nil
+end
+
+local function relation(name: string, char: Model?): string
+	if name == LocalPlayer.Name then
+		return "Ally"
+	end
+	if name == "Skinwalker" then
+		return "Enemy"
+	end
+	if not hasTeamPlay() then
+		return "Enemy"
+	end
+	local pt = getTeamFor(name, char)
+	if pt == nil then
+		return "Enemy"
+	end
+	return if teamsEqual(getLocalTeam(), pt) then "Ally" else "Enemy"
+end
+
+local function displayName(name: string): string
+	local player = findPlayer(name)
+	return if player then player.DisplayName else name
+end
+
+local function isAllySpawnShielded(name: string): boolean
+	if not hasTeamPlay() or not teamsEqual(getLocalTeam(), getTeamFor(name)) then
+		return false
+	end
+	if not wallsFolder or not wallsFolder.Parent then
+		wallsFolder = workspace:FindFirstChild("Walls")
+	end
+	return wallsFolder ~= nil and wallsFolder:FindFirstChild(name .. "Forcefield") ~= nil
+end
+
+local function isCombatModel(model: Instance?): (boolean, Humanoid?, BasePart?)
+	if not model or not model:IsA("Model") or model == LocalPlayer.Character or model.Name == "ViewModel" then
+		return false
+	end
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+	if not hum or not root or hum.Health <= 0 then
+		return false
+	end
+	return true, hum, root
+end
+
+local function isKnownCombatant(name: string): boolean
+	if name == "Skinwalker" then
+		return getGameMode() == "BOSS"
+	end
+	if name == LocalPlayer.Name then
+		return false
+	end
+	return Players:FindFirstChild(name) ~= nil or findPlayer(name) ~= nil
+end
+
+-- Mirror Network.GetSpawned without require() — anti-tamper kicks foreign callers.
+local function getSpawned(): { [string]: Model }
 	local spawned = {}
-	for _, record in ipairs(Players:GetChildren()) do
+	for _, record in Players:GetChildren() do
 		if record.Name == LocalPlayer.Name then
 			continue
 		end
@@ -70,212 +216,11 @@ local function getSpawned()
 	return spawned
 end
 
-local WHITE = Color3.fromRGB(248, 250, 252)
-local DIM = Color3.fromRGB(148, 156, 168)
-local BAR_BG = Color3.fromRGB(10, 12, 16)
-local BACKDROP = Color3.fromRGB(8, 10, 14)
+local function collectTargets(): { [Model]: string }
+	local targets: { [Model]: string } = {}
 
-local function hpColor(ratio)
-	if ratio > 0.55 then
-		return Color3.fromRGB(72, 214, 128)
-	elseif ratio > 0.25 then
-		return Color3.fromRGB(255, 196, 72)
-	end
-	return Color3.fromRGB(255, 86, 92)
-end
-
-local function formatDistance(studs)
-	if studs >= 1000 then
-		return string.format("%.1fkm", studs / 1000)
-	end
-	return string.format("%dm", math.floor(studs))
-end
-
-local CORNER_OFFSETS = {
-	Vector3.new(1, 1, 1),
-	Vector3.new(1, 1, -1),
-	Vector3.new(1, -1, 1),
-	Vector3.new(1, -1, -1),
-	Vector3.new(-1, 1, 1),
-	Vector3.new(-1, 1, -1),
-	Vector3.new(-1, -1, 1),
-	Vector3.new(-1, -1, -1),
-}
-
-local function getGameMode()
-	local info = workspace:FindFirstChild("GameInfo")
-	local mode = info and info:FindFirstChild("Mode")
-	if mode and mode:IsA("StringValue") then
-		return mode.Value
-	end
-	return ""
-end
-
-local function normTeam(value)
-	if value == nil then
-		return nil
-	end
-	return tonumber(value) or value
-end
-
-local function teamsEqual(a, b)
-	a, b = normTeam(a), normTeam(b)
-	if a == nil or b == nil then
-		return false
-	end
-	return a == b
-end
-
-local function getLocalTeam()
-	local id = LocalPlayer:GetAttribute("Team")
-	if id == nil then
-		local record = Players:FindFirstChild(LocalPlayer.Name)
-		if record then
-			id = record:GetAttribute("Team")
-		end
-	end
-	if id == nil then
-		return nil
-	end
-	return normTeam(id)
-end
-
-local function hasTeamPlay()
-	if getLocalTeam() == nil then
-		return false
-	end
-	if LocalPlayer.TeamColor == GREY_TEAM then
-		return false
-	end
-	local mode = getGameMode()
-	if mode == "VOTE" or mode == "END" then
-		return false
-	end
-	return true
-end
-
-local function teamColor(rel)
-	if rel == "Enemy" then
-		return Config.ESPEnemyColor
-	elseif rel == "Ally" then
-		return Config.ESPAllyColor
-	end
-	return Config.ESPNeutralColor
-end
-
-local function getTeamFor(name, char)
-	local record = Players:FindFirstChild(name)
-	if record then
-		local id = record:GetAttribute("Team")
-		if id ~= nil then
-			return normTeam(id)
-		end
-	end
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player.Name == name then
-			local id = player:GetAttribute("Team")
-			if id ~= nil then
-				return normTeam(id)
-			end
-		end
-	end
-	if char then
-		return normTeam(char:GetAttribute("Team"))
-	end
-	return nil
-end
-
-local function relation(name, char)
-	if name == LocalPlayer.Name then
-		return "Ally"
-	end
-	if name == "Skinwalker" then
-		return "Enemy"
-	end
-
-	local localTeam = getLocalTeam()
-	local pt = getTeamFor(name, char)
-
-	if hasTeamPlay() then
-		if pt == nil then
-			return "Enemy"
-		end
-		return teamsEqual(localTeam, pt) and "Ally" or "Enemy"
-	end
-
-	return "Enemy"
-end
-
-local function displayName(name)
-	local record = Players:FindFirstChild(name)
-	if record and record:IsA("Player") then
-		return record.DisplayName
-	end
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player.Name == name then
-			return player.DisplayName
-		end
-	end
-	return name
-end
-
-local function isAllySpawnShielded(name)
-	if not hasTeamPlay() then
-		return false
-	end
-	if not teamsEqual(getLocalTeam(), getTeamFor(name)) then
-		return false
-	end
-	if not wallsFolder then
-		wallsFolder = workspace:FindFirstChild("Walls")
-	end
-	return wallsFolder and wallsFolder:FindFirstChild(name .. "Forcefield") ~= nil
-end
-
-local function isCombatModel(model)
-	if not model or not model:IsA("Model") then
-		return false
-	end
-	if model == LocalPlayer.Character then
-		return false
-	end
-	if model.Name == "ViewModel" then
-		return false
-	end
-	local hum = model:FindFirstChildOfClass("Humanoid")
-	local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
-	return hum and root and hum.Health > 0, hum, root
-end
-
-local function isKnownCombatant(name)
-	if name == "Skinwalker" then
-		return getGameMode() == "BOSS"
-	end
-	if name == LocalPlayer.Name then
-		return false
-	end
-	if Players:FindFirstChild(name) then
-		return true
-	end
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player.Name == name then
-			return true
-		end
-	end
-	return false
-end
-
-local function collectTargets()
-	local targets = {}
-
-	local function add(name, char)
-		if not name or name == LocalPlayer.Name then
-			return
-		end
-		if not char or not char:IsA("Model") then
-			return
-		end
-		if targets[char] then
+	local function add(name: string?, char: Instance?)
+		if not name or name == LocalPlayer.Name or not char or not char:IsA("Model") or targets[char] then
 			return
 		end
 		if name == "Skinwalker" or isKnownCombatant(name) then
@@ -283,29 +228,23 @@ local function collectTargets()
 		end
 	end
 
-	for name, char in pairs(getSpawned()) do
+	for name, char in getSpawned() do
 		add(name, char)
 	end
-
-	for _, record in ipairs(Players:GetChildren()) do
+	for _, record in Players:GetChildren() do
 		add(record.Name, workspace:FindFirstChild(record.Name))
 	end
-
-	for _, player in ipairs(Players:GetPlayers()) do
+	for _, player in Players:GetPlayers() do
 		if player ~= LocalPlayer then
 			add(player.Name, workspace:FindFirstChild(player.Name))
-			if player.Character then
-				add(player.Name, player.Character)
-			end
+			add(player.Name, player.Character)
 		end
 	end
-
-	for _, child in ipairs(workspace:GetChildren()) do
+	for _, child in workspace:GetChildren() do
 		if child:IsA("Model") and isKnownCombatant(child.Name) then
 			add(child.Name, child)
 		end
 	end
-
 	if getGameMode() == "BOSS" then
 		add("Skinwalker", workspace:FindFirstChild("Skinwalker"))
 	end
@@ -313,49 +252,57 @@ local function collectTargets()
 	return targets
 end
 
-local function getAimPart(char)
-	if not char then
-		return nil
+local function hpColor(ratio: number): Color3
+	if ratio > 0.55 then
+		return Color3.fromRGB(72, 214, 128)
 	end
-	local part = char:FindFirstChild(Config.AimPart or "Head")
+	if ratio > 0.25 then
+		return Color3.fromRGB(255, 196, 72)
+	end
+	return Color3.fromRGB(255, 86, 92)
+end
+
+local function formatDistance(studs: number): string
+	if studs >= 1000 then
+		return string.format("%.1fkm", studs / 1000)
+	end
+	return string.format("%dm", math.floor(studs))
+end
+
+-- Aimbot
+
+local function aimPart(char: Model): BasePart?
+	local part = char:FindFirstChild(Config.AimPart)
 	if part and part:IsA("BasePart") then
 		return part
 	end
 	return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
 end
 
-local function getAimOrigin()
+local function aimOrigin(): Vector2
 	if UserInputService.MouseEnabled then
 		return UserInputService:GetMouseLocation()
 	end
-	local vp = Camera.ViewportSize
-	return Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+	return Camera.ViewportSize * 0.5
 end
 
-local function isThirdPerson()
-	local scripts = LocalPlayer:FindFirstChild("PlayerScripts")
-	local vortex = scripts and scripts:FindFirstChild("Vortex")
-	if vortex then
-		local modifiers = vortex:FindFirstChild("Modifiers")
-		local flag = modifiers and modifiers:FindFirstChild("IsThirdPerson")
-		if flag and flag:IsA("BoolValue") then
-			return flag.Value
-		end
+local function isThirdPerson(): boolean
+	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+	local vortex = playerScripts and playerScripts:FindFirstChild("Vortex")
+	local modifiers = vortex and vortex:FindFirstChild("Modifiers")
+	local flag = modifiers and modifiers:FindFirstChild("IsThirdPerson")
+	if flag and flag:IsA("BoolValue") then
+		return flag.Value
 	end
 	local api = rawget(_G, "GlobalAPI")
-	if api and typeof(api.Settings) == "table" then
-		local mode = api.Settings.CameraMode
-		if mode ~= nil then
-			return mode ~= 1
-		end
+	local mode = api and typeof(api.Settings) == "table" and api.Settings.CameraMode
+	if mode ~= nil then
+		return mode ~= 1
 	end
 	return LocalPlayer.CameraMinZoomDistance > 1
 end
 
-local function syncMouseHitSpot(position)
-	if typeof(position) ~= "Vector3" then
-		return
-	end
+local function setMouseHit(position: Vector3)
 	_G.MouseHitSpot = position
 	if typeof(getgenv) == "function" then
 		local env = getgenv()
@@ -365,76 +312,47 @@ local function syncMouseHitSpot(position)
 	end
 end
 
-local function considerAimCandidate(closest, closestDistSq, worldPos, originX, originY, candidate)
-	local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
-	if not onScreen or screenPos.Z <= 0 then
-		return closest, closestDistSq
+local function screenDistSq(worldPos: Vector3, origin: Vector2): number?
+	local screen, onScreen = Camera:WorldToViewportPoint(worldPos)
+	if not onScreen or screen.Z <= 0 then
+		return nil
 	end
-	local dx = screenPos.X - originX
-	local dy = screenPos.Y - originY
-	local distSq = dx * dx + dy * dy
-	if distSq >= closestDistSq then
-		return closest, closestDistSq
-	end
-	candidate.position = worldPos
-	candidate.screenPos = Vector2.new(screenPos.X, screenPos.Y)
-	return candidate, distSq
+	local dx, dy = screen.X - origin.X, screen.Y - origin.Y
+	return dx * dx + dy * dy
 end
 
-local function getClosestAimTarget(origin)
-	local closest = nil
-	local closestDistSq = aimFovSq
-	local originX, originY = origin.X, origin.Y
+local function closestAimPart(origin: Vector2): BasePart?
+	local bestPart: BasePart? = nil
+	local bestDistSq = aimFovSq
 
-	for char, name in pairs(collectTargets()) do
-		local alive = isCombatModel(char)
-		if not alive or isAllySpawnShielded(name) then
+	for char, name in collectTargets() do
+		if not isCombatModel(char) or isAllySpawnShielded(name) then
 			continue
 		end
 		if Config.AimTeamCheck and relation(name, char) == "Ally" then
 			continue
 		end
-		local part = getAimPart(char)
-		if not part then
-			continue
+		local part = aimPart(char)
+		local distSq = part and screenDistSq(part.Position, origin)
+		if distSq and distSq < bestDistSq then
+			bestPart, bestDistSq = part, distSq
 		end
-		local candidate = { char = char, name = name, part = part }
-		closest, closestDistSq = considerAimCandidate(
-			closest,
-			closestDistSq,
-			part.Position,
-			originX,
-			originY,
-			candidate
-		)
 	end
 
-	return closest
+	return bestPart
 end
 
--- 1 = snap, 100 = glide. Frame-rate independent via exponential decay.
-local function aimAlpha(dt)
-	local smooth = math.clamp(Config.AimSmooth or 35, 1, 100)
+local function aimAlpha(dt: number): number
+	local smooth = math.clamp(Config.AimSmooth, 1, 100)
 	if smooth <= 1 then
 		return 1
 	end
 	local t = (smooth - 1) / 99
-	local speed = 72 * (1 - t) ^ 1.45 + 1.8
-	return 1 - math.exp(-speed * dt)
+	return 1 - math.exp(-(72 * (1 - t) ^ 1.45 + 1.8) * dt)
 end
 
-local function shouldAimActive()
-	if not Config.Aimbot then
-		return false
-	end
-	if Config.AimHold then
-		return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-	end
-	return true
-end
-
-local function updateAimbot(dt)
-	local origin = getAimOrigin()
+local function updateAimbot(dt: number)
+	local origin = aimOrigin()
 
 	if aimFovCircle then
 		aimFovCircle.Position = origin
@@ -442,37 +360,34 @@ local function updateAimbot(dt)
 		aimFovCircle.Visible = Config.Aimbot and Config.AimFOVCircle
 	end
 
-	if not shouldAimActive() then
-		aimTarget = nil
+	local active = Config.Aimbot
+		and (not Config.AimHold or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2))
+	if not active then
 		return
 	end
 
-	aimTarget = getClosestAimTarget(origin)
-
-	if not aimTarget or not aimTarget.part or not aimTarget.part.Parent then
+	local part = closestAimPart(origin)
+	if not part or not part.Parent then
 		return
 	end
 
-	local targetPos = aimTarget.part.Position
+	local targetPos = part.Position
 	local alpha = aimAlpha(dt)
 
 	if isThirdPerson() then
 		local current = _G.MouseHitSpot
-		if typeof(current) ~= "Vector3" then
-			current = targetPos
-		end
-		syncMouseHitSpot(current:Lerp(targetPos, alpha))
+		setMouseHit(if typeof(current) == "Vector3" then current:Lerp(targetPos, alpha) else targetPos)
 	else
-		syncMouseHitSpot(targetPos)
-		local camPos = Camera.CFrame.Position
-		local goal = CFrame.new(camPos, targetPos)
-		Camera.CFrame = Camera.CFrame:Lerp(goal, alpha)
+		setMouseHit(targetPos)
+		Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPos), alpha)
 	end
 end
 
-local function box2d(char, root)
+-- ESP
+
+local function box2d(char: Model, root: BasePart): (number?, number?, number?, number?)
 	local head = char:FindFirstChild("Head")
-	if head and root then
+	if head and head:IsA("BasePart") then
 		local top, topOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.35, 0))
 		local bot, botOn = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 2.6, 0))
 		if top.Z > 0 and bot.Z > 0 and (topOn or botOn) then
@@ -482,19 +397,18 @@ local function box2d(char, root)
 		end
 	end
 
-	if root then
-		local pos, on = Camera:WorldToViewportPoint(root.Position)
-		if on and pos.Z > 0 then
-			local height = 56
-			local width = height * 0.52
-			return pos.X - width * 0.5, pos.Y - height * 0.5, width, height
-		end
+	local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
+	if onScreen and pos.Z > 0 then
+		local height = 56
+		local width = height * 0.52
+		return pos.X - width * 0.5, pos.Y - height * 0.5, width, height
 	end
 
 	local cf, size = char:GetBoundingBox()
 	local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
 	local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
 	local ok = false
+
 	for i = 1, 8 do
 		local o = CORNER_OFFSETS[i]
 		local p, on = Camera:WorldToViewportPoint((cf * CFrame.new(hx * o.X, hy * o.Y, hz * o.Z)).Position)
@@ -506,13 +420,14 @@ local function box2d(char, root)
 			maxY = math.max(maxY, p.Y)
 		end
 	end
+
 	if not ok then
-		return
+		return nil
 	end
 	return minX, minY, maxX - minX, maxY - minY
 end
 
-local function mk(kind, props)
+local function mk(kind: string, props: { [string]: any })
 	local d = Drawing.new(kind)
 	for k, v in props do
 		d[k] = v
@@ -521,37 +436,34 @@ local function mk(kind, props)
 	return d
 end
 
-local function setVisible(entry, visible)
-	entry.backdrop.Visible = visible
-	for _, corner in ipairs(entry.corners) do
+local ESP_DRAWABLES = { "backdrop", "name", "hpOutline", "hpFill", "dist", "line" }
+
+local function setVisible(entry: any, visible: boolean)
+	for _, key in ESP_DRAWABLES do
+		local draw = entry[key]
+		draw.Visible = visible and (key ~= "line" or Config.ESPSnaplines)
+	end
+	for _, corner in entry.corners do
 		corner.Visible = visible
 	end
-	entry.name.Visible = visible
-	entry.hpOutline.Visible = visible
-	entry.hpFill.Visible = visible
-	entry.dist.Visible = visible
-	entry.line.Visible = visible and Config.ESPSnaplines
 end
 
 local function hideAll()
-	for _, entry in pairs(esp) do
+	for _, entry in esp do
 		setVisible(entry, false)
 	end
 end
 
-local function destroyEntry(entry)
-	entry.backdrop:Remove()
-	for _, corner in ipairs(entry.corners) do
+local function destroyEntry(entry: any)
+	for _, key in ESP_DRAWABLES do
+		entry[key]:Remove()
+	end
+	for _, corner in entry.corners do
 		corner:Remove()
 	end
-	entry.name:Remove()
-	entry.hpOutline:Remove()
-	entry.hpFill:Remove()
-	entry.dist:Remove()
-	entry.line:Remove()
 end
 
-local function drawCorners(corners, x, y, w, h, color)
+local function drawCorners(corners: { any }, x: number, y: number, w: number, h: number, color: Color3)
 	local len = math.clamp(math.min(w, h) * 0.24, 7, 16)
 	local right, bottom = x + w, y + h
 
@@ -559,37 +471,36 @@ local function drawCorners(corners, x, y, w, h, color)
 	corners[1].To = Vector2.new(x + len, y)
 	corners[2].From = Vector2.new(x, y)
 	corners[2].To = Vector2.new(x, y + len)
-
 	corners[3].From = Vector2.new(right, y)
 	corners[3].To = Vector2.new(right - len, y)
 	corners[4].From = Vector2.new(right, y)
 	corners[4].To = Vector2.new(right, y + len)
-
 	corners[5].From = Vector2.new(x, bottom)
 	corners[5].To = Vector2.new(x + len, bottom)
 	corners[6].From = Vector2.new(x, bottom)
 	corners[6].To = Vector2.new(x, bottom - len)
-
 	corners[7].From = Vector2.new(right, bottom)
 	corners[7].To = Vector2.new(right - len, bottom)
 	corners[8].From = Vector2.new(right, bottom)
 	corners[8].To = Vector2.new(right, bottom - len)
 
-	for _, corner in ipairs(corners) do
+	for _, corner in corners do
 		corner.Color = color
 		corner.Visible = true
 	end
 end
 
-local function ensure(char)
+local function ensure(char: Model)
 	local entry = esp[char]
 	if entry then
 		return entry
 	end
-	local corners = {}
+
+	local corners = table.create(8)
 	for _ = 1, 8 do
 		table.insert(corners, mk("Line", { Thickness = 1.2, Transparency = 0.06 }))
 	end
+
 	entry = {
 		backdrop = mk("Square", { Filled = true, Thickness = 0, Transparency = 0.84 }),
 		corners = corners,
@@ -611,10 +522,9 @@ if canDraw then
 		Transparency = 0.45,
 		Color = Color3.fromRGB(255, 255, 255),
 	})
-	aimFovCircle.Visible = false
 end
 
-local function drawTarget(name, char, hum, root, camPos, snapFrom)
+local function drawTarget(name: string, char: Model, hum: Humanoid, root: BasePart, camPos: Vector3, snapFrom: Vector2?)
 	local rel = relation(name, char)
 	if rel == "Ally" and not Config.ESPAllies then
 		local entry = esp[char]
@@ -638,13 +548,12 @@ local function drawTarget(name, char, hum, root, camPos, snapFrom)
 	local cx = x + w * 0.5
 	local bottom = y + h
 	local hp = hum.Health
-	local maxHp = hum.MaxHealth > 0 and hum.MaxHealth or 100
+	local maxHp = if hum.MaxHealth > 0 then hum.MaxHealth else 100
 	local ratio = math.clamp(hp / maxHp, 0, 1)
 	local barW = math.max(38, w + 4)
 	local barH = 3
 	local barX = cx - barW * 0.5
 	local barY = bottom + 6
-	local dist = (root.Position - camPos).Magnitude
 
 	entry.backdrop.Position = Vector2.new(x - 2, y - 2)
 	entry.backdrop.Size = Vector2.new(w + 4, h + 4)
@@ -668,18 +577,16 @@ local function drawTarget(name, char, hum, root, camPos, snapFrom)
 	entry.hpFill.Visible = true
 
 	entry.dist.Position = Vector2.new(cx, barY + 7)
-	entry.dist.Text = formatDistance(dist)
+	entry.dist.Text = formatDistance((root.Position - camPos).Magnitude)
 	entry.dist.Color = DIM
 	entry.dist.Visible = true
 
-	if Config.ESPSnaplines then
+	if snapFrom then
 		entry.line.From = snapFrom
 		entry.line.To = Vector2.new(cx, bottom + 1)
 		entry.line.Color = accent
-		entry.line.Visible = true
-	else
-		entry.line.Visible = false
 	end
+	entry.line.Visible = Config.ESPSnaplines and snapFrom ~= nil
 end
 
 local function updateESP()
@@ -700,18 +607,20 @@ local function updateESP()
 	end
 
 	local camPos = Camera.CFrame.Position
-	local snapFrom = Config.ESPSnaplines and Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y) or nil
-	local seen = {}
+	local snapFrom = if Config.ESPSnaplines
+		then Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y)
+		else nil
+	local seen: { [Model]: boolean } = {}
 
-	for char, name in pairs(collectTargets()) do
+	for char, name in collectTargets() do
 		local alive, hum, root = isCombatModel(char)
-		if alive and not isAllySpawnShielded(name) then
+		if alive and hum and root and not isAllySpawnShielded(name) then
 			seen[char] = true
 			drawTarget(name, char, hum, root, camPos, snapFrom)
 		end
 	end
 
-	for char, entry in pairs(esp) do
+	for char, entry in esp do
 		if not seen[char] or not char.Parent then
 			destroyEntry(entry)
 			esp[char] = nil
