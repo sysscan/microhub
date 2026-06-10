@@ -1,14 +1,8 @@
 --[[
-	Universal hub loader.
-	Users execute main.lua (one-liner) or hub/dev.lua for local testing.
-
-	Flow:
-	  1. Load bootstrap (local readfile or HttpGet)
-	  2. Load config + manifest
-	  3. Match game.PlaceId
-	  4. Fetch and run the game module
+	MicroHub loader — matches game.PlaceId and runs the correct game script.
 ]]
 
+local Compat = nil
 local Bootstrap = nil
 
 local INLINE_CONFIG = {
@@ -53,39 +47,72 @@ local function readLocalFile(relativePath)
 	return nil
 end
 
+local function loadCompatModule(repo)
+	if Compat then
+		return true
+	end
+
+	local source = readLocalFile("lib/compat.lua")
+	if not source then
+		local ok, remoteSource = pcall(function()
+			return game:HttpGet(repo .. "/lib/compat.lua")
+		end)
+		if ok and typeof(remoteSource) == "string" and #remoteSource > 0 then
+			source = remoteSource
+		elseif syn and syn.request then
+			ok, remoteSource = pcall(function()
+				return syn.request({ Url = repo .. "/lib/compat.lua", Method = "GET" }).Body
+			end)
+			if ok and typeof(remoteSource) == "string" and #remoteSource > 0 then
+				source = remoteSource
+			end
+		end
+	end
+
+	if not source then
+		return false, "failed to fetch compat"
+	end
+
+	local fn, err
+	if typeof(loadstring) == "function" then
+		fn, err = loadstring(source, "MicroHub.Compat")
+	elseif typeof(load) == "function" then
+		fn, err = load(source, "MicroHub.Compat")
+	else
+		return false, "executor missing loadstring/load"
+	end
+
+	if not fn then
+		return false, err
+	end
+
+	local moduleOk, module = pcall(fn)
+	if not moduleOk or typeof(module) ~= "table" then
+		return false, "compat did not return a table"
+	end
+
+	Compat = module
+	return true
+end
+
 local function loadBootstrap(repo, retries)
 	if Bootstrap then
 		return true
 	end
 
-	local source = nil
-	if useLocalMode() then
-		source = readLocalFile("lib/bootstrap.lua")
-		if source then
-			Bootstrap = nil
-			local fn, err = loadstring(source, "Hub.Bootstrap")
-			if not fn then
-				return false, err
-			end
-			local moduleOk, module = pcall(fn)
-			if not moduleOk or typeof(module) ~= "table" then
-				return false, "bootstrap did not return a table"
-			end
-			Bootstrap = module
-			Bootstrap.setLocalRoot(getLocalRoot())
-			return true
+	local source = readLocalFile("lib/bootstrap.lua")
+	if not source then
+		local ok, remoteSource = Compat.httpGet(repo .. "/lib/bootstrap.lua")
+		if ok and typeof(remoteSource) == "string" and #remoteSource > 0 then
+			source = remoteSource
 		end
 	end
 
-	local ok, remoteSource = pcall(function()
-		return game:HttpGet(repo .. "/lib/bootstrap.lua", true)
-	end)
-
-	if not ok or typeof(remoteSource) ~= "string" or #remoteSource == 0 then
+	if not source then
 		return false, "failed to fetch bootstrap"
 	end
 
-	local fn, err = loadstring(remoteSource, "Hub.Bootstrap")
+	local fn, err = Compat.compile(source, "MicroHub.Bootstrap")
 	if not fn then
 		return false, err
 	end
@@ -103,10 +130,15 @@ local function loadBootstrap(repo, retries)
 end
 
 local function fetchTableModule(repo, relativePath, chunkName, retries)
-	local ok, source = Bootstrap.fetchModule(repo, relativePath, retries)
-	if not ok then
-		return false, source
+	local source = Bootstrap.readLocal(relativePath)
+	if not source then
+		local ok, remoteSource = Compat.httpGet(repo .. "/" .. relativePath)
+		if not ok then
+			return false, remoteSource
+		end
+		source = remoteSource
 	end
+
 	return Bootstrap.loadTableModule(source, chunkName)
 end
 
@@ -120,21 +152,17 @@ end
 
 local function loadConfig(repo)
 	local config = INLINE_CONFIG
-
-	local localSource = useLocalMode() and readLocalFile("config.lua") or nil
-	local configSource = localSource
+	local configSource = readLocalFile("config.lua")
 
 	if not configSource then
-		local ok, remoteSource = pcall(function()
-			return game:HttpGet(repo .. "/config.lua", true)
-		end)
+		local ok, remoteSource = Compat.httpGet(repo .. "/config.lua")
 		if ok and typeof(remoteSource) == "string" and #remoteSource > 0 then
 			configSource = remoteSource
 		end
 	end
 
 	if configSource then
-		local fn = loadstring(configSource, "Hub.Config")
+		local fn, err = Compat.compile(configSource, "MicroHub.Config")
 		if fn then
 			local runOk, value = pcall(fn)
 			if runOk and typeof(value) == "table" then
@@ -148,12 +176,19 @@ end
 
 local function runLoader()
 	local repo = resolveRepository()
+
+	local compatOk, compatErr = loadCompatModule(repo)
+	if not compatOk then
+		warn("[MicroHub] Compat error:", compatErr)
+		return
+	end
+
 	local config, activeRepo = loadConfig(repo)
 	repo = activeRepo
 
 	local bootOk, bootErr = loadBootstrap(repo, config.HttpRetries or 2)
 	if not bootOk then
-		warn("[Hub] Bootstrap error:", bootErr)
+		warn("[MicroHub] Bootstrap error:", bootErr)
 		return
 	end
 
@@ -162,7 +197,7 @@ local function runLoader()
 		return
 	end
 
-	local manifestOk, manifest = fetchTableModule(repo, "manifest.lua", "Hub.Manifest", config.HttpRetries or 2)
+	local manifestOk, manifest = fetchTableModule(repo, "manifest.lua", "MicroHub.Manifest", config.HttpRetries or 2)
 	if not manifestOk then
 		Bootstrap.notify(config.Name, "Manifest failed: " .. tostring(manifest), 6)
 		return
@@ -201,7 +236,7 @@ local function runLoader()
 		return
 	end
 
-	local loadOk, loadErr = Bootstrap.loadSource(scriptSource, "Hub.Game." .. (entry.name or "Unknown"))
+	local loadOk, loadErr = Bootstrap.loadSource(scriptSource, "MicroHub.Game." .. (entry.name or "Unknown"))
 	if not loadOk then
 		Bootstrap.notify(config.Name, "Script error (see console)", 6)
 		warn(string.format("[%s] Runtime error in %s: %s", config.Name, modulePath, tostring(loadErr)))
@@ -214,5 +249,5 @@ end
 
 local ok, err = pcall(runLoader)
 if not ok then
-	warn("[Hub] Loader crashed:", err)
+	warn("[MicroHub] Loader crashed:", err)
 end

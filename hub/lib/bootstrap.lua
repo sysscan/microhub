@@ -63,7 +63,7 @@ function Bootstrap.httpGet(url, retries)
 
 	for attempt = 1, retries + 1 do
 		local ok, result = pcall(function()
-			return game:HttpGet(url, true)
+			return game:HttpGet(url)
 		end)
 
 		if ok and typeof(result) == "string" and #result > 0 then
@@ -71,6 +71,27 @@ function Bootstrap.httpGet(url, retries)
 		end
 
 		lastError = ok and "empty response" or tostring(result)
+
+		if syn and syn.request then
+			ok, result = pcall(function()
+				return syn.request({ Url = url, Method = "GET" }).Body
+			end)
+			if ok and typeof(result) == "string" and #result > 0 then
+				return true, result
+			end
+			lastError = ok and "empty response" or tostring(result)
+		end
+
+		if typeof(request) == "function" then
+			ok, result = pcall(function()
+				return request({ Url = url, Method = "GET" }).Body
+			end)
+			if ok and typeof(result) == "string" and #result > 0 then
+				return true, result
+			end
+			lastError = ok and "empty response" or tostring(result)
+		end
+
 		if attempt <= retries then
 			task.wait(0.35 * attempt)
 		end
@@ -94,7 +115,15 @@ function Bootstrap.fetchModule(baseUrl, relativePath, retries)
 end
 
 function Bootstrap.loadTableModule(source, chunkName)
-	local fn, compileError = loadstring(source, chunkName)
+	local fn, compileError
+	if typeof(loadstring) == "function" then
+		fn, compileError = loadstring(source, chunkName)
+	elseif typeof(load) == "function" then
+		fn, compileError = load(source, chunkName)
+	else
+		return false, "executor missing loadstring/load"
+	end
+
 	if not fn then
 		return false, compileError
 	end
@@ -112,7 +141,15 @@ function Bootstrap.loadTableModule(source, chunkName)
 end
 
 function Bootstrap.loadSource(source, chunkName)
-	local fn, compileError = loadstring(source, chunkName)
+	local fn, compileError
+	if typeof(loadstring) == "function" then
+		fn, compileError = loadstring(source, chunkName)
+	elseif typeof(load) == "function" then
+		fn, compileError = load(source, chunkName)
+	else
+		return false, "executor missing loadstring/load"
+	end
+
 	if not fn then
 		return false, compileError
 	end

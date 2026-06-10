@@ -1,15 +1,49 @@
 --[[
-	Repo entry point — redirects to the hub loader.
+	Repo entry point.
 
-	Local (executor workspace = this repo):
+	Local:
 	  loadstring(readfile("load.lua"))()
 
-	Public (after publishing to GitHub):
-	  loadstring(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua", true))()
+	Public:
+	  loadstring(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua"))()
 ]]
 
-if readfile and isfile and isfile("hub/dev.lua") then
-	loadstring(readfile("hub/dev.lua"), "Hub.Dev")()
+local function compile(source, chunkName)
+	if typeof(loadstring) == "function" then
+		local fn, err = loadstring(source, chunkName)
+		if fn then
+			return fn, nil
+		end
+		if typeof(load) == "function" then
+			return load(source, chunkName)
+		end
+		return nil, err
+	end
+	if typeof(load) == "function" then
+		return load(source, chunkName)
+	end
+	return nil, "executor missing loadstring/load"
+end
+
+local function runSource(source, chunkName)
+	local fn, compileError = compile(source, chunkName)
+	if not fn then
+		error("[MicroHub] Compile failed: " .. tostring(compileError))
+	end
+	local ok, runError = pcall(fn)
+	if not ok then
+		error("[MicroHub] Runtime error: " .. tostring(runError))
+	end
+end
+
+if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile("hub/dev.lua") then
+	runSource(readfile("hub/dev.lua"), "MicroHub.Dev")
 else
-	loadstring(game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua", true))()
+	local ok, source = pcall(function()
+		return game:HttpGet("https://raw.githubusercontent.com/sysscan/microhub/main/hub/main.lua")
+	end)
+	if not ok or typeof(source) ~= "string" or #source == 0 then
+		error("[MicroHub] Could not download main.lua: " .. tostring(source))
+	end
+	runSource(source, "MicroHub.Main")
 end
