@@ -1,7 +1,7 @@
--- MicroHub loader v1.6.6
+-- MicroHub loader v1.6.7
 -- Remote only. Resolves GitHub main -> immutable commit SHA, then loads every file from that SHA.
 
-local VERSION = "1.6.6"
+local VERSION = "1.6.7"
 local MIN_UI_VERSION = "3.0.0"
 local OWNER = "sysscan"
 local REPO = "microhub"
@@ -11,7 +11,7 @@ local UI_KEY = "__MicroHubUILib"
 
 local GAMES = {
 	{ name = "Warfare", path = "games/warfare.lua", placeIds = { 83902709332473 } },
-	{ name = "Gunfight Arena", path = "games/gunfight-arena.lua", placeIds = { 14518422161 } },
+	{ name = "Gunfight Arena", path = "games/gunfight-arena.lua", placeIds = { 15514727567, 14518422161 } },
 	{ name = "Tha Bronx 3", path = "games/tha-bronx3.lua", placeIds = { 16472538603, 18642421777 } },
 }
 

@@ -6,7 +6,7 @@ Script hub for Roblox — auto-loads the right script per game.
 
 ```lua
 local OWNER, REPO, BRANCH = "sysscan", "microhub", "main"
-local MIN_LOADER = "1.6.6"
+local MIN_LOADER = "1.6.7"
 
 local function okStatus(res)
 	if typeof(res) ~= "table" then
@@ -67,7 +67,7 @@ loadstring(body, "MicroHub.Loader")()
 | Game            | PlaceId          |
 |-----------------|------------------|
 | Warfare         | `83902709332473` |
-| Gunfight Arena  | `14518422161`    |
+| Gunfight Arena  | `15514727567`    |
 | Tha Bronx 3     | `16472538603`    |
 
 Tha Bronx 3 includes all scripts from [GetRioToday/16472538603-ThaBronx3](https://github.com/GetRioToday/16472538603-ThaBronx3): AC bypass, instant prompts/equip, no fall ragdoll, studio farm, kool-aid infinite money farm, and LTK money dupe.
