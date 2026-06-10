@@ -3,9 +3,32 @@
 	Docs: https://docs.voltbz.net/docs/miscellaneous (request)
 ]]
 
+local HUB_VERSION = 3
+
 local DEFAULT_BASE = "https://raw.githubusercontent.com/sysscan/microhub/main/hub"
 local LOADED_KEY = "__MicroHubLoaded"
 local UI_LIB_KEY = "__MicroHubUILib"
+
+local KNOWN_GAME_LIST = {
+	{
+		name = "Warfare",
+		module = "games/warfare.lua",
+		placeIds = { 83902709332473 },
+	},
+	{
+		name = "Tha Bronx 3",
+		module = "games/tha-bronx3.lua",
+		placeIds = { 16472538603, 18642421777 },
+	},
+}
+
+local KNOWN_GAMES_BY_ID = {}
+for _, entry in ipairs(KNOWN_GAME_LIST) do
+	for _, id in ipairs(entry.placeIds) do
+		KNOWN_GAMES_BY_ID[id] = entry
+		KNOWN_GAMES_BY_ID[tostring(id)] = entry
+	end
+end
 
 local function getGenv()
 	return getgenv and getgenv() or _G
@@ -55,7 +78,7 @@ local function sanitize(source)
 end
 
 local function fetchHttp(base, path)
-	local url = base .. "/" .. path
+	local url = base .. "/" .. path .. "?t=" .. tostring(os.time())
 	local res = request({ Url = url, Method = "GET" })
 	if res and res.Success and typeof(res.Body) == "string" and #res.Body > 0 then
 		return res.Body
@@ -64,12 +87,12 @@ local function fetchHttp(base, path)
 	error("HTTP failed (" .. tostring(msg) .. "): " .. url, 0)
 end
 
-local function fetch(base, path)
+local function fetch(base, path, forceRemote)
 	local localPath = getLocalRoot() .. "/" .. path
 	local source
 	local usedLocal = false
 
-	if useLocalFiles() and isfile(localPath) then
+	if not forceRemote and useLocalFiles() and isfile(localPath) then
 		source = readfile(localPath)
 		usedLocal = true
 	else
@@ -94,8 +117,8 @@ local function compile(source, chunkName)
 	return fn
 end
 
-local function loadTable(base, path)
-	local fn = compile(fetch(base, path), path)
+local function loadTable(base, path, forceRemote)
+	local fn = compile(fetch(base, path, forceRemote), path)
 	local ok, result = pcall(fn)
 	if not ok then
 		error("run " .. path .. ": " .. tostring(result), 0)
@@ -123,57 +146,113 @@ local function runScript(base, path)
 	end
 end
 
-local BUILTIN_GAMES = {
-	{
-		name = "Tha Bronx 3",
-		module = "games/tha-bronx3.lua",
-		placeIds = { 16472538603 },
-	},
-}
+local function normalizeId(value)
+	if value == nil then
+		return nil
+	end
+	local asNumber = tonumber(value)
+	if asNumber ~= nil then
+		return asNumber
+	end
+	return tostring(value)
+end
+
+local function idsMatch(left, right)
+	local a = normalizeId(left)
+	local b = normalizeId(right)
+	if a == nil or b == nil then
+		return false
+	end
+	return a == b
+end
+
+local function entryCoversPlace(gameEntry, placeId)
+	if typeof(gameEntry) ~= "table" or typeof(gameEntry.placeIds) ~= "table" then
+		return false
+	end
+	for _, id in ipairs(gameEntry.placeIds) do
+		if idsMatch(id, placeId) then
+			return true
+		end
+	end
+	return false
+end
+
+local function findGame(manifest, placeId)
+	for _, gameEntry in ipairs(manifest) do
+		if entryCoversPlace(gameEntry, placeId) then
+			return gameEntry
+		end
+	end
+
+	local normalized = normalizeId(placeId)
+	return KNOWN_GAMES_BY_ID[normalized] or KNOWN_GAMES_BY_ID[tostring(normalized)]
+end
 
 local function mergeManifest(manifest)
 	local merged = {}
+	local covered = {}
+
+	local function markEntry(entry)
+		if typeof(entry.placeIds) ~= "table" then
+			return
+		end
+		for _, id in ipairs(entry.placeIds) do
+			covered[normalizeId(id)] = true
+		end
+	end
+
 	for _, entry in ipairs(manifest) do
 		table.insert(merged, entry)
+		markEntry(entry)
 	end
 
 	local extra = getGenv().HUB_EXTRA_GAMES
 	if typeof(extra) == "table" then
 		for _, entry in ipairs(extra) do
 			table.insert(merged, entry)
+			markEntry(entry)
 		end
 	end
 
-	for _, entry in ipairs(BUILTIN_GAMES) do
-		local known = false
-		if typeof(entry.placeIds) == "table" then
-			for _, placeId in ipairs(entry.placeIds) do
-				if findGame(merged, placeId) then
-					known = true
-					break
-				end
+	for _, entry in ipairs(KNOWN_GAME_LIST) do
+		local missing = false
+		for _, id in ipairs(entry.placeIds) do
+			if not covered[normalizeId(id)] then
+				missing = true
+				break
 			end
 		end
-		if not known then
+		if missing then
 			table.insert(merged, entry)
+			markEntry(entry)
 		end
 	end
 
 	return merged
 end
 
-local function findGame(manifest, placeId)
-	local targetId = tonumber(placeId)
-	for _, gameEntry in ipairs(manifest) do
-		if typeof(gameEntry.placeIds) == "table" then
-			for _, id in ipairs(gameEntry.placeIds) do
-				if tonumber(id) == targetId then
-					return gameEntry
-				end
-			end
+local function loadManifest(base, placeId)
+	local manifest = mergeManifest(loadTable(base, "manifest.lua"))
+	if findGame(manifest, placeId) then
+		return manifest
+	end
+
+	if useLocalFiles() then
+		warn("[MicroHub] PlaceId", placeId, "missing from local manifest — retrying remote manifest")
+		local genv = getGenv()
+		local previous = genv.HUB_FORCE_REMOTE
+		genv.HUB_FORCE_REMOTE = true
+		local ok, remoteManifest = pcall(function()
+			return mergeManifest(loadTable(base, "manifest.lua", true))
+		end)
+		genv.HUB_FORCE_REMOTE = previous
+		if ok and findGame(remoteManifest, placeId) then
+			return remoteManifest
 		end
 	end
-	return nil
+
+	return manifest
 end
 
 local success, err = pcall(function()
@@ -187,13 +266,18 @@ local success, err = pcall(function()
 		return
 	end
 
-	local manifest = mergeManifest(loadTable(base, "manifest.lua"))
 	local placeId = game.PlaceId
+	local manifest = loadManifest(base, placeId)
 	local entry = findGame(manifest, placeId)
 
 	if not entry then
 		notify(hubName, "Unsupported game — PlaceId " .. tostring(placeId))
-		warn("[" .. hubName .. "] Unsupported PlaceId:", placeId)
+		warn(
+			"[" .. hubName .. "] Unsupported PlaceId:",
+			placeId,
+			"(loader v" .. tostring(HUB_VERSION) .. ", GameId:",
+			game.GameId .. ")"
+		)
 		return
 	end
 

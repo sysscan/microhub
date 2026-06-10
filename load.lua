@@ -35,6 +35,9 @@ local function ensureLocalRoot()
 end
 
 local function readLocalLoader()
+	if getGenv().HUB_USE_LOCAL ~= true then
+		return nil
+	end
 	if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then
 		return nil
 	end

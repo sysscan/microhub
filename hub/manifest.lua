@@ -7,6 +7,6 @@ return {
 	{
 		name = "Tha Bronx 3",
 		module = "games/tha-bronx3.lua",
-		placeIds = { 16472538603 },
+		placeIds = { 16472538603, 18642421777 },
 	},
 }

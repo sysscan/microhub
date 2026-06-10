@@ -45,11 +45,16 @@ If you still see `U+feff` errors, your executor is loading a stale local copy vi
 
 The loader pulls from GitHub by default. If you added a game locally but have not pushed yet, either:
 
-1. **Use local files** — copy the whole `hub/` folder into your executor workspace and run `load.lua` from the repo root (it auto-detects `hub/`, `Warfare/hub/`, etc.), or set:
+1. **Use local files** — copy the whole `hub/` folder into your executor workspace and run `load.lua` from the repo root, or set:
    ```lua
+   getgenv().HUB_USE_LOCAL = true
    getgenv().HUB_LOCAL_ROOT = "Warfare/hub" -- path to hub folder in workspace
    ```
-2. **Push to GitHub** — commit and push `hub/manifest.lua`, `hub/loader.lua`, and `hub/games/tha-bronx3.lua` so the remote loader can fetch them.
+2. **Use remote (default)** — `load.lua` now pulls the latest loader from GitHub automatically. If you still see unsupported PlaceId, stale local `hub/manifest.lua` may be overriding remote. Force remote:
+   ```lua
+   getgenv().HUB_FORCE_REMOTE = true
+   ```
+3. **Push to GitHub** — commit and push `hub/manifest.lua`, `hub/loader.lua`, and `hub/games/tha-bronx3.lua` so the remote loader can fetch them.
 
 The loader also has a built-in fallback entry for Tha Bronx 3 (`16472538603`), but the game script file must still exist locally or on GitHub.
 
