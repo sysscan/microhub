@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "64-sa-reliable"
+local GAME_BUILD = "65-sa-hitreg-dbg"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -288,43 +288,6 @@ local function screenDistSq(worldPos: Vector3, origin: Vector2): number?
 	return dx * dx + dy * dy
 end
 
-local SA_HIT_PARTS = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso" }
-
-local function closestPartToCameraRay(char: Model): BasePart?
-	local camPos = Camera.CFrame.Position
-	local camDir = Camera.CFrame.LookVector
-	local bestPart: BasePart? = nil
-	local bestAngle = math.huge
-	for _, name in SA_HIT_PARTS do
-		local part = char:FindFirstChild(name)
-		if not part or not part:IsA("BasePart") then continue end
-		local toTarget = (part.Position - camPos).Unit
-		local angle = math.acos(math.clamp(camDir:Dot(toTarget), -1, 1))
-		if angle < bestAngle then
-			bestPart, bestAngle = part, angle
-		end
-	end
-	return bestPart
-end
-
-local saLastPositions: { [Model]: Vector3 } = {}
-local saLastTimes: { [Model]: number } = {}
-
-local function predictPosition(char: Model, part: BasePart): Vector3
-	local pos = part.Position
-	local now = os.clock()
-	local lastPos = saLastPositions[char]
-	local lastTime = saLastTimes[char]
-	saLastPositions[char] = pos
-	saLastTimes[char] = now
-	if not lastPos or not lastTime then return pos end
-	local dt = now - lastTime
-	if dt <= 0 or dt > 0.5 then return pos end
-	local velocity = (pos - lastPos) / dt
-	local bulletTravelTime = 0.03
-	return pos + velocity * bulletTravelTime
-end
-
 local function isAimEligible(char: Model, name: string): boolean
 	if not isCombatModel(char) or isAllySpawnShielded(name) then
 		return false
@@ -447,10 +410,7 @@ local function updateCombatAim(dt: number)
 		local bestDist = aimFovSq
 		for char, name in collectTargets() do
 			if not isAimEligible(char, name) then continue end
-			local part = closestPartToCameraRay(char)
-			if not part then
-				part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
-			end
+			local part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
 			if not part then continue end
 			local distSq = screenDistSq(part.Position, origin)
 			if distSq and distSq < bestDist then
@@ -465,15 +425,7 @@ local function updateCombatAim(dt: number)
 	end
 
 	if Config.SilentAim and not Config.Aimbot and combatTargetPart then
-		local isFiring = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-		if isFiring then
-			local char = combatTargetPart.Parent
-			local pos = combatTargetPart.Position
-			if char and char:IsA("Model") then
-				pos = predictPosition(char, combatTargetPart)
-			end
-			setMouseHit(pos)
-		end
+		setMouseHit(combatTargetPart.Position)
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
@@ -505,9 +457,27 @@ end
 local filtergc = voltApi("filtergc")
 local netHooked = false
 local netInstalling = false
-local vortexSyncRef: BindableEvent? = nil
-local syncDbgConn: RBXScriptConnection? = nil
-local dbgCounts = { fire = 0, hit = 0, vsync = 0 }
+
+local hrFires = 0
+local hrHitchecks = 0
+local hrLastFireTime = 0
+local hrLastFireCf: CFrame? = nil
+local hrLastSaTgt: string? = nil
+local hrLastMhs: Vector3? = nil
+local hrWindow = { fires = 0, hits = 0, resetAt = 0 }
+local HR_WINDOW_SEC = 10
+
+local function hrAngleDeg(cf: CFrame, target: Vector3): number
+	local toTgt = (target - cf.Position)
+	if toTgt.Magnitude < 0.01 then return 0 end
+	local dot = cf.LookVector:Dot(toTgt.Unit)
+	return math.deg(math.acos(math.clamp(dot, -1, 1)))
+end
+
+local function hrDistStuds(cf: CFrame, target: Vector3): number
+	return (target - cf.Position).Magnitude
+end
+
 local function dbgDecode(v: any): any
 	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
 	local mod = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
@@ -516,64 +486,6 @@ local function dbgDecode(v: any): any
 	if not ok or typeof(codec) ~= "table" or typeof(codec.AutoDecode) ~= "function" then return v end
 	local ok2, out = pcall(codec.AutoDecode, v)
 	return if ok2 then out else v
-end
-
-local function dbgShortCf(cf: any): string
-	if typeof(cf) ~= "CFrame" then return "-" end
-	local p, l = cf.Position, cf.LookVector
-	return string.format("p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z, l.X, l.Y, l.Z)
-end
-
-local function dbgShort(v: any): string
-	local t = typeof(v)
-	if t == "string" then return #v > 32 and string.sub(v, 1, 29) .. "..." or v end
-	if t == "number" then return string.format("%.3f", v) end
-	if t == "boolean" then return tostring(v) end
-	if t == "CFrame" then return dbgShortCf(v) end
-	if t == "Instance" then return v.Name end
-	return t
-end
-
-local function bindSyncDbg()
-	if not Config.AimDebugger or syncDbgConn then
-		return
-	end
-	local sync = vortexSyncRef
-	if not sync then
-		return
-	end
-	syncDbgConn = sync.Event:Connect(function(...)
-		local args = { ... }
-		if args[1] ~= LocalPlayer or typeof(args[4]) ~= "CFrame" then
-			return
-		end
-		dbgCounts.vsync += 1
-		print(
-			"[GFA-DBG] VSync",
-			string.format("#%d %s %s", dbgCounts.vsync, dbgShort(args[6] or args[3]), dbgShortCf(args[4]))
-		)
-	end)
-end
-
-local function resolveVortexSync(): BindableEvent?
-	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-	local vortex = ps and ps:FindFirstChild("Vortex")
-	local sync = vortex and vortex:FindFirstChild("Sync")
-	if sync and sync:IsA("BindableEvent") then
-		return sync
-	end
-	return nil
-end
-
-local function ensureSyncDbg()
-	if not Config.AimDebugger then
-		return
-	end
-	local sync = resolveVortexSync()
-	if sync then
-		vortexSyncRef = sync
-	end
-	bindSyncDbg()
 end
 
 local function installNetworkHook(): boolean
@@ -591,14 +503,84 @@ local function installNetworkHook(): boolean
 		local eventName = args[2]
 		local payload = { table.unpack(args, 3) }
 
-		if Config.AimDebugger and eventName == "Fire" then
-			dbgCounts.fire += 1
-			local w, clk, cf = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3])
-			print("[GFA-DBG] Fire", string.format("#%d %s clk=%s %s", dbgCounts.fire, dbgShort(w), dbgShort(clk), dbgShortCf(cf)))
-		elseif Config.AimDebugger and eventName == "Hitcheck" then
-			dbgCounts.hit += 1
-			local a, b, c, d = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-			print("[GFA-DBG] Hitcheck", string.format("#%d %s | %s | %s | %s", dbgCounts.hit, dbgShort(a), dbgShort(b), dbgShort(c), dbgShort(d)))
+		if Config.AimDebugger then
+			local now = os.clock()
+
+			if now >= hrWindow.resetAt then
+				if hrWindow.fires > 0 then
+					local pct = hrWindow.fires > 0
+						and math.floor(hrWindow.hits / hrWindow.fires * 100)
+						or 0
+					print(string.format(
+						"[HR] === %ds WINDOW: %d fires, %d hitchecks, %d%% hit rate ===",
+						HR_WINDOW_SEC, hrWindow.fires, hrWindow.hits, pct
+					))
+				end
+				hrWindow.fires, hrWindow.hits = 0, 0
+				hrWindow.resetAt = now + HR_WINDOW_SEC
+			end
+
+			if eventName == "Fire" then
+				hrFires += 1
+				hrWindow.fires += 1
+				hrLastFireTime = now
+
+				local fireCf = dbgDecode(payload[3])
+				hrLastFireCf = if typeof(fireCf) == "CFrame" then fireCf else nil
+
+				local saTgt = combatTargetPart
+				local tgtName = "-"
+				local mhs = _G.MouseHitSpot
+				hrLastMhs = if typeof(mhs) == "Vector3" then mhs else nil
+
+				if saTgt and saTgt.Parent then
+					tgtName = saTgt.Parent.Name
+				end
+				hrLastSaTgt = tgtName
+
+				local angleTxt = "-"
+				local distTxt = "-"
+				local mhsAngleTxt = "-"
+				if hrLastFireCf and saTgt and saTgt.Parent then
+					angleTxt = string.format("%.1f°", hrAngleDeg(hrLastFireCf, saTgt.Position))
+					distTxt = string.format("%.0f", hrDistStuds(hrLastFireCf, saTgt.Position))
+				end
+				if hrLastFireCf and hrLastMhs then
+					mhsAngleTxt = string.format("%.1f°", hrAngleDeg(hrLastFireCf, hrLastMhs))
+				end
+
+				local thirdP = isThirdPerson()
+				pcall(function()
+					print(string.format(
+						"[HR] Fire #%d | tgt=%s | cam→tgt=%s | cam→mhs=%s | dist=%s | 3p=%s",
+						hrFires, tgtName, angleTxt, mhsAngleTxt, distTxt, tostring(thirdP)
+					))
+				end)
+
+			elseif eventName == "Hitcheck" then
+				hrHitchecks += 1
+				hrWindow.hits += 1
+				local latency = now - hrLastFireTime
+
+				local hitModel = dbgDecode(payload[2])
+				local hitPart = dbgDecode(payload[3])
+				local hitModelName = "-"
+				local hitPartName = "-"
+				if typeof(hitModel) == "Instance" then hitModelName = hitModel.Name end
+				if typeof(hitPart) == "Instance" then hitPartName = hitPart.Name end
+
+				local matched = (hrLastSaTgt ~= nil and hitModelName == hrLastSaTgt) and "YES" or "NO"
+
+				pcall(function()
+					print(string.format(
+						"[HR] Hitcheck #%d | hit=%s.%s | wanted=%s | match=%s | dt=%.0fms | ratio=%d/%d",
+						hrHitchecks, hitModelName, hitPartName,
+						hrLastSaTgt or "-", matched,
+						latency * 1000,
+						hrHitchecks, hrFires
+					))
+				end)
+			end
 		end
 
 		if #payload > 0 then
@@ -608,17 +590,16 @@ local function installNetworkHook(): boolean
 	end)
 
 	netHooked = true
-	ensureSyncDbg()
-	print("[GFA] network debugger hooked via filtergc")
+	print("[GFA] hit-reg debugger hooked via filtergc")
 	return true
 end
 
 local function ensureNetworkHook()
-	if not Config.AimDebugger or netHooked or netInstalling then return end
+	if not (Config.AimDebugger or Config.SilentAim) or netHooked or netInstalling then return end
 	netInstalling = true
 	task.spawn(function()
 		for _ = 1, 20 do
-			if not Config.AimDebugger then break end
+			if not (Config.AimDebugger or Config.SilentAim) then break end
 			if installNetworkHook() then break end
 			task.wait(1)
 		end
@@ -627,11 +608,8 @@ local function ensureNetworkHook()
 end
 
 local function updateCombatNetwork()
-	if Config.AimDebugger then
+	if Config.AimDebugger or Config.SilentAim then
 		ensureNetworkHook()
-		if netHooked then
-			ensureSyncDbg()
-		end
 	end
 end
 
@@ -917,7 +895,7 @@ UILib.create({
 					title = "Silent Aim",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "hint", text = "Redirects aim via MouseHitSpot while firing. Targets closest body part with prediction. 3rd person. FOV + team check." },
+						{ type = "hint", text = "Redirects aim via MouseHitSpot. Use 3rd person for best results. FOV + team check." },
 						{ type = "toggle", key = "AimDebugger", label = "Network Debugger", hud = "Net Debug" },
 						{ type = "hint", text = "Logs Fire / Hitcheck / SA-Fire. Rejoin after toggling hooks." },
 					},
