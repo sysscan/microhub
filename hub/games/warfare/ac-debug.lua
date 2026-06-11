@@ -545,13 +545,14 @@ function M.create(opts)
 
 		registerPendingShot(nil, meta)
 
-		if Config.DebugVerbose or meta.redirected or meta.bulletTp then
+		if Config.DebugVerbose or meta.redirected or meta.bulletTp or meta.wallbang then
 			push(
 				"SHOT",
 				string.format(
-					"redirect=%s tp=%s aim=%s part=%s type=%s muzzle=%s ratio=%.2f hs=%.2f",
+					"redirect=%s tp=%s wb=%s aim=%s part=%s type=%s muzzle=%s ratio=%.2f hs=%.2f",
 					tostring(meta.redirected),
 					tostring(meta.bulletTp),
+					tostring(meta.wallbang),
 					tostring(meta.hubAim),
 					tostring(meta.aimPart or "?"),
 					tostring(meta.bulletType or "?"),

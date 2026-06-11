@@ -14,6 +14,7 @@ local Config = hubRequire("games/warfare/config.lua")
 local Constants = hubRequire("games/warfare/constants.lua")
 local HitRateLib = hubRequire("games/warfare/hit-rate.lua")
 local AcDebugLib = hubRequire("games/warfare/ac-debug.lua")
+local ExtrasLib = hubRequire("games/warfare/extras.lua")
 
 local Framework = ReplicatedStorage:WaitForChild("Framework")
 local Modules = Framework:WaitForChild("Modules")
@@ -283,8 +284,18 @@ local HubUI = UILib.create({
 						{ type = "toggle", key = "NoRecoil", label = "No Recoil", hud = "No Recoil" },
 						{ type = "toggle", key = "StableAim", label = "Stable Aim", hud = "Stable Aim" },
 						{ type = "toggle", key = "BulletTP", label = "Bullet TP", hud = "Bullet TP" },
+						{ type = "toggle", key = "Wallbang", label = "Wallbang", hud = "Wallbang" },
+						{ type = "toggle", key = "LineOfSight", label = "LOS Check", hud = "LOS" },
+						{ type = "toggle", key = "TriggerBot", label = "Trigger Bot", hud = "Trigger" },
 						{ type = "slider", key = "SilentAimHitChance", label = "Aim Hit %", min = 50, max = 100, step = 1 },
 						{ type = "slider", key = "SilentAimHeadshotChance", label = "Headshot %", min = 0, max = 100, step = 1 },
+						{ type = "slider", key = "BulletTPHitChance", label = "TP Hit %", min = 20, max = 70, step = 1 },
+						{ type = "slider", key = "WallbangHitChance", label = "Wallbang %", min = 15, max = 60, step = 1 },
+						{ type = "slider", key = "HitRateMaxRatio", label = "Max Hit %", min = 40, max = 75, step = 1 },
+						{ type = "slider", key = "HitRateBurstMax", label = "Burst Hits", min = 2, max = 8, step = 1 },
+						{ type = "slider", key = "BulletTPMaxRatio", label = "TP Max Hit %", min = 30, max = 65, step = 1 },
+						{ type = "slider", key = "BulletTPBurstMax", label = "TP Burst", min = 2, max = 6, step = 1 },
+						{ type = "slider", key = "TriggerBotDelay", label = "Trigger Delay", min = 0.05, max = 0.35, step = 0.01 },
 						{ type = "hint", text = "Hit Rate Safe avoids invalid hit rate kicks. Lower Aim Hit % if you still get kicked." },
 						{
 							type = "select",
@@ -318,6 +329,9 @@ local HubUI = UILib.create({
 						{ type = "toggle", key = "Flight", label = "Flight", hud = "Flight" },
 						{ type = "toggle", key = "SpeedBoost", label = "Speed", hud = "Speed" },
 						{ type = "toggle", key = "InfiniteStamina", label = "Stamina", hud = "Stamina" },
+						{ type = "toggle", key = "NoFallDamage", label = "No Fall Dmg", hud = "No Fall" },
+						{ type = "toggle", key = "Spinbot", label = "Spinbot", hud = "Spinbot" },
+						{ type = "slider", key = "SpinbotSpeed", label = "Spin Speed", min = 6, max = 48, step = 1 },
 						{ type = "hint", text = "Flight: WASD / Space / Ctrl / Shift" },
 					},
 				},
@@ -333,8 +347,26 @@ local HubUI = UILib.create({
 						{ type = "toggle", key = "ESPAllies", label = "ESP Allies", hud = "ESP Allies" },
 						{ type = "toggle", key = "ESPSnaplines", label = "Snaplines", hud = "Snaplines" },
 						{ type = "toggle", key = "ESPStatusTags", label = "Status Tags", hud = "Status Tags" },
-						{ type = "toggle", key = "Tracer", label = "Tracer", hud = "Tracer" },
+						{ type = "toggle", key = "Tracer", label = "Aim Tracer", hud = "Aim Tracer" },
 						{ type = "toggle", key = "FOVCircle", label = "FOV Circle", hud = "FOV Circle" },
+						{ type = "toggle", key = "BulletTracers", label = "Bullet Tracers", hud = "Bullet Trace" },
+						{ type = "toggle", key = "BulletTracerDrawing", label = "2D Tracers", hud = "2D Trace" },
+						{ type = "toggle", key = "BulletTracerUseParts", label = "3D Tracers", hud = "3D Trace" },
+						{ type = "toggle", key = "BulletTracerFade", label = "Tracer Fade", hud = "Trace Fade" },
+						{ type = "slider", key = "BulletTracerLifetime", label = "Trace Life", min = 0.05, max = 0.6, step = 0.05 },
+						{ type = "slider", key = "BulletTracerLength", label = "Trace Length", min = 40, max = 300, step = 10 },
+						{ type = "slider", key = "BulletTracerThickness", label = "Trace Width", min = 1, max = 5, step = 0.5 },
+						{
+							type = "select",
+							key = "BulletTracerMaterial",
+							label = "3D Material",
+							options = { "Neon", "SmoothPlastic", "Glass", "ForceField" },
+						},
+						{ type = "color", key = "BulletTracerColor", label = "Tracer Color" },
+						{ type = "toggle", key = "GunChams", label = "Gun Chams", hud = "Gun Chams" },
+						{ type = "color", key = "GunChamColor", label = "Cham Color" },
+						{ type = "slider", key = "GunChamFillTransparency", label = "Cham Fill", min = 0, max = 0.9, step = 0.05 },
+						{ type = "slider", key = "GunChamOutlineTransparency", label = "Cham Outline", min = 0, max = 0.9, step = 0.05 },
 						{ type = "toggle", key = "ThermalESP", label = "Thermal", hud = "Thermal" },
 						{ type = "toggle", key = "HitMarkers", label = "Hit Markers", hud = "Hit Markers" },
 						{ type = "toggle", key = "ZoomBoost", label = "Zoom", hud = "Zoom" },
@@ -415,6 +447,17 @@ local HubUI = UILib.create({
 		end
 	end,
 	hud = { showKey = "ShowHUD" },
+})
+
+local extras = ExtrasLib.create({
+	config = Config,
+	camera = Camera,
+	localPlayer = LocalPlayer,
+	hasDrawing = hasDrawing,
+	createDrawing = createDrawing,
+	isMenuVisible = function()
+		return HubUI:isMenuVisible()
+	end,
 })
 
 local flightSavedState = nil
@@ -1069,6 +1112,43 @@ local function updateESP()
 	updateDroneESP()
 end
 
+local function hasLineOfSight(targetPos, targetCharacter)
+	if not Config.LineOfSight or Config.Wallbang then
+		return true
+	end
+	if typeof(targetPos) ~= "Vector3" then
+		return false
+	end
+
+	local origin = Camera.CFrame.Position
+	local delta = targetPos - origin
+	local distance = delta.Magnitude
+	if distance < 0.05 then
+		return true
+	end
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore = {}
+	if LocalPlayer.Character then
+		table.insert(ignore, LocalPlayer.Character)
+	end
+	local viewmodel = workspace:FindFirstChild("Viewmodel")
+	if viewmodel then
+		table.insert(ignore, viewmodel)
+	end
+	params.FilterDescendantsInstances = ignore
+
+	local result = workspace:Raycast(origin, delta, params)
+	if not result then
+		return true
+	end
+	if targetCharacter and result.Instance:IsDescendantOf(targetCharacter) then
+		return true
+	end
+	return false
+end
+
 local function considerAimCandidate(closest, closestDistSq, worldPos, centerX, centerY, candidate)
 	local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
 	if not onScreen or screenPos.Z <= 0 then
@@ -1079,6 +1159,13 @@ local function considerAimCandidate(closest, closestDistSq, worldPos, centerX, c
 	local dy = screenPos.Y - centerY
 	local distSq = dx * dx + dy * dy
 	if distSq >= closestDistSq then
+		return closest, closestDistSq
+	end
+
+	local targetCharacter = candidate.character
+		or (candidate.player and candidate.player.Character)
+		or candidate.drone
+	if not hasLineOfSight(worldPos, targetCharacter) then
 		return closest, closestDistSq
 	end
 
@@ -1331,7 +1418,7 @@ local function getClosestTarget()
 		sharedState.killAllForcedTarget = nil
 	end
 
-	if not Config.SilentAim and not Config.BulletTP then
+	if not Config.SilentAim and not Config.BulletTP and not Config.TriggerBot then
 		return nil
 	end
 
@@ -1550,6 +1637,14 @@ RunService.RenderStepped:Connect(function(dt)
 		updateThermalHighlights()
 	end
 	updateHitMarkers()
+	extras.updateBulletTracerDrawings()
+	extras.updateGunChams(function()
+		return weaponStateRef or discoverWeaponState()
+	end)
+	extras.updateTriggerBot(getActiveAimTarget, tryAutoFireWeapon, function(targetPos, targetCharacter)
+		return hasLineOfSight(targetPos, targetCharacter)
+	end)
+	extras.updateSpinbot(dt)
 
 	local viewport = Camera.ViewportSize
 	local center = Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
@@ -2653,6 +2748,18 @@ local function installCombatHooks()
 
 	local ok, bridgeNet = pcall(require, Modules:WaitForChild("BridgeNet2"))
 	if ok and bridgeNet and bridgeNet.ReferenceBridge then
+		local fallBridge = bridgeNet.ReferenceBridge("FallDamage")
+		if fallBridge and typeof(fallBridge.Fire) == "function" and not fallBridge._microHubFallTap then
+			local oldFallFire = fallBridge.Fire
+			fallBridge._microHubFallTap = true
+			function fallBridge.Fire(self, payload, ...)
+				if Config.NoFallDamage then
+					return
+				end
+				return oldFallFire(self, payload, ...)
+			end
+		end
+
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
 		if confirmBridge and confirmBridge.Connect then
 			confirmBridge:Connect(function(payload)
@@ -2991,6 +3098,28 @@ local function getBulletTPProfile(state)
 	return BULLET_TP_SNAP_DIST, BULLET_TP_MIN_SPEED
 end
 
+local function applyWallbangPatch(bulletsBefore, target, muzzleCF)
+	if not target or not bulletRegistryRef then
+		return
+	end
+	local aimPart = target._shotAimPart or target.part
+	local targetPos = aimPart and aimPart.Position or target.position
+	if typeof(muzzleCF) ~= "CFrame" then
+		return
+	end
+	local walls = getWallPartsBetween(muzzleCF.Position, targetPos)
+	if #walls == 0 then
+		return
+	end
+	local expanded = expandWallPartsForPatch(walls)
+	for index = math.max(1, bulletsBefore + 1), #bulletRegistryRef do
+		local state = bulletRegistryRef[index]
+		if isBulletState(state) and not state.isCosmetic then
+			patchBulletFilters(state, expanded)
+		end
+	end
+end
+
 local function applyBulletTPToState(state, targetPos, targetRef, muzzlePos)
 	if state.isCosmetic then
 		return
@@ -3139,10 +3268,12 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 
 			local redirectAim = false
 			local useBulletTP = false
+			local useWallbang = false
 			if applyAim and not checkcaller() then
 				hitRate.recordHitRateShot()
 				redirectAim = hitRate.shouldRedirectAimShot()
 				useBulletTP = redirectAim and hitRate.shouldUseBulletTP()
+				useWallbang = redirectAim and not useBulletTP and hitRate.shouldUseWallbang()
 				local shotAimPart = nil
 				if redirectAim and (Config.BulletTP or Config.SilentAim or sharedState.killAllForcedTarget) then
 					shotTarget = getActiveAimTarget()
@@ -3154,21 +3285,30 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 				if redirectAim then
 					muzzleCF, initialSpeed = applySilentAim(muzzleCF, initialSpeed, shotAimPart, useBulletTP)
 				end
+				if redirectAim and Config.BulletTracers then
+					extras.spawnBulletTracer(muzzleCF.Position, muzzleCF.LookVector)
+				end
 				acDbg.onSimulateShot({
 					redirected = redirectAim,
 					bulletTp = useBulletTP,
+					wallbang = useWallbang,
 					hubAim = Config.SilentAim or Config.BulletTP or sharedState.killAllForcedTarget ~= nil,
 					aimPart = shotAimPart and shotAimPart.Name,
 					bulletType = bulletType,
 					muzzleCF = muzzleCF,
 				})
-				if useBulletTP then
+				if useBulletTP or useWallbang then
 					discoverBulletRegistry()
 					bulletsBefore = bulletRegistryRef and #bulletRegistryRef or 0
 				end
 			end
 
 			local results = { previousSimulate(self, muzzleCF, bullet, bulletPool, initialSpeed, bulletType, ...) }
+
+			if applyAim and useWallbang and not checkcaller() and shotTarget then
+				discoverBulletRegistry()
+				applyWallbangPatch(bulletsBefore, shotTarget, muzzleCF)
+			end
 
 			if applyAim and useBulletTP and not checkcaller() and shotTarget then
 				discoverBulletRegistry()
@@ -3189,7 +3329,10 @@ if Config.DebugAC then
 end
 
 local genv = if typeof(getgenv) == "function" then getgenv() else _G
-genv.__WarfareUnload = acDbg.unload
+genv.__WarfareUnload = function()
+	extras.unload()
+	acDbg.unload()
+end
 end)()
 end)()
 end
