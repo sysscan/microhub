@@ -23,9 +23,7 @@ function M.create(opts)
 	local function fire(path, ...)
 		local remote = get(path)
 		if remote and remote:IsA("RemoteEvent") then
-			pcall(function()
-				remote:FireServer(...)
-			end)
+			pcall(remote.FireServer, remote, ...)
 			return true
 		end
 		return false
