@@ -682,25 +682,46 @@ local function resolveGunController(): boolean
 		return false
 	end
 
-	for _, conn in getconnections(gui.InputBegan) do
-		if conn.Function then
-			gun.Shoot = debug.getupvalue(conn.Function, 2)
-			if gun.Shoot then
-				gun.Reload = debug.getupvalue(gun.Shoot, 2)
-				gun.Bullet = debug.getupvalue(gun.Shoot, 16)
+	pcall(function()
+		for _, conn in getconnections(gui.InputBegan) do
+			if conn.Function then
+				local ok1, shoot = pcall(debug.getupvalue, conn.Function, 2)
+				if ok1 and typeof(shoot) == "function" then
+					gun.Shoot = shoot
+					local ok2, reload = pcall(debug.getupvalue, shoot, 2)
+					if ok2 and typeof(reload) == "function" then
+						gun.Reload = reload
+					end
+					for i = 1, 20 do
+						local ok3, val = pcall(debug.getupvalue, shoot, i)
+						if not ok3 then break end
+						if typeof(val) == "function" and val ~= shoot and val ~= reload then
+							gun.Bullet = val
+							break
+						end
+					end
+				end
+				break
 			end
-			break
 		end
-	end
+	end)
 
-	for _, conn in getconnections(LocalPlayer.CharacterAdded) do
-		if conn.Function and debug.info(conn.Function, "s"):find("GunController", 1, true) then
-			gun.Equip = debug.getupvalue(conn.Function, 3)
-			break
+	pcall(function()
+		for _, conn in getconnections(LocalPlayer.CharacterAdded) do
+			if conn.Function then
+				local src = debug.info(conn.Function, "s")
+				if src and src:find("GunController", 1, true) then
+					local ok, equip = pcall(debug.getupvalue, conn.Function, 3)
+					if ok and typeof(equip) == "function" then
+						gun.Equip = equip
+					end
+					break
+				end
+			end
 		end
-	end
+	end)
 
-	return gun.Bullet ~= nil
+	return gun.Shoot ~= nil
 end
 
 local function getGunData()
@@ -710,7 +731,16 @@ local function getGunData()
 	if not gun.Shoot then
 		return nil
 	end
-	return debug.getupvalue(gun.Shoot, 10)
+	for i = 1, 20 do
+		local ok, val = pcall(debug.getupvalue, gun.Shoot, i)
+		if not ok then
+			break
+		end
+		if typeof(val) == "table" and val.Range and val.FireRate then
+			return val
+		end
+	end
+	return nil
 end
 
 local function modifyGunData()
