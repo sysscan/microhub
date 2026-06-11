@@ -15,6 +15,9 @@ local Camera = workspace.CurrentCamera
 
 local Config = {
 	SilentAim = true,
+	HitRateSafe = true,
+	SilentAimHitChance = 88,
+	SilentAimHeadshotChance = 60,
 	Teamcheck = true,
 	Tracer = true,
 	ESP = true,
@@ -26,6 +29,7 @@ local Config = {
 	StableAim = false,
 	BulletTP = false,
 	RapidFire = false,
+	RapidFireBoost = 88,
 	InfiniteAmmo = false,
 	NoJam = false,
 	NoOverheat = false,
@@ -56,10 +60,15 @@ local BOOST_SPRINT_SPEED = 36
 local FLIGHT_SPEED = 90
 local FLIGHT_BOOST_SPEED = 140
 local ZOOM_FOV = 12
--- One client interval for every gun; TryFireOnce enforces this via nextShotTime.
-local RAPID_FIRE_UNIFIED_INTERVAL = 0.09
+local HIT_RATE_WINDOW = 2.5
+local HIT_RATE_SAFE_MAX_RATIO = 0.72
+local HIT_RATE_BURST_MAX = 6
+local HIT_RATE_SAFE_MIN_SPREAD = 0.4
+local hitRateRecentHits = {}
+local hitRateRecentShots = {}
 
 local FOVSquared = Config.FOV * Config.FOV
+local killAllForcedTarget = nil
 
 local function getTeamColor(relation)
 	if relation == "Enemy" then
@@ -74,8 +83,78 @@ local function getAimPartName()
 	return Config.AimPart or "Head"
 end
 
+local function pruneHitRateWindow(list, now)
+	for index = #list, 1, -1 do
+		if now - list[index] > HIT_RATE_WINDOW then
+			table.remove(list, index)
+		end
+	end
+end
+
+local function recordHitRateHit()
+	local now = tick()
+	table.insert(hitRateRecentHits, now)
+	pruneHitRateWindow(hitRateRecentHits, now)
+end
+
+local function recordHitRateShot()
+	local now = tick()
+	table.insert(hitRateRecentShots, now)
+	pruneHitRateWindow(hitRateRecentShots, now)
+end
+
+local function getRecentHitRatio()
+	local now = tick()
+	pruneHitRateWindow(hitRateRecentHits, now)
+	pruneHitRateWindow(hitRateRecentShots, now)
+	return #hitRateRecentHits / math.max(#hitRateRecentShots, 1)
+end
+
+local function shouldRedirectAimShot()
+	if not Config.SilentAim and not Config.BulletTP and not killAllForcedTarget then
+		return false
+	end
+	if not Config.HitRateSafe then
+		return true
+	end
+
+	local now = tick()
+	pruneHitRateWindow(hitRateRecentHits, now)
+
+	if #hitRateRecentHits >= HIT_RATE_BURST_MAX and math.random(1, 100) > 25 then
+		return false
+	end
+
+	if getRecentHitRatio() > HIT_RATE_SAFE_MAX_RATIO and math.random(1, 100) > 35 then
+		return false
+	end
+
+	local chance = Config.SilentAimHitChance or 88
+	if Config.BulletTP then
+		chance = math.min(chance, 75)
+	end
+	if Config.NoRecoil then
+		chance -= 8
+	end
+
+	return math.random(1, 100) <= chance
+end
+
+local function getSilentAimPartName(character)
+	local base = getAimPartName()
+	if base ~= "Head" or not Config.HitRateSafe then
+		return base
+	end
+	if math.random(1, 100) <= (Config.SilentAimHeadshotChance or 60) then
+		return "Head"
+	end
+	if character:FindFirstChild("UpperTorso") then
+		return "UpperTorso"
+	end
+	return "HumanoidRootPart"
+end
+
 local currentTarget = nil
-local killAllForcedTarget = nil
 local killAllRunning = false
 local killAllNoclip = false
 local runKillAll
@@ -310,10 +389,14 @@ local HubUI = UILib.create({
 					title = "AIM",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
+						{ type = "toggle", key = "HitRateSafe", label = "Hit Rate Safe", hud = "Hit Safe" },
 						{ type = "toggle", key = "Teamcheck", label = "Team Check", hud = "Team Check" },
 						{ type = "toggle", key = "NoRecoil", label = "No Recoil", hud = "No Recoil" },
 						{ type = "toggle", key = "StableAim", label = "Stable Aim", hud = "Stable Aim" },
 						{ type = "toggle", key = "BulletTP", label = "Bullet TP", hud = "Bullet TP" },
+						{ type = "slider", key = "SilentAimHitChance", label = "Aim Hit %", min = 50, max = 100, step = 1 },
+						{ type = "slider", key = "SilentAimHeadshotChance", label = "Headshot %", min = 0, max = 100, step = 1 },
+						{ type = "hint", text = "Hit Rate Safe avoids invalid hit rate kicks. Lower Aim Hit % if you still get kicked." },
 						{
 							type = "select",
 							key = "AimPart",
@@ -327,6 +410,7 @@ local HubUI = UILib.create({
 					title = "WEAPON",
 					items = {
 						{ type = "toggle", key = "RapidFire", label = "Rapid Fire", hud = "Rapid Fire" },
+						{ type = "slider", key = "RapidFireBoost", label = "Fire Boost %", min = 75, max = 100, step = 1 },
 						{ type = "toggle", key = "InfiniteAmmo", label = "Inf Ammo", hud = "Inf Ammo" },
 						{ type = "toggle", key = "NoJam", label = "No Jam", hud = "No Jam" },
 						{ type = "toggle", key = "NoOverheat", label = "No Heat", hud = "No Heat" },
@@ -1229,6 +1313,7 @@ local function orbitAndKillPlayer(player)
 	local spinSpeed = 11
 	local startTime = tick()
 	local lastShot = 0
+	local fireInterval = 0.12
 
 	while tick() - startTime < spinDuration do
 		if not player.Parent or not isPlayerInCombat(player) then
@@ -1264,7 +1349,15 @@ local function orbitAndKillPlayer(player)
 
 		Camera.CFrame = CFrame.new(Camera.CFrame.Position, killAllForcedTarget.position)
 
-		if tick() - lastShot > 0.1 then
+		local t2 = weaponStateRef or discoverWeaponState()
+		if t2 then
+			fireInterval = getWeaponFireInterval(t2)
+			if Config.RapidFire then
+				fireInterval *= math.clamp((Config.RapidFireBoost or 88) / 100, 0.75, 1)
+			end
+		end
+
+		if tick() - lastShot >= fireInterval then
 			tryAutoFireWeapon()
 			lastShot = tick()
 		end
@@ -1348,7 +1441,7 @@ local function getClosestTarget()
 			continue
 		end
 
-		local candidate = { player = player, drone = nil }
+		local candidate = { player = player, drone = nil, character = character }
 		closest, closestDistSq = considerAimCandidate(
 			closest,
 			closestDistSq,
@@ -1829,10 +1922,14 @@ local function installNoRecoilHooks()
 		end)
 
 		hookModuleMethod(recoilModule, "GetSpreadDegrees", function(old, self, ...)
+			local spread = old(self, ...)
 			if Config.NoRecoil then
-				return 0
+				spread = 0
 			end
-			return old(self, ...)
+			if Config.HitRateSafe then
+				spread = math.max(spread, HIT_RATE_SAFE_MIN_SPREAD)
+			end
+			return spread
 		end)
 
 		hookModuleMethod(recoilModule, "GetAccumulatedPitch", function(old, self, ...)
@@ -2205,7 +2302,8 @@ local function applyRapidFire(t2)
 		rapidFireBaseInterval = getWeaponFireInterval(t2)
 	end
 
-	t2.FireRate = RAPID_FIRE_UNIFIED_INTERVAL
+	local boost = math.clamp((Config.RapidFireBoost or 88) / 100, 0.75, 1)
+	t2.FireRate = rapidFireBaseInterval * boost
 	clearWeaponFireBlockers(t2)
 end
 
@@ -2570,7 +2668,11 @@ local function installCombatHooks()
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
 		if confirmBridge and confirmBridge.Connect then
 			confirmBridge:Connect(function(payload)
-				if typeof(payload) ~= "table" or not Config.HitMarkers then
+				if typeof(payload) ~= "table" then
+					return
+				end
+				recordHitRateHit()
+				if not Config.HitMarkers then
 					return
 				end
 				local hitPosition = payload.hitPosition
@@ -2929,7 +3031,8 @@ local function pinBulletByRef(bulletPart, target, muzzleCF)
 		return false
 	end
 
-	local targetPos = target.part and target.part.Position or target.position
+	local aimPart = target._shotAimPart or target.part
+	local targetPos = aimPart and aimPart.Position or target.position
 	local muzzlePos = muzzleCF.Position
 	for _, state in ipairs(bulletRegistryRef) do
 		if state.bullet == bulletPart and isBulletState(state) and not state.isCosmetic then
@@ -2950,7 +3053,8 @@ local function pinBulletsAfterShot(bulletsBefore, target, muzzleCF, bulletPart)
 	end
 
 	local muzzlePos = muzzleCF.Position
-	local targetPos = target.part and target.part.Position or target.position
+	local aimPart = target._shotAimPart or target.part
+	local targetPos = aimPart and aimPart.Position or target.position
 	for index = math.max(1, bulletsBefore + 1), #bulletRegistryRef do
 		local state = bulletRegistryRef[index]
 		if isBulletState(state) and not state.isCosmetic then
@@ -2984,16 +3088,31 @@ applyBulletTP = function()
 	end
 end
 
-local function applySilentAim(muzzleCF, initialSpeed)
+local function getShotAimPart(target)
+	if not target then
+		return nil
+	end
+	if target.player then
+		local character = target.character or target.player.Character
+		if character then
+			local partName = getSilentAimPartName(character)
+			local part = character:FindFirstChild(partName) or character:FindFirstChild("HumanoidRootPart")
+			if part then
+				return part
+			end
+		end
+	end
+	return target.part
+end
+
+local function applySilentAim(muzzleCF, initialSpeed, aimPartOverride)
 	local target = getActiveAimTarget()
 	if not target or (not Config.SilentAim and not Config.BulletTP and not killAllForcedTarget) then
 		return muzzleCF, initialSpeed
 	end
 
-	local targetPos = target.position
-	if target.part then
-		targetPos = target.part.Position
-	end
+	local aimPart = aimPartOverride or getShotAimPart(target)
+	local targetPos = aimPart and aimPart.Position or target.position
 
 	local direction = (targetPos - muzzleCF.Position).Unit
 	if direction.Magnitude < 0.01 then
@@ -3029,12 +3148,22 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 			local shotTarget = nil
 			local bulletsBefore = 0
 
+			local redirectAim = false
 			if applyAim and not checkcaller() then
-				if Config.BulletTP or Config.SilentAim or killAllForcedTarget then
+				recordHitRateShot()
+				redirectAim = shouldRedirectAimShot()
+				local shotAimPart = nil
+				if redirectAim and (Config.BulletTP or Config.SilentAim or killAllForcedTarget) then
 					shotTarget = getActiveAimTarget()
+					if shotTarget then
+						shotAimPart = getShotAimPart(shotTarget)
+						shotTarget._shotAimPart = shotAimPart
+					end
 				end
-				muzzleCF, initialSpeed = applySilentAim(muzzleCF, initialSpeed)
-				if Config.BulletTP then
+				if redirectAim then
+					muzzleCF, initialSpeed = applySilentAim(muzzleCF, initialSpeed, shotAimPart)
+				end
+				if redirectAim and Config.BulletTP then
 					discoverBulletRegistry()
 					bulletsBefore = bulletRegistryRef and #bulletRegistryRef or 0
 				end
@@ -3042,7 +3171,7 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 
 			local results = { previousSimulate(self, muzzleCF, bullet, bulletPool, initialSpeed, bulletType, ...) }
 
-			if applyAim and Config.BulletTP and not checkcaller() and shotTarget then
+			if applyAim and Config.BulletTP and not checkcaller() and shotTarget and redirectAim then
 				discoverBulletRegistry()
 				pinBulletsAfterShot(bulletsBefore, shotTarget, muzzleCF, bullet)
 				applyBulletTP()
