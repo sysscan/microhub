@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "63-sa-final"
+local GAME_BUILD = "64-sa-reliable"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -288,6 +288,43 @@ local function screenDistSq(worldPos: Vector3, origin: Vector2): number?
 	return dx * dx + dy * dy
 end
 
+local SA_HIT_PARTS = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso" }
+
+local function closestPartToCameraRay(char: Model): BasePart?
+	local camPos = Camera.CFrame.Position
+	local camDir = Camera.CFrame.LookVector
+	local bestPart: BasePart? = nil
+	local bestAngle = math.huge
+	for _, name in SA_HIT_PARTS do
+		local part = char:FindFirstChild(name)
+		if not part or not part:IsA("BasePart") then continue end
+		local toTarget = (part.Position - camPos).Unit
+		local angle = math.acos(math.clamp(camDir:Dot(toTarget), -1, 1))
+		if angle < bestAngle then
+			bestPart, bestAngle = part, angle
+		end
+	end
+	return bestPart
+end
+
+local saLastPositions: { [Model]: Vector3 } = {}
+local saLastTimes: { [Model]: number } = {}
+
+local function predictPosition(char: Model, part: BasePart): Vector3
+	local pos = part.Position
+	local now = os.clock()
+	local lastPos = saLastPositions[char]
+	local lastTime = saLastTimes[char]
+	saLastPositions[char] = pos
+	saLastTimes[char] = now
+	if not lastPos or not lastTime then return pos end
+	local dt = now - lastTime
+	if dt <= 0 or dt > 0.5 then return pos end
+	local velocity = (pos - lastPos) / dt
+	local bulletTravelTime = 0.03
+	return pos + velocity * bulletTravelTime
+end
+
 local function isAimEligible(char: Model, name: string): boolean
 	if not isCombatModel(char) or isAllySpawnShielded(name) then
 		return false
@@ -410,7 +447,10 @@ local function updateCombatAim(dt: number)
 		local bestDist = aimFovSq
 		for char, name in collectTargets() do
 			if not isAimEligible(char, name) then continue end
-			local part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
+			local part = closestPartToCameraRay(char)
+			if not part then
+				part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
+			end
 			if not part then continue end
 			local distSq = screenDistSq(part.Position, origin)
 			if distSq and distSq < bestDist then
@@ -425,7 +465,15 @@ local function updateCombatAim(dt: number)
 	end
 
 	if Config.SilentAim and not Config.Aimbot and combatTargetPart then
-		setMouseHit(combatTargetPart.Position)
+		local isFiring = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+		if isFiring then
+			local char = combatTargetPart.Parent
+			local pos = combatTargetPart.Position
+			if char and char:IsA("Model") then
+				pos = predictPosition(char, combatTargetPart)
+			end
+			setMouseHit(pos)
+		end
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
@@ -460,46 +508,6 @@ local netInstalling = false
 local vortexSyncRef: BindableEvent? = nil
 local syncDbgConn: RBXScriptConnection? = nil
 local dbgCounts = { fire = 0, hit = 0, vsync = 0 }
-local saStickyPart: BasePart? = nil
-local saStickyUntil = 0
-local SA_STICKY_SEC = 0.2
-
-local function saScanTarget(): BasePart?
-	local origin = aimOrigin()
-	local bestPart: BasePart? = nil
-	local bestDist = math.huge
-	for char, name in collectTargets() do
-		if not isAimEligible(char, name) then continue end
-		local part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
-		if not part then continue end
-		local distSq = screenDistSq(part.Position, origin)
-		if distSq and distSq < bestDist then
-			bestPart, bestDist = part, distSq
-		end
-	end
-	return bestPart
-end
-
-local function saLockTarget(part: BasePart?)
-	if not part or not part.Parent then return nil end
-	saStickyPart, saStickyUntil = part, os.clock() + SA_STICKY_SEC
-	return part
-end
-
-local function saFireTarget(): BasePart?
-	local now = os.clock()
-	if saStickyPart and saStickyPart.Parent and now < saStickyUntil then
-		local model = saStickyPart.Parent
-		if model and model:IsA("Model") and isAimEligible(model, targetName(model)) then
-			saStickyUntil = now + SA_STICKY_SEC
-			return saStickyPart
-		end
-	end
-	local p = combatTargetPart
-	if p and p.Parent then return saLockTarget(p) end
-	return saLockTarget(saScanTarget())
-end
-
 local function dbgDecode(v: any): any
 	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
 	local mod = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
@@ -909,7 +917,7 @@ UILib.create({
 					title = "Silent Aim",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "hint", text = "Redirects aim via MouseHitSpot. Use 3rd person for best results. Uses FOV + team check." },
+						{ type = "hint", text = "Redirects aim via MouseHitSpot while firing. Targets closest body part with prediction. 3rd person. FOV + team check." },
 						{ type = "toggle", key = "AimDebugger", label = "Network Debugger", hud = "Net Debug" },
 						{ type = "hint", text = "Logs Fire / Hitcheck / SA-Fire. Rejoin after toggling hooks." },
 					},
