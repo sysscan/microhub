@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "52-sa-sync"
+local GAME_BUILD = "53-sa-befire"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -457,13 +457,51 @@ end
 local filtergc = voltApi("filtergc")
 local hookfn = voltApi("hookfunction")
 local newcc = voltApi("newcclosure")
+local chkcaller = voltApi("checkcaller")
 local netHooked = false
 local netInstalling = false
 local vortexHooked = false
-local dbgCounts = { fire = 0, hit = 0 }
+local vortexHookMode = ""
+local vortexSyncRef: BindableEvent? = nil
+local syncDbgConn: RBXScriptConnection? = nil
+local dbgCounts = { fire = 0, hit = 0, vsync = 0 }
 local saStickyPart: BasePart? = nil
 local saStickyUntil = 0
 local SA_STICKY_SEC = 0.2
+local cachedFlame: BasePart? = nil
+local nextFlame = 0
+
+local function fromGame(): boolean
+	return typeof(chkcaller) ~= "function" or not chkcaller()
+end
+
+local function viewFlame(): BasePart?
+	if cachedFlame and cachedFlame.Parent then
+		return cachedFlame
+	end
+	local now = os.clock()
+	if now < nextFlame then
+		return cachedFlame
+	end
+	nextFlame = now + 0.5
+	cachedFlame = nil
+	local vm = workspace:FindFirstChild("ViewModel")
+	if not vm or not vm:IsA("Model") then
+		return nil
+	end
+	for _, d in vm:GetDescendants() do
+		if d.Name == "Flame" and d:IsA("BasePart") then
+			cachedFlame = d
+			return d
+		end
+	end
+	return nil
+end
+
+local function saShotOrigin(fallback: Vector3): Vector3
+	local flame = viewFlame()
+	return if flame then flame.Position else fallback
+end
 
 local function saScanTarget(): BasePart?
 	local origin = aimOrigin()
@@ -502,7 +540,7 @@ local function saFireTarget(): BasePart?
 end
 
 local function saAimCf(cf: CFrame, part: BasePart): CFrame
-	return CFrame.new(cf.Position, part.Position)
+	return CFrame.new(saShotOrigin(cf.Position), part.Position)
 end
 
 local function saInjectHitables(hitables: any, part: BasePart): any
@@ -513,37 +551,93 @@ local function saInjectHitables(hitables: any, part: BasePart): any
 	return hitables
 end
 
+local function isVortexSync(self: any): boolean
+	if vortexSyncRef and self == vortexSyncRef then
+		return true
+	end
+	if typeof(self) ~= "Instance" or not self:IsA("BindableEvent") or self.Name ~= "Sync" then
+		return false
+	end
+	local vortex = self.Parent
+	return vortex and vortex.Name == "Vortex" and vortex:IsDescendantOf(LocalPlayer)
+end
+
+local function saRewriteSync(a4: CFrame, a7: any, part: BasePart): (CFrame, any)
+	if isThirdPerson() then
+		setMouseHit(part.Position)
+	end
+	return saAimCf(a4, part), saInjectHitables(a7, part)
+end
+
+local function vortexSyncHandler(orig: (...any) -> ...any)
+	local wrap = if typeof(newcc) == "function" then newcc else function(f) return f end
+	return wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+		if not Config.SilentAim or not isVortexSync(self) then
+			return orig(self, a1, a2, a3, a4, a5, a6, a7, a8)
+		end
+		if fromGame() and a1 == LocalPlayer and typeof(a4) == "CFrame" then
+			local part = saFireTarget()
+			if part then
+				a4, a7 = saRewriteSync(a4, a7, part)
+				if Config.AimDebugger then
+					local tgt = if part.Parent then part.Parent.Name else "?"
+					print("[GFA-DBG] SA-Sync ->", tgt, dbgShortCf(a4))
+				end
+			end
+		end
+		return orig(self, a1, a2, a3, a4, a5, a6, a7, a8)
+	end)
+end
+
+local function bindSyncDbg()
+	if not Config.AimDebugger or syncDbgConn then
+		return
+	end
+	local sync = vortexSyncRef
+	if not sync then
+		return
+	end
+	syncDbgConn = sync.Event:Connect(function(...)
+		local args = { ... }
+		if args[1] ~= LocalPlayer or typeof(args[4]) ~= "CFrame" then
+			return
+		end
+		dbgCounts.vsync += 1
+		print(
+			"[GFA-DBG] VSync",
+			string.format("#%d %s %s", dbgCounts.vsync, dbgShort(args[6] or args[3]), dbgShortCf(args[4]))
+		)
+	end)
+end
+
 local function tryHookVortexSync()
-	if vortexHooked or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
+	if vortexHooked or not Config.SilentAim or typeof(hookfn) ~= "function" then
+		return
+	end
 	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
 	local vortex = ps and ps:FindFirstChild("Vortex")
 	local sync = vortex and vortex:FindFirstChild("Sync")
-	if not sync or not sync:IsA("BindableEvent") then return end
-	local syncFire = sync.Fire
-	if typeof(syncFire) ~= "function" then return end
-	local wrap = if typeof(newcc) == "function" then newcc else function(f) return f end
+	if not sync or not sync:IsA("BindableEvent") then
+		return
+	end
+	vortexSyncRef = sync
+
+	local probe = Instance.new("BindableEvent")
+	local beFire = probe.Fire
+	probe:Destroy()
+	if typeof(beFire) ~= "function" then
+		return
+	end
+
 	local vortexOrig: ((...any) -> ...any)?
 	local ok = pcall(function()
-		vortexOrig = hookfn(syncFire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
-			if Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
-				local part = saFireTarget()
-				if part then
-					setMouseHit(part.Position)
-					a4 = saAimCf(a4, part)
-					a7 = saInjectHitables(a7, part)
-					if Config.AimDebugger then
-						local tgt = if part.Parent then part.Parent.Name else "?"
-						print("[GFA-DBG] SA-Sync ->", tgt, dbgShortCf(a4))
-					end
-				end
-			end
-			local o = vortexOrig
-			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
-		end))
+		vortexOrig = hookfn(beFire, vortexSyncHandler(beFire))
 	end)
 	if ok and typeof(vortexOrig) == "function" then
 		vortexHooked = true
-		print("[GFA] Vortex.Sync hooked")
+		vortexHookMode = "BindableEvent.Fire"
+		print("[GFA] Vortex.Sync hooked via", vortexHookMode)
+		bindSyncDbg()
 	end
 end
 
@@ -636,7 +730,7 @@ local function installNetworkHook(): boolean
 	print(
 		"[GFA] network hooked via filtergc",
 		if Config.SilentAim then "| silent aim" else "",
-		if vortexHooked then "| Vortex.Sync" else "",
+		if vortexHooked then "| " .. vortexHookMode else "",
 		if Config.AimDebugger then "| debugger" else ""
 	)
 	return true
@@ -658,7 +752,12 @@ end
 local function updateCombatNetwork()
 	if Config.SilentAim or Config.AimDebugger then
 		ensureNetworkHook()
-		if netHooked then tryHookVortexSync() end
+		if netHooked then
+			tryHookVortexSync()
+			if Config.AimDebugger then
+				bindSyncDbg()
+			end
+		end
 	end
 end
 
