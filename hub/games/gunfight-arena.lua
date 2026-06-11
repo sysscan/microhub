@@ -253,10 +253,29 @@ local function aimOrigin(): Vector2
 	return Camera.ViewportSize * 0.5
 end
 
+local function getVortexModifiers(): Folder?
+	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+	local vortex = ps and ps:FindFirstChild("Vortex")
+	return vortex and vortex:FindFirstChild("Modifiers")
+end
+
+local function patchVortexSpread()
+	local mods = getVortexModifiers()
+	if not mods then return end
+	pcall(function()
+		local steadiness = mods:FindFirstChild("Steadiness")
+		if steadiness and steadiness:IsA("NumberValue") then
+			steadiness.Value = 1
+		end
+		local impulse = mods:FindFirstChild("Impulse")
+		if impulse and impulse:IsA("CFrameValue") then
+			impulse.Value = CFrame.identity
+		end
+	end)
+end
+
 local function isThirdPerson(): boolean
-	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
-	local vortex = playerScripts and playerScripts:FindFirstChild("Vortex")
-	local modifiers = vortex and vortex:FindFirstChild("Modifiers")
+	local modifiers = getVortexModifiers()
 	local flag = modifiers and modifiers:FindFirstChild("IsThirdPerson")
 	if flag and flag:IsA("BoolValue") then
 		return flag.Value
@@ -426,6 +445,7 @@ local function updateCombatAim(dt: number)
 
 	if Config.SilentAim and not Config.Aimbot and combatTargetPart then
 		setMouseHit(combatTargetPart.Position)
+		patchVortexSpread()
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
