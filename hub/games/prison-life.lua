@@ -16,7 +16,7 @@ local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "4-guns-noclip"
+local GAME_BUILD = "5-hookfix"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local TeamGuards = Teams:FindFirstChild("Guards")
@@ -731,8 +731,9 @@ local function getGunData()
 	if not gun.Shoot then
 		return nil
 	end
+	local fn = oldShootFn or gun.Shoot
 	for i = 1, 20 do
-		local ok, val = pcall(debug.getupvalue, gun.Shoot, i)
+		local ok, val = pcall(debug.getupvalue, fn, i)
 		if not ok then
 			break
 		end
@@ -873,14 +874,16 @@ local function installGunHooks()
 	if Config.AutoReload and gun.Shoot and not hookedShoot then
 		oldShootFn = hookfunction(gun.Shoot, function(...)
 			local res = table.pack(oldShootFn(...))
-			local tool = debug.getupvalue(oldShootFn, 1)
-			if tool and tool:GetAttribute("Local_CurrentAmmo") and tool:GetAttribute("Local_CurrentAmmo") <= 0 then
-				task.spawn(gun.Reload)
-				if Config.AutoReloadSwap then
-					local swap = getBestBackupGun()
-					if swap then
-						tool.Parent = LocalPlayer.Backpack
-						swap.Parent = LocalPlayer.Character
+			local ok, tool = pcall(debug.getupvalue, oldShootFn, 1)
+			if ok and typeof(tool) == "Instance" and tool:IsA("Tool") then
+				if (tool:GetAttribute("Local_CurrentAmmo") or 0) <= 0 then
+					task.spawn(gun.Reload)
+					if Config.AutoReloadSwap then
+						local swap = getBestBackupGun()
+						if swap then
+							tool.Parent = LocalPlayer.Backpack
+							swap.Parent = LocalPlayer.Character
+						end
 					end
 				end
 			end
@@ -1919,8 +1922,9 @@ table.insert(
 	RunService.RenderStepped:Connect(function()
 		applyMovement()
 		applyNoclip()
-		modifyGunData()
-		patchAllGunTools()
+		if Config.GunMods then
+			modifyGunData()
+		end
 		applyInfiniteAmmo()
 		runVehicleSpeed()
 		runVehicleWallbang()
@@ -1933,7 +1937,14 @@ table.insert(
 )
 
 task.defer(function()
-	resolveGunController()
+	if not resolveGunController() then
+		for _ = 1, 100 do
+			task.wait(0.1)
+			if resolveGunController() then
+				break
+			end
+		end
+	end
 	refreshGunFeatures()
 	setDisabler(Config.Disabler)
 	setAntiTaze(Config.AntiTaze)
