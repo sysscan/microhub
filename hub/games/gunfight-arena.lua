@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "59-sa-prewire"
+local GAME_BUILD = "60-sa-silent"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -279,18 +279,6 @@ local function setMouseHit(position: Vector3)
 	end
 end
 
-local function saFiring(): boolean
-	return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-end
-
--- Aim must be set before Vortex Fire() reads camera / MouseHitSpot (Sync:Fire runs before INVK).
-local function saPrepareAim(part: BasePart)
-	setMouseHit(part.Position)
-	if not isThirdPerson() and saFiring() then
-		Camera.CFrame = CFrame.new(Camera.CFrame.Position, part.Position)
-	end
-end
-
 local function screenDistSq(worldPos: Vector3, origin: Vector2): number?
 	local screen, onScreen = Camera:WorldToViewportPoint(worldPos)
 	if not onScreen or screen.Z <= 0 then
@@ -437,9 +425,7 @@ local function updateCombatAim(dt: number)
 	end
 
 	if Config.SilentAim and not Config.Aimbot and combatTargetPart then
-		if isThirdPerson() or saFiring() then
-			saPrepareAim(combatTargetPart)
-		end
+		setMouseHit(combatTargetPart.Position)
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
@@ -583,14 +569,6 @@ local function netEncode(net: any, sample: any, value: any): any
 	return if ok then out else value
 end
 
-local function saHitcheckEligible(payload: { any }): boolean
-	local hitModel = dbgDecode(payload[2])
-	if typeof(hitModel) ~= "Instance" or not hitModel:IsA("Model") then
-		return false
-	end
-	return isAimEligible(hitModel, targetName(hitModel))
-end
-
 local function saRewriteHitcheck(net: any, payload: { any }, part: BasePart): { any }
 	local model = part.Parent
 	if not model or not model:IsA("Model") then
@@ -677,14 +655,12 @@ local function installNetworkHook(): boolean
 						print("[GFA-DBG] SA-Fire ->", tgt, dbgShortCf(dbgDecode(payload[3])))
 					end
 				end
-			elseif eventName == "Hitcheck" and part and saHitcheckEligible(payload) then
+			elseif eventName == "Hitcheck" and part then
 				payload = saRewriteHitcheck(net, payload, part)
 				if Config.AimDebugger then
 					local tgt = if part.Parent then part.Parent.Name else "?"
 					print("[GFA-DBG] SA-Hitcheck ->", tgt)
 				end
-			elseif eventName == "Hitcheck" and part and Config.AimDebugger then
-				print("[GFA-DBG] SA-Hitcheck-skip non-player hit")
 			elseif eventName == "Fire" and Config.AimDebugger then
 				print("[GFA-DBG] SA-skip no target")
 			end
@@ -735,19 +711,6 @@ local function updateCombatNetwork()
 		if netHooked then
 			ensureSyncDbg()
 		end
-	end
-end
-
-local function updateSaPrewire()
-	if not Config.SilentAim or Config.Aimbot then
-		return
-	end
-	local part = saFireTarget()
-	if not part then
-		return
-	end
-	if isThirdPerson() or saFiring() then
-		saPrepareAim(part)
 	end
 end
 
@@ -1033,7 +996,7 @@ UILib.create({
 					title = "Silent Aim",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "hint", text = "Redirects Fire + Hitcheck. Pre-aims MouseHitSpot / camera while firing (1st person). Uses FOV + team check." },
+						{ type = "hint", text = "Redirects Fire + Hitcheck to closest enemy. No camera move. Uses FOV + team check." },
 						{ type = "toggle", key = "AimDebugger", label = "Network Debugger", hud = "Net Debug" },
 						{ type = "hint", text = "Logs Fire / Hitcheck / SA-Fire. Rejoin after toggling hooks." },
 					},
@@ -1066,20 +1029,6 @@ RunService.RenderStepped:Connect(function()
 	updateESP()
 	updateCombatNetwork()
 end)
-RunService:BindToRenderStep("MicroHubGFA_SAPrewire", Enum.RenderPriority.First.Value, updateSaPrewire)
 RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateCombatAim)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or not Config.SilentAim or Config.Aimbot then
-		return
-	end
-	if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
-		return
-	end
-	local part = saFireTarget()
-	if part then
-		saPrepareAim(part)
-	end
-end)
 
 print("[MicroHub] Gunfight Arena", GAME_BUILD, "— Drawing:", canDraw)
