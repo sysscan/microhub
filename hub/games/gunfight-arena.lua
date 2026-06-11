@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "43-dlogfix"
+local GAME_BUILD = "44-dlogfix2"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -449,8 +449,13 @@ local filtergc = voltApi("filtergc")
 local getgc = voltApi("getgc")
 local chkcaller = voltApi("checkcaller")
 
-local function wrap(fn) return if typeof(newcc) == "function" then newcc(fn) else fn end
-local function fromGame() return typeof(chkcaller) ~= "function" or not chkcaller() end
+local function wrap(fn)
+	return if typeof(newcc) == "function" then newcc(fn) else fn
+end
+
+local function fromGame()
+	return typeof(chkcaller) ~= "function" or not chkcaller()
+end
 
 local function tget(t: any, k: string): any
 	if typeof(t) ~= "table" then return nil end
@@ -630,12 +635,12 @@ end
 
 local dbg = {
 	fire = 0, hit = 0, sync = 0, syncBound = 0,
-	lastFire = nil :: any, lastHit = nil :: any,
-	lastSyncCf = nil :: CFrame?, lastSyncWep = "",
-	logCd = {} :: { [string]: number },
+	lastFire = nil, lastHit = nil,
+	lastSyncCf = nil, lastSyncWep = "",
+	logCd = {},
 }
 
-local function dlog(key: string, msg: string, cd: number?)
+local function dlog(key, msg, cd)
 	if not Config.AimDebugger then return end
 	cd = cd or 4
 	local now = os.clock()
@@ -651,22 +656,22 @@ local sa = {
 	status = "idle", remote = "",
 	fireAt = 0, volley = 0, volleyAt = 0,
 }
-local vortexSyncRef: BindableEvent? = nil
-local vSyncConn: RBXScriptConnection? = nil
+local vortexSyncRef = nil
+local vSyncConn = nil
 
-local function saTarget(): (BasePart?, string)
+local function saTarget()
 	local p = saShotTarget
 	if p and p.Parent then return p, "cache" end
 	p = closestAimPart(aimOrigin())
 	return if p then p else nil, if p then "fov" else "none"
 end
 
-local function saOrigin(fallback: Vector3): Vector3
+local function saOrigin(fallback)
 	local f = viewFlame()
 	return if f then f.Position else fallback
 end
 
-local function saRewriteFire(payload: { any }): { any }
+local function saRewriteFire(payload)
 	if not Config.SilentAim then return payload end
 	local part = saTarget()
 	if not part then
