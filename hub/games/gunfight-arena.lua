@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "56-esp-boxfix"
+local GAME_BUILD = "57-sa-ncfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -656,15 +656,16 @@ local function tryHookSyncNamecall()
 	end
 	local wrap = if typeof(newcc) == "function" then newcc else function(f) return f end
 	local ok = pcall(function()
-		namecallOrig = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+		namecallOrig = hookmetamethod(game, "__namecall", wrap(function(...)
 			local method = getnamecallmethod()
-			if method == "Fire" and isVortexSync(self) then
-				local args = saApplySyncArgs({ ... })
-				local o = namecallOrig
-				return if typeof(o) == "function" then o(self, table.unpack(args)) else nil
+			if method == "Fire" and Config.SilentAim then
+				local args = { ... }
+				if args[1] == LocalPlayer and typeof(args[4]) == "CFrame" then
+					args = saApplySyncArgs(args)
+					return namecallOrig(table.unpack(args))
+				end
 			end
-			local o = namecallOrig
-			return if typeof(o) == "function" then o(self, ...) else nil
+			return namecallOrig(...)
 		end))
 	end)
 	if ok and typeof(namecallOrig) == "function" then
