@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "44-dlogfix2"
+local GAME_BUILD = "45-nofovlimit"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -19,7 +19,7 @@ local Config = {
 	AimTeamCheck = true,
 	AimHold = true,
 	AimSticky = false,
-	AimFOV = 120,
+	AimFOV = 400,
 	AimSmooth = 35,
 	AimPart = "Head",
 	AimFOVCircle = false,
@@ -408,7 +408,15 @@ local function updateCombatAim(dt: number)
 	if Config.Aimbot and combatHoldActive() then
 		combatTargetPart = resolveAimTarget(origin)
 	elseif Config.SilentAim then
-		combatTargetPart = closestAimPart(origin)
+		local bestPart, bestDist = nil, math.huge
+		for char, name in collectTargets() do
+			if not isAimEligible(char, name) then continue end
+			local part = aimPart(char)
+			if not part then continue end
+			local distSq = screenDistSq(part.Position, origin)
+			if distSq and distSq < bestDist then bestPart, bestDist = part, distSq end
+		end
+		combatTargetPart = bestPart
 	end
 	saShotTarget = if Config.SilentAim and combatTargetPart and combatTargetPart.Parent then combatTargetPart else nil
 	if not combatAimWanted() then
@@ -659,11 +667,26 @@ local sa = {
 local vortexSyncRef = nil
 local vSyncConn = nil
 
+local function closestEnemyPart()
+	local origin = aimOrigin()
+	local bestPart, bestDist = nil, math.huge
+	for char, name in collectTargets() do
+		if not isAimEligible(char, name) then continue end
+		local part = aimPart(char)
+		if not part then continue end
+		local distSq = screenDistSq(part.Position, origin)
+		if distSq and distSq < bestDist then
+			bestPart, bestDist = part, distSq
+		end
+	end
+	return bestPart
+end
+
 local function saTarget()
 	local p = saShotTarget
 	if p and p.Parent then return p, "cache" end
-	p = closestAimPart(aimOrigin())
-	return if p then p else nil, if p then "fov" else "none"
+	p = closestEnemyPart()
+	return if p then p else nil, if p then "screen" else "none"
 end
 
 local function saOrigin(fallback)
