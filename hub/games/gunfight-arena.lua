@@ -460,93 +460,93 @@ local netHooked = false
 local netInstalling = false
 local weaponScanDone = false
 
-local SPREAD_KEYS = {
-	"Spread", "SpreadX", "SpreadY", "MinSpread", "MaxSpread",
-	"HipSpread", "AimSpread", "BaseSpread", "MovingSpread",
-	"Inaccuracy", "Accuracy", "Recoil", "RecoilX", "RecoilY",
-	"CameraRecoilX", "CameraRecoilY", "Kick", "KickX", "KickY",
-}
-local WEAPON_HINT_KEYS = {
-	"Damage", "FireRate", "Range", "MagSize", "ReloadTime", "BulletSpeed",
-	"HeadshotMultiplier", "Auto", "RPM", "Firerate",
-}
+local function looksLikeWeaponTable(tbl: any): boolean
+	local numCount = 0
+	local n = 0
+	for k, v in pairs(tbl) do
+		n += 1
+		if n > 50 then break end
+		if typeof(k) == "string" and typeof(v) == "number" then
+			numCount += 1
+		end
+	end
+	return numCount >= 3 and n >= 4 and n <= 50
+end
+
+local function dumpAllKeys(tbl: any): string
+	local parts = {}
+	local n = 0
+	for k, v in pairs(tbl) do
+		n += 1
+		if n > 30 then table.insert(parts, "...+" .. (n - 30)) break end
+		local vs = tostring(v)
+		if #vs > 25 then vs = string.sub(vs, 1, 22) .. "..." end
+		table.insert(parts, tostring(k) .. "=" .. vs)
+	end
+	return table.concat(parts, " | ")
+end
 
 local function scanWeaponTables()
-	if weaponScanDone or typeof(getgc) ~= "function" then return end
+	if weaponScanDone then return end
 	weaponScanDone = true
 
-	local ok, gcList = pcall(getgc, true)
-	if not ok or typeof(gcList) ~= "table" then
-		print("[HR-SCAN] getgc failed")
-		return
-	end
+	print("[HR-SCAN] starting broad weapon table scan...")
 
-	local found = 0
-	for _, obj in gcList do
-		if typeof(obj) ~= "table" then continue end
-		local hasHint = false
-		local hasSpread = false
-		for _, k in WEAPON_HINT_KEYS do
-			if rawget(obj, k) ~= nil then hasHint = true break end
-		end
-		if not hasHint then continue end
-		for _, k in SPREAD_KEYS do
-			if rawget(obj, k) ~= nil then hasSpread = true break end
-		end
-		if not hasSpread then continue end
-
-		found += 1
-		local parts = {}
-		for _, k in SPREAD_KEYS do
-			local v = rawget(obj, k)
-			if v ~= nil then
-				table.insert(parts, k .. "=" .. tostring(v))
-			end
-		end
-		for _, k in WEAPON_HINT_KEYS do
-			local v = rawget(obj, k)
-			if v ~= nil then
-				table.insert(parts, k .. "=" .. tostring(v))
-			end
-		end
-		pcall(function()
-			print("[HR-SCAN] weapon #" .. found .. ": " .. table.concat(parts, " | "))
-		end)
-		if found >= 10 then break end
-	end
-
-	if found == 0 then
-		print("[HR-SCAN] no weapon tables found via getgc. Trying ReplicatedStorage modules...")
-		pcall(function()
-			local rs = game:GetService("ReplicatedStorage")
-			for _, child in rs:GetDescendants() do
-				if not child:IsA("ModuleScript") then continue end
-				local ok2, mod = pcall(require, child)
-				if not ok2 or typeof(mod) ~= "table" then continue end
-				for _, k in SPREAD_KEYS do
-					if rawget(mod, k) ~= nil then
-						found += 1
-						local parts2 = { "module=" .. child:GetFullName() }
-						for _, k2 in SPREAD_KEYS do
-							local v = rawget(mod, k2)
-							if v ~= nil then table.insert(parts2, k2 .. "=" .. tostring(v)) end
-						end
-						pcall(function()
-							print("[HR-SCAN] RS #" .. found .. ": " .. table.concat(parts2, " | "))
-						end)
-						break
-					end
+	-- Phase 1: scan equipped tool for ValueObjects
+	pcall(function()
+		local char = LocalPlayer.Character
+		if not char then return end
+		for _, tool in char:GetChildren() do
+			if not tool:IsA("Tool") then continue end
+			print("[HR-SCAN] tool: " .. tool.Name)
+			for _, desc in tool:GetDescendants() do
+				if desc:IsA("NumberValue") or desc:IsA("IntValue") or desc:IsA("BoolValue") or desc:IsA("StringValue") then
+					pcall(function()
+						print("[HR-SCAN]   " .. desc:GetFullName() .. " = " .. tostring(desc.Value))
+					end)
 				end
-				if found >= 5 then break end
 			end
-		end)
+		end
+	end)
+
+	-- Phase 2: scan getgc for tables with 3+ numeric string keys (weapon-config shaped)
+	if typeof(getgc) == "function" then
+		local ok, gcList = pcall(getgc, true)
+		if ok and typeof(gcList) == "table" then
+			local found = 0
+			for _, obj in gcList do
+				if typeof(obj) ~= "table" then continue end
+				local ok2, isWeapon = pcall(looksLikeWeaponTable, obj)
+				if not ok2 or not isWeapon then continue end
+				found += 1
+				pcall(function()
+					print("[HR-SCAN] gc #" .. found .. ": " .. dumpAllKeys(obj))
+				end)
+				if found >= 15 then break end
+			end
+			print("[HR-SCAN] getgc found " .. found .. " candidate table(s)")
+		else
+			print("[HR-SCAN] getgc failed")
+		end
 	end
 
-	if found == 0 then
-		print("[HR-SCAN] no spread keys found anywhere")
-	else
-		print("[HR-SCAN] done, found " .. found .. " weapon table(s)")
-	end
+	-- Phase 3: scan Vortex PlayerScripts for ModuleScripts
+	pcall(function()
+		local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+		local vortex = ps and ps:FindFirstChild("Vortex")
+		if not vortex then
+			print("[HR-SCAN] no Vortex folder in PlayerScripts")
+			return
+		end
+		print("[HR-SCAN] Vortex children:")
+		for _, child in vortex:GetDescendants() do
+			pcall(function()
+				print("[HR-SCAN]   " .. child.ClassName .. " " .. child:GetFullName())
+			end)
+		end
+	end)
+
+	print("[HR-SCAN] done")
 end
 
 local hrFires = 0
