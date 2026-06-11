@@ -657,7 +657,8 @@ local cameraPosCache = Vector3.zero
 local jamGuardConn = nil
 local jamGuardTarget = nil
 local rapidFireTool = nil
-local rapidFireBaseInterval = nil
+local rapidFireOriginalValue = nil
+local rapidFireUsesRpm = false
 
 local ESP_DIM = Color3.fromRGB(148, 156, 168)
 
@@ -2209,29 +2210,78 @@ local function clearWeaponFireBlockers(t2)
 	end
 end
 
+local function restoreRapidFire(t2)
+	if not t2 or rapidFireOriginalValue == nil then
+		return
+	end
+	local settings = t2.Assets and t2.Assets.SettingsGun
+	if rapidFireUsesRpm and settings then
+		pcall(function()
+			settings.FireRate = rapidFireOriginalValue
+		end)
+	elseif not rapidFireUsesRpm then
+		pcall(function()
+			t2.FireRate = rapidFireOriginalValue
+		end)
+	end
+end
+
 local function applyRapidFire(t2)
 	if not t2 then
 		return
 	end
 
 	if not Config.RapidFire then
-		if rapidFireBaseInterval and t2.currentTool == rapidFireTool then
-			t2.FireRate = rapidFireBaseInterval
+		if rapidFireTool and t2.currentTool == rapidFireTool then
+			restoreRapidFire(t2)
 		end
 		rapidFireTool = nil
-		rapidFireBaseInterval = nil
+		rapidFireOriginalValue = nil
+		rapidFireUsesRpm = false
 		return
 	end
 
 	local tool = t2.currentTool
 	if tool ~= rapidFireTool then
+		if rapidFireTool and weaponStateRef then
+			restoreRapidFire(weaponStateRef)
+		end
 		rapidFireTool = tool
-		rapidFireBaseInterval = getWeaponFireInterval(t2)
+		rapidFireOriginalValue = nil
+		rapidFireUsesRpm = false
 	end
 
-	local boost = math.clamp((Config.RapidFireBoost or 88) / 100, 0.75, 1)
-	t2.FireRate = rapidFireBaseInterval * boost
 	clearWeaponFireBlockers(t2)
+
+	local boost = math.clamp((Config.RapidFireBoost or 88) / 100, 0.75, 1)
+	local settings = t2.Assets and t2.Assets.SettingsGun
+
+	-- SettingsGun.FireRate is RPM — never write interval seconds into it.
+	if settings and tonumber(settings.FireRate) and settings.FireRate > 0 then
+		if rapidFireOriginalValue == nil then
+			rapidFireOriginalValue = settings.FireRate
+			rapidFireUsesRpm = true
+		end
+		local boostedRpm = math.clamp(
+			rapidFireOriginalValue / boost,
+			rapidFireOriginalValue,
+			math.max(rapidFireOriginalValue * 1.5, 900)
+		)
+		pcall(function()
+			settings.FireRate = boostedRpm
+		end)
+		return
+	end
+
+	if typeof(t2.FireRate) == "number" and t2.FireRate > 0 then
+		if rapidFireOriginalValue == nil then
+			rapidFireOriginalValue = t2.FireRate
+			rapidFireUsesRpm = false
+		end
+		pcall(function()
+			t2.FireRate = rapidFireOriginalValue * boost
+		end)
+	end
 end
 
 local function forceRocketReady(tool)

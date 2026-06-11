@@ -39,6 +39,11 @@ function M.create(opts)
 	local IGNORE_REMOTE_NAMES = {
 		PingCheck = true,
 		dataRemoteEvent = true,
+		GetSecureSettings = true,
+	}
+
+	local IGNORE_REMOTE_PREFIXES = {
+		"ReplicatedStorage.Framework.Remotes.Get",
 	}
 
 	local log = {}
@@ -54,6 +59,8 @@ function M.create(opts)
 	local overlayDirty = false
 	local lastOverlayAt = 0
 	local lastLogPruneAt = 0
+	local lastLogDedupe = {}
+	local LOG_DEDUPE_COOLDOWN = 3
 
 	local function kindOf(value)
 		return if typeof then typeof(value) else type(value)
@@ -85,6 +92,13 @@ function M.create(opts)
 		end
 		if not Config.DebugVerbose and fullName:find("ReplicatedStorage.Game.", 1, true) then
 			return false
+		end
+		if not Config.DebugVerbose then
+			for _, prefix in IGNORE_REMOTE_PREFIXES do
+				if fullName:find(prefix, 1, true) == 1 then
+					return false
+				end
+			end
 		end
 		if Config.DebugFilterOnly then
 			return matchesKeywords(fullName .. " " .. remote.Name)
@@ -339,9 +353,22 @@ function M.create(opts)
 			if not Config.DebugAC then
 				return
 			end
-			if messageType == Enum.MessageType.MessageError or matchesKeywords(message) then
-				push("LOG", tostring(messageType) .. " | " .. message)
+			local text = tostring(message)
+			local isError = messageType == Enum.MessageType.MessageError
+			local isKeyword = matchesKeywords(text)
+			if not isError and not isKeyword then
+				return
 			end
+			if not Config.DebugVerbose then
+				local dedupeKey = tostring(messageType) .. "|" .. text
+				local now = tick()
+				local last = lastLogDedupe[dedupeKey]
+				if last and now - last < LOG_DEDUPE_COOLDOWN then
+					return
+				end
+				lastLogDedupe[dedupeKey] = now
+			end
+			push("LOG", tostring(messageType) .. " | " .. text)
 		end)
 		table.insert(conns, logConn)
 	end
@@ -539,6 +566,7 @@ function M.create(opts)
 			overlayLabel = nil
 		end
 		table.clear(remoteLastLog)
+		table.clear(lastLogDedupe)
 		table.clear(knownBridges)
 		bridgeNetRef = nil
 	end
