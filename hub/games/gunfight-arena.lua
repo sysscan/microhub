@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "25-sa-forward-fix"
+local GAME_BUILD = "26-sa-stable"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -474,6 +474,7 @@ end
 local DBG_CONSOLE_INTERVAL = 4
 local DBG_LINE_COUNT = 14
 local DBG_HOOK_RETRY = 3
+local DBG_HOOK_MAX_ATTEMPTS = 12
 local DBG_GC_SCAN_INTERVAL = 6
 local DBG_OVERLAY_INTERVAL = 0.12
 local DBG_SYNC_SCAN_INTERVAL = 1
@@ -517,11 +518,14 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "25-sa-forward-fix"
+local DBG_HOOK_BUILD = "26-sa-stable"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
 local dbgHookWorkerActive = false
+local combatHookGiveUp = false
+local combatHookInstallStarted = false
+local combatNetworkFireOriginal: ((...any) -> ...any)? = nil
 
 local function dbgVolt(name: string): any
 	if typeof(getgenv) == "function" then
@@ -1036,18 +1040,45 @@ local function dbgViewModelFlame(): BasePart?
 	return nil
 end
 
+local function saMaybeEncode(sample: any, value: any): any
+	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then
+		return value
+	end
+	local api = dbgGcCachedApi
+	if typeof(api) ~= "table" then
+		return value
+	end
+	local encode = dbgTblGet(api, "EncodeData")
+	if typeof(encode) ~= "function" then
+		return value
+	end
+	local ok, encoded = pcall(function()
+		return encode(api, value)
+	end)
+	if not ok then
+		ok, encoded = pcall(encode, value)
+	end
+	return if ok then encoded else value
+end
+
 local function saRewriteFirePayload(payload: { any }): { any }
-	local part = combatTargetPart
-	if not part or not Config.SilentAim or not combatHoldActive() then
+	if not Config.SilentAim or not combatHoldActive() then
 		return payload
 	end
-	local flame = dbgViewModelFlame()
-	local serverCf = dbgMaybeDecode(payload[3])
+	local part = resolveAimTarget(aimOrigin())
+	if not part then
+		return payload
+	end
+	setMouseHit(part.Position)
+	local rawCf = payload[3]
+	local serverCf = dbgMaybeDecode(rawCf)
 	if typeof(serverCf) ~= "CFrame" then
 		return payload
 	end
+	local flame = dbgViewModelFlame()
 	local origin = if flame then flame.Position else serverCf.Position
-	payload[3] = CFrame.new(origin, part.Position)
+	local newCf = CFrame.new(origin, part.Position)
+	payload[3] = saMaybeEncode(rawCf, newCf)
 	return payload
 end
 
@@ -1075,40 +1106,37 @@ local function dbgHookNetworkApi()
 	elseif dbg.remotePath == "" then
 		dbg.remotePath = "Network.FireServer (gc fn)"
 	end
-	local session = dbgSession()
-	if session and session.networkFireFn == target then
-		dbgNetworkHooked = true
-		dbg.networkHooked = true
-		dbg.hooksReady = true
-		dbg.status = "Network.FireServer hooked"
-		dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
-		return
-	end
 	if typeof(voltHookfunction) ~= "function" then
 		return
 	end
 
-	local original: (...any) -> ...any
 	local ok = pcall(function()
-		original = voltHookfunction(target, dbgWrapHook(function(self, eventName, ...)
-			local payload = { ... }
+		combatNetworkFireOriginal = voltHookfunction(target, dbgWrapHook(function(self, eventName, ...)
+			local args = { ... }
 			if dbgFromGame() then
 				if Config.SilentAim and eventName == "Fire" then
-					payload = saRewriteFirePayload(payload)
+					args = saRewriteFirePayload(args)
 				end
 				if Config.AimDebugger then
 					dbgMaybeBindRemote(self)
-					dbgRecordNetworkEvent(eventName, payload)
+					dbgRecordNetworkEvent(eventName, args)
 				end
 			end
-			return original(self, eventName, table.unpack(payload))
+			local fire = combatNetworkFireOriginal
+			if typeof(fire) ~= "function" then
+				return
+			end
+			return fire(self, eventName, table.unpack(args))
 		end))
 	end)
-	if not ok or typeof(original) ~= "function" then
+	if not ok or typeof(combatNetworkFireOriginal) ~= "function" then
+		combatNetworkFireOriginal = nil
 		return
 	end
+	local session = dbgSession()
 	if session then
 		session.networkFireFn = target
+		session.hookReady = true
 	end
 
 	dbgNetworkHooked = true
@@ -1120,17 +1148,18 @@ local function dbgHookNetworkApi()
 	end
 end
 
-local function dbgStartHookWorker()
-	if dbgHookWorkerActive or dbgHooksActive() or not combatHooksWanted() then
+local function combatEnsureHooks()
+	if not combatHooksWanted() or dbgHooksActive() or combatHookGiveUp or combatHookInstallStarted then
 		return
 	end
+	combatHookInstallStarted = true
 	if Config.AimDebugger then
 		dbgPrintCaps()
 	end
 	dbgHookWorkerActive = true
 	task.spawn(function()
 		local attempts = 0
-		while combatHooksWanted() and not dbgHooksActive() do
+		while combatHooksWanted() and not dbgHooksActive() and attempts < DBG_HOOK_MAX_ATTEMPTS do
 			attempts += 1
 			dbgHookNetworkApi()
 			if dbgHooksActive() then
@@ -1148,7 +1177,15 @@ local function dbgStartHookWorker()
 			end
 			task.wait(DBG_HOOK_RETRY)
 		end
+		if not dbgHooksActive() then
+			combatHookGiveUp = true
+			dbg.status = "hook install failed (rejoin)"
+			if Config.SilentAim or Config.AimDebugger then
+				warn("[GFA] combat hook failed after", attempts, "tries:", dbg.status)
+			end
+		end
 		dbgHookWorkerActive = false
+		combatHookInstallStarted = false
 	end)
 end
 
@@ -1238,7 +1275,7 @@ end
 
 local function dbgUpdate()
 	if combatHooksWanted() then
-		dbgStartHookWorker()
+		combatEnsureHooks()
 	end
 
 	if not Config.AimDebugger then
