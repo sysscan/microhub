@@ -550,29 +550,10 @@ local function installNetworkHook(): boolean
 				end
 
 				local thirdP = isThirdPerson()
-				local losTxt = "-"
-				pcall(function()
-					if saTgt and saTgt.Parent and hrLastFireCf then
-						local origin = hrLastFireCf.Position
-						local dir = (saTgt.Position - origin)
-						local params = RaycastParams.new()
-						params.FilterType = Enum.RaycastFilterType.Exclude
-						local char = LocalPlayer.Character
-						local filterList = { char }
-						if saTgt.Parent then table.insert(filterList, saTgt.Parent) end
-						params.FilterDescendantsInstances = filterList
-						local result = workspace:Raycast(origin, dir, params)
-						if result then
-							losTxt = "BLOCKED:" .. result.Instance.Name
-						else
-							losTxt = "CLEAR"
-						end
-					end
-				end)
 				pcall(function()
 					print(string.format(
-						"[HR] Fire #%d | tgt=%s | cam→tgt=%s | cam→mhs=%s | dist=%s | 3p=%s | los=%s",
-						hrFires, tgtName, angleTxt, mhsAngleTxt, distTxt, tostring(thirdP), losTxt
+						"[HR] Fire #%d | tgt=%s | cam→tgt=%s | cam→mhs=%s | dist=%s | 3p=%s",
+						hrFires, tgtName, angleTxt, mhsAngleTxt, distTxt, tostring(thirdP)
 					))
 				end)
 
