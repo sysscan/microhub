@@ -709,44 +709,58 @@ local function resolveGunController(): boolean
 
 	pcall(function()
 		for _, conn in getconnections(gui.InputBegan) do
-			if conn.Function then
-				local ok1, shoot = pcall(debug.getupvalue, conn.Function, 2)
-				if ok1 and typeof(shoot) == "function" then
-					gun.Shoot = shoot
-					local ok2, reload = pcall(debug.getupvalue, shoot, 2)
-					if ok2 and typeof(reload) == "function" then
-						gun.Reload = reload
-					end
-					for i = 1, 20 do
-						local ok3, val = pcall(debug.getupvalue, shoot, i)
-						if not ok3 then break end
-						if typeof(val) == "function" and val ~= shoot and val ~= reload then
-							gun.Bullet = val
-							break
-						end
+			if not conn.Function then
+				continue
+			end
+			local ok1, shoot = pcall(debug.getupvalue, conn.Function, 2)
+			if not ok1 or typeof(shoot) ~= "function" then
+				continue
+			end
+			gun.Shoot = shoot
+
+			local ok2, reload = pcall(debug.getupvalue, shoot, 2)
+			if ok2 and typeof(reload) == "function" then
+				gun.Reload = reload
+			end
+
+			local ok3, bullet = pcall(debug.getupvalue, shoot, 16)
+			if ok3 and typeof(bullet) == "function" then
+				gun.Bullet = bullet
+			end
+
+			if not gun.Bullet then
+				for i = 3, 25 do
+					local okN, val = pcall(debug.getupvalue, shoot, i)
+					if not okN then break end
+					if typeof(val) == "function" and val ~= shoot and val ~= gun.Reload then
+						gun.Bullet = val
+						break
 					end
 				end
-				break
 			end
+
+			break
 		end
 	end)
 
 	pcall(function()
 		for _, conn in getconnections(LocalPlayer.CharacterAdded) do
-			if conn.Function then
-				local src = debug.info(conn.Function, "s")
-				if src and src:find("GunController", 1, true) then
-					local ok, equip = pcall(debug.getupvalue, conn.Function, 3)
-					if ok and typeof(equip) == "function" then
-						gun.Equip = equip
-					end
-					break
-				end
+			if not conn.Function then
+				continue
 			end
+			local src = debug.info(conn.Function, "s")
+			if not src or not src:find("GunController", 1, true) then
+				continue
+			end
+			local ok, equip = pcall(debug.getupvalue, conn.Function, 3)
+			if ok and typeof(equip) == "function" then
+				gun.Equip = equip
+			end
+			break
 		end
 	end)
 
-	return gun.Shoot ~= nil
+	return gun.Bullet ~= nil
 end
 
 local function getGunData()
@@ -757,12 +771,17 @@ local function getGunData()
 		return nil
 	end
 	local fn = oldShootFn or gun.Shoot
-	for i = 1, 20 do
+	local ok10, val10 = pcall(debug.getupvalue, fn, 10)
+	if ok10 and typeof(val10) == "table" then
+		return val10
+	end
+	for i = 1, 25 do
+		if i == 10 then continue end
 		local ok, val = pcall(debug.getupvalue, fn, i)
 		if not ok then
 			break
 		end
-		if typeof(val) == "table" and val.Range and val.FireRate then
+		if typeof(val) == "table" and (val.Range or val.FireRate or val.SpreadRadius or val.AutoFire ~= nil) then
 			return val
 		end
 	end
@@ -883,7 +902,8 @@ local function installGunHooks()
 	if not canHook then
 		return
 	end
-	if not resolveGunController() then
+	resolveGunController()
+	if not gun.Shoot and not gun.Equip and not gun.Bullet then
 		return
 	end
 
@@ -1980,6 +2000,7 @@ task.defer(function()
 			end
 		end
 	end
+	warn("[PrisonLife] Gun resolved — Shoot:", gun.Shoot ~= nil, "Bullet:", gun.Bullet ~= nil, "Equip:", gun.Equip ~= nil, "Reload:", gun.Reload ~= nil)
 	refreshGunFeatures()
 	setDisabler(Config.Disabler)
 	setAntiTaze(Config.AntiTaze)
