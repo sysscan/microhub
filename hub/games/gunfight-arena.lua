@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "40-apifallback"
+local GAME_BUILD = "41-nocrash"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -557,20 +557,6 @@ local function findCombatRemote(): RemoteEvent?
 	return nil
 end
 
-local function findApiByRemote(re: RemoteEvent): any
-	if typeof(getgc) ~= "function" then return nil end
-	local ok, objs = pcall(getgc, true)
-	if not ok or typeof(objs) ~= "table" then return nil end
-	for _, obj in objs do
-		if typeof(obj) ~= "table" then continue end
-		if tget(obj, "RE") ~= re then continue end
-		if typeof(tget(obj, "FireServer")) ~= "function" then continue end
-		if typeof(tget(obj, "EncodeData")) ~= "function" then continue end
-		return obj
-	end
-	return nil
-end
-
 local function findNetworkApi(): (any, RemoteEvent?)
 	if hasFullApi() and (netRemote == nil or netRemote.Parent) then return netApi, netRemote end
 	if LocalPlayer:GetAttribute("ClockOffset") ~= nil and not sawClock then sawClock = true; nextGcScan = 0 end
@@ -605,15 +591,7 @@ local function findNetworkApi(): (any, RemoteEvent?)
 	end
 
 	local re = findCombatRemote()
-	if re then
-		netRemote = re
-		local apiByRe = findApiByRemote(re)
-		if apiByRe then
-			netApi = apiByRe
-			findFireFn()
-			return apiByRe, re
-		end
-	end
+	if re then netRemote = re end
 
 	local fn = findFireFn()
 	if fn then
@@ -799,9 +777,10 @@ local function hookVortexSync()
 	if ok and typeof(vortexOrig) == "function" then sa.vortex = true end
 end
 
-local function installNetworkHook()
+local function installNetworkHook(allowGcFallback: boolean?)
 	if sa.hooked or LocalPlayer:GetAttribute("ClockOffset") == nil then return end
 	local api, remote = findNetworkApi()
+	if Config.SilentAim and not hasFullApi() and not allowGcFallback then return end
 	local target = api and tget(api, "FireServer")
 	if not target or typeof(hookfn) ~= "function" then return end
 	if remote then sa.remote = remote:GetFullName()
@@ -840,7 +819,7 @@ local function ensureHooks()
 	task.spawn(function()
 		local n = 0
 		while (Config.SilentAim or Config.AimDebugger) and not sa.hooked and n < 12 do
-			n += 1; installNetworkHook()
+			n += 1; installNetworkHook(n >= 3)
 			if not sa.hooked then
 				sa.status = if typeof(hookfn) ~= "function" then "no hookfunction"
 					elseif LocalPlayer:GetAttribute("ClockOffset") == nil then "waiting ClockOffset"
