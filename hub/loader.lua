@@ -11,6 +11,7 @@ local GAMES = {
 	{ name = "Warfare", path = "games/warfare.lua", placeIds = { 83902709332473 } },
 	{ name = "Gunfight Arena", path = "games/gunfight-arena.lua", placeIds = { 15514727567, 14518422161 } },
 	{ name = "Prison Life", path = "games/prison-life.lua", placeIds = { 155615604, 4669040 } },
+	{ name = "Stud Incremental", path = "games/stud-incremental.lua", placeIds = { 127675063398240 } },
 }
 
 local resolvedSha = nil
@@ -259,9 +260,13 @@ local function unloadOld()
 	if typeof(genv.__WarfareUnload) == "function" then
 		pcall(genv.__WarfareUnload)
 	end
+	if typeof(genv.__StudIncrementalUnload) == "function" then
+		pcall(genv.__StudIncrementalUnload)
+	end
 	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
 	genv.__WarfareUnload = nil
+	genv.__StudIncrementalUnload = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
 			genv.Library:Exit()
