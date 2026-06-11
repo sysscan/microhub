@@ -1,7 +1,7 @@
 --[[
 	Prison Life — placeIds 155615604, 4669040
 	https://www.roblox.com/games/155615604/Prison-Life
-	Reference: VapeV4 games/155615604.lua
+	Reference: VapeV4 games/155615604.lua + Decompiled/Prison Life
 ]]
 
 local Players = game:GetService("Players")
@@ -10,11 +10,13 @@ local RunService = game:GetService("RunService")
 local Teams = game:GetService("Teams")
 local CollectionService = game:GetService("CollectionService")
 local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "2-vape-ref"
+local GAME_BUILD = "3-decompiled"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local TeamGuards = Teams:FindFirstChild("Guards")
@@ -23,6 +25,7 @@ local TeamCriminals = Teams:FindFirstChild("Criminals")
 local TeamNeutral = Teams:FindFirstChild("Neutral")
 
 local HEAL_ITEMS = { Breakfast = true, Lunch = true, Dinner = true }
+local GUN_PRIORITY = { M4A1 = 1, ["AK-47"] = 1, MP5 = 1, FAL = 1, ["Remington 870"] = 2, M9 = 3, Revolver = 4 }
 
 local TEAM_COLOR = {
 	Inmate = "Bright orange",
@@ -52,11 +55,26 @@ local Config = {
 	SilentAimHead = true,
 	SilentAimTeamCheck = true,
 	AutoReload = false,
+	AutoReloadSwap = false,
+	AutoFire = false,
+	AutoFireRate = 60,
+	InfiniteAmmo = false,
+	AntiTaze = false,
+	AutoDetonate = false,
+	AutoDetonateSafe = true,
+	AutoArmor = false,
 	AutoHeal = false,
 	AutoPickup = false,
 	AntiRiotShield = false,
+	AntiKillPlane = false,
 	VehicleSpeed = false,
 	VehicleSpeedValue = 140,
+	VehicleWallbang = false,
+	AlwaysSprint = false,
+	SprintSpeed = 24,
+	Disabler = false,
+	FullBright = false,
+	KillNotify = false,
 	C4ESP = true,
 	ESP = true,
 	ESPAllies = true,
@@ -95,6 +113,15 @@ local connections: { RBXScriptConnection } = {}
 local loops: { thread } = {}
 local arrestCooldown = 0
 local jumpConn: RBXScriptConnection? = nil
+local localC4: Instance? = nil
+local armorPickups: { Instance } = {}
+local vehicleQueryBackup: { [BasePart]: boolean } = {}
+local killPlaneParts: { BasePart } = {}
+local killPlaneFolder: Folder? = nil
+local headCollideConn: RBXScriptConnection? = nil
+local oldTazeFn: any = nil
+local tazeRemoteConn: any = nil
+local lightingBackup: { [string]: any }? = nil
 
 local gun = {
 	Shoot = nil,
@@ -136,7 +163,7 @@ local function getMeleeRemote()
 	return ReplicatedStorage:FindFirstChild("meleeEvent")
 end
 
-local function switchTeam(colorName: string)
+local function switchTeamLegacy(colorName: string)
 	local remote = workspace:FindFirstChild("Remote")
 	if not remote then
 		return
@@ -152,6 +179,29 @@ local function switchTeam(colorName: string)
 		pcall(function()
 			loadchar:InvokeServer(LocalPlayer.Name)
 		end)
+	end
+end
+
+local function requestTeamChange(teamName: string)
+	local team = Teams:FindFirstChild(teamName)
+	if not team then
+		return
+	end
+	local remotes = getRemotes()
+	local req = remotes and remotes:FindFirstChild("RequestTeamChange")
+	if req then
+		pcall(function()
+			req:InvokeServer(team, 1)
+		end)
+		return
+	end
+	local legacyColor = TEAM_COLOR[teamName] or TEAM_COLOR[teamName:gsub("s$", "")]
+	if teamName == "Guards" then
+		switchTeamLegacy(TEAM_COLOR.Guard)
+	elseif teamName == "Inmates" then
+		switchTeamLegacy(TEAM_COLOR.Inmate)
+	elseif teamName == "Neutral" then
+		switchTeamLegacy(TEAM_COLOR.Neutral)
 	end
 end
 
@@ -304,6 +354,12 @@ local function giveGiverWeapon(weaponName: string)
 	end
 end
 
+local function isSprinting(): boolean
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+		or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+		or UserInputService:IsKeyDown(Enum.KeyCode.ButtonL3)
+end
+
 local function applyMovement()
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -313,9 +369,184 @@ local function applyMovement()
 	if Config.SpeedBoost then
 		hum.WalkSpeed = Config.WalkSpeed
 		hum.JumpPower = Config.JumpPower
+	elseif Config.AlwaysSprint and isSprinting() then
+		hum.WalkSpeed = Config.SprintSpeed
+		hum.JumpPower = 50
 	else
 		hum.WalkSpeed = 16
 		hum.JumpPower = 50
+	end
+end
+
+local function applyInfiniteAmmo()
+	if not Config.InfiniteAmmo then
+		return
+	end
+	local function patchTool(tool: Instance)
+		if not tool:IsA("Tool") or not tool:GetAttribute("FireRate") then
+			return
+		end
+		local maxAmmo = tool:GetAttribute("MaxAmmo") or 30
+		tool:SetAttribute("Local_CurrentAmmo", maxAmmo)
+		if tool:GetAttribute("StoredAmmo") ~= nil then
+			tool:SetAttribute("StoredAmmo", maxAmmo * 10)
+		end
+	end
+	local char = LocalPlayer.Character
+	if char then
+		for _, child in char:GetChildren() do
+			patchTool(child)
+		end
+	end
+	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+	if backpack then
+		for _, child in backpack:GetChildren() do
+			patchTool(child)
+		end
+	end
+end
+
+local function applyFullBright()
+	if Config.FullBright then
+		if not lightingBackup then
+			lightingBackup = {
+				Brightness = Lighting.Brightness,
+				ClockTime = Lighting.ClockTime,
+				FogEnd = Lighting.FogEnd,
+				GlobalShadows = Lighting.GlobalShadows,
+				OutdoorAmbient = Lighting.OutdoorAmbient,
+			}
+		end
+		Lighting.Brightness = 2
+		Lighting.ClockTime = 14
+		Lighting.FogEnd = 100000
+		Lighting.GlobalShadows = false
+		Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+	elseif lightingBackup then
+		for key, value in lightingBackup do
+			Lighting[key] = value
+		end
+		lightingBackup = nil
+	end
+end
+
+local function syncKillPlane()
+	if Config.AntiKillPlane then
+		if not killPlaneFolder then
+			killPlaneFolder = Instance.new("Folder")
+			killPlaneFolder.Name = "MicroHubPL_KillPlane"
+			killPlaneFolder.Parent = workspace
+			for x = -2048, 2048, 2048 do
+				for z = -2048, 2048, 2048 do
+					local part = Instance.new("Part")
+					part.CanQuery = false
+					part.CanCollide = true
+					part.Anchored = true
+					part.Transparency = 1
+					part.Size = Vector3.new(2048, 10, 2048)
+					part.Position = Vector3.new(x, 170, z)
+					part.Parent = killPlaneFolder
+					table.insert(killPlaneParts, part)
+				end
+			end
+		end
+	elseif killPlaneFolder then
+		killPlaneFolder:Destroy()
+		killPlaneFolder = nil
+		table.clear(killPlaneParts)
+	end
+end
+
+local function setDisabler(enabled: boolean)
+	if not canHook then
+		return
+	end
+	local head = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+	if not head then
+		return
+	end
+	if enabled then
+		local conn = getconnections(head:GetPropertyChangedSignal("CanCollide"))[1]
+		if conn then
+			conn:Disable()
+			headCollideConn = conn
+		end
+	elseif headCollideConn then
+		headCollideConn:Enable()
+		headCollideConn = nil
+	end
+end
+
+local function setAntiTaze(enabled: boolean)
+	if not canHook then
+		return
+	end
+	local gunRemotes = ReplicatedStorage:FindFirstChild("GunRemotes")
+	local playerTased = gunRemotes and gunRemotes:FindFirstChild("PlayerTased")
+	if not playerTased then
+		return
+	end
+	if enabled and not oldTazeFn then
+		tazeRemoteConn = getconnections(playerTased.OnClientEvent)[1]
+		if tazeRemoteConn and tazeRemoteConn.Function then
+			oldTazeFn = tazeRemoteConn.Function
+			hookfunction(oldTazeFn, function()
+				local char = LocalPlayer.Character
+				LocalPlayer:SetAttribute("BackpackEnabled", false)
+				if char then
+					local hum = char:FindFirstChildOfClass("Humanoid")
+					if hum then
+						hum:UnequipTools()
+					end
+				end
+				task.wait(3.5)
+				if LocalPlayer.Character == char then
+					LocalPlayer:SetAttribute("BackpackEnabled", true)
+				end
+			end)
+		end
+	elseif not enabled and oldTazeFn and tazeRemoteConn and tazeRemoteConn.Function then
+		if typeof(restorefunction) == "function" then
+			restorefunction(tazeRemoteConn.Function)
+		else
+			hookfunction(tazeRemoteConn.Function, oldTazeFn)
+		end
+		oldTazeFn = nil
+		tazeRemoteConn = nil
+	end
+end
+
+local function getBestBackupGun(): Tool?
+	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+	if not backpack then
+		return nil
+	end
+	local items: { Tool } = {}
+	for _, child in backpack:GetChildren() do
+		if child:IsA("Tool") and child:GetAttribute("FireRate") and child.Name ~= "Taser" and child.Name ~= "M700" then
+			if (child:GetAttribute("Local_ReloadSession") or 0) <= 0 then
+				table.insert(items, child)
+			end
+		end
+	end
+	table.sort(items, function(a, b)
+		return (GUN_PRIORITY[a.Name] or 100) < (GUN_PRIORITY[b.Name] or 100)
+	end)
+	return items[1]
+end
+
+local function notifyKillfeed(killer: string, victim: string)
+	if not Config.KillNotify then
+		return
+	end
+	if victim == LocalPlayer.Name and killer ~= LocalPlayer.Name then
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {
+				Title = "Killed",
+				Text = killer .. " killed you",
+				Duration = 5,
+			})
+		end)
 	end
 end
 
@@ -475,6 +706,13 @@ local function installGunHooks()
 			local tool = debug.getupvalue(oldShootFn, 1)
 			if tool and tool:GetAttribute("Local_CurrentAmmo") and tool:GetAttribute("Local_CurrentAmmo") <= 0 then
 				task.spawn(gun.Reload)
+				if Config.AutoReloadSwap then
+					local swap = getBestBackupGun()
+					if swap then
+						tool.Parent = LocalPlayer.Backpack
+						swap.Parent = LocalPlayer.Character
+					end
+				end
 			end
 			return table.unpack(res, 1, res.n)
 		end)
@@ -522,6 +760,46 @@ local function removeGunHooks()
 	end
 	restoreGunData()
 end
+
+local function tryAutoFire()
+	if not Config.AutoFire or not gun.Shoot then
+		return
+	end
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then
+		return
+	end
+	local tool = char:FindFirstChildWhichIsA("Tool")
+	if not tool or (tool:GetAttribute("Local_CurrentAmmo") or 0) <= 0 then
+		return
+	end
+	if tool:GetAttribute("Local_IsShooting") then
+		return
+	end
+	local data = getGunData()
+	if data and data.Behavior == "Taser" then
+		return
+	end
+	local head = char:FindFirstChild("Head")
+	local origin = if head and head:IsA("BasePart") then head.Position else char:GetPivot().Position
+	local target = getSilentTarget(origin, Config.SilentAimFOV)
+	if not target then
+		return
+	end
+	if data and data.Behavior == "Taser" and target.Parent:GetAttribute("Tased") then
+		return
+	end
+	local input = {
+		UserInputState = Enum.UserInputState.Begin,
+		UserInputType = Enum.UserInputType.MouseButton1,
+		Position = Vector3.zero,
+	}
+	task.spawn(gun.Shoot, input)
+	input.UserInputState = Enum.UserInputState.End
+end
+
+local autoFireCooldown = 0
 
 local function refreshGunFeatures()
 	removeGunHooks()
@@ -637,6 +915,114 @@ local pickupItems: { { Instance, boolean } } = {}
 local function trackPickup(obj: Instance)
 	if obj:IsA("Model") and obj.Name ~= "Model" and obj:GetAttribute("ToolName") then
 		table.insert(pickupItems, { obj, obj.Name == "TouchGiver" })
+	end
+end
+
+local function runAutoArmor()
+	if not Config.AutoArmor then
+		return
+	end
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or not root or hum.MaxHealth > 100 then
+		return
+	end
+	local remotes = getRemotes()
+	local interact = remotes and remotes:FindFirstChild("InteractWithItem")
+	if not interact then
+		return
+	end
+	for _, vest in armorPickups do
+		if vest.Parent and (vest:GetPivot().Position - root.Position).Magnitude < 10 then
+			local part = vest:FindFirstChildWhichIsA("BasePart", true)
+			if part then
+				pcall(function()
+					interact:InvokeServer(part)
+				end)
+			end
+		end
+	end
+end
+
+local function runAutoDetonate()
+	if not Config.AutoDetonate or not localC4 or not localC4.Parent then
+		return
+	end
+	local remotes = getRemotes()
+	local activate = remotes and remotes:FindFirstChild("C4") and remotes.C4:FindFirstChild("ActivateC4")
+	if not activate then
+		return
+	end
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+	if not root or not backpack then
+		return
+	end
+	local c4Tool = backpack:FindFirstChild("C4 Explosive")
+	if not c4Tool then
+		return
+	end
+
+	local targetRoot: BasePart? = nil
+	for _, ent in getEntitiesInRange(25, true) do
+		targetRoot = ent.root
+		break
+	end
+	if not targetRoot then
+		return
+	end
+
+	if Config.AutoDetonateSafe then
+		local rayParams = RaycastParams.new()
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		rayParams.FilterDescendantsInstances = { char, targetRoot.Parent, localC4 }
+		local toTarget = targetRoot.Position - localC4:GetPivot().Position
+		if workspace:Raycast(localC4:GetPivot().Position, toTarget, rayParams) then
+			return
+		end
+		local toSelf = root.Position - localC4:GetPivot().Position
+		if not workspace:Raycast(localC4:GetPivot().Position, toSelf, rayParams) and toSelf.Magnitude <= 40 then
+			return
+		end
+	end
+
+	local equipped = char:FindFirstChildWhichIsA("Tool")
+	if equipped then
+		equipped.Parent = backpack
+	end
+	c4Tool.Parent = char
+	pcall(function()
+		activate:InvokeServer()
+	end)
+	c4Tool.Parent = backpack
+	if equipped then
+		equipped.Parent = char
+	end
+end
+
+local function runVehicleWallbang()
+	if not Config.VehicleWallbang then
+		for part, value in vehicleQueryBackup do
+			if part.Parent then
+				part.CanQuery = value
+			end
+		end
+		table.clear(vehicleQueryBackup)
+		return
+	end
+	local cars = workspace:FindFirstChild("CarContainer")
+	if not cars then
+		return
+	end
+	for _, part in cars:GetDescendants() do
+		if part:IsA("BasePart") then
+			if vehicleQueryBackup[part] == nil then
+				vehicleQueryBackup[part] = part.CanQuery
+			end
+			part.CanQuery = false
+		end
 	end
 end
 
@@ -976,6 +1362,11 @@ genv.__PrisonLifeUnload = function()
 	table.clear(loops)
 	removeGunHooks()
 	setNoJumpCooldown(false)
+	setDisabler(false)
+	setAntiTaze(false)
+	applyFullBright()
+	runVehicleWallbang()
+	syncKillPlane()
 	for char, entry in esp do
 		destroyEntry(entry)
 		esp[char] = nil
@@ -986,6 +1377,8 @@ genv.__PrisonLifeUnload = function()
 	if c4Folder then
 		c4Folder:Destroy()
 	end
+	table.clear(armorPickups)
+	localC4 = nil
 end
 
 UILib.create({
@@ -1024,6 +1417,10 @@ UILib.create({
 						{ type = "slider", key = "GunFireRate", label = "Fire Rate %", min = 1, max = 100, step = 1 },
 						{ type = "toggle", key = "GunAutomatic", label = "Full Auto", hud = "Full Auto" },
 						{ type = "toggle", key = "AutoReload", label = "Auto Reload", hud = "Auto Reload" },
+						{ type = "toggle", key = "AutoReloadSwap", label = "Reload Weapon Swap", hud = "Reload Swap" },
+						{ type = "toggle", key = "AutoFire", label = "Auto Fire", hud = "Auto Fire" },
+						{ type = "slider", key = "AutoFireRate", label = "Auto Fire Hz", min = 1, max = 120, step = 1 },
+						{ type = "toggle", key = "InfiniteAmmo", label = "Infinite Ammo", hud = "Inf Ammo" },
 						{ type = "hint", text = "Gun hooks need hookfunction + getconnections (executor)." },
 					},
 				},
@@ -1039,7 +1436,12 @@ UILib.create({
 						{ type = "slider", key = "WalkSpeed", label = "Walk Speed", min = 16, max = 200, step = 1 },
 						{ type = "slider", key = "JumpPower", label = "Jump Power", min = 50, max = 200, step = 1 },
 						{ type = "toggle", key = "NoJumpCooldown", label = "No Jump Cooldown", hud = "No Jump CD" },
+						{ type = "toggle", key = "AlwaysSprint", label = "Hold Sprint Speed", hud = "Sprint" },
+						{ type = "slider", key = "SprintSpeed", label = "Sprint Speed", min = 16, max = 48, step = 1 },
 						{ type = "toggle", key = "AutoReset", label = "Auto Reset (Criminal)", hud = "Auto Reset" },
+						{ type = "toggle", key = "AntiTaze", label = "Anti Taze", hud = "Anti Taze" },
+						{ type = "toggle", key = "Disabler", label = "Phase Fix", hud = "Phase Fix" },
+						{ type = "toggle", key = "AntiKillPlane", label = "Anti Kill Plane", hud = "Kill Plane" },
 					},
 				},
 				{
@@ -1047,6 +1449,7 @@ UILib.create({
 					items = {
 						{ type = "toggle", key = "VehicleSpeed", label = "Vehicle Speed", hud = "Vehicle Speed" },
 						{ type = "slider", key = "VehicleSpeedValue", label = "Max Speed", min = 80, max = 200, step = 5 },
+						{ type = "toggle", key = "VehicleWallbang", label = "Shoot Through Cars", hud = "Car Wallbang" },
 					},
 				},
 			},
@@ -1058,15 +1461,15 @@ UILib.create({
 					title = "SWITCH",
 					items = {
 						{ type = "button", label = "Inmate", onClick = function()
-							switchTeam(TEAM_COLOR.Inmate)
+							requestTeamChange("Inmates")
 						end },
 						{ type = "button", label = "Guard", onClick = function()
-							switchTeam(TEAM_COLOR.Guard)
+							requestTeamChange("Guards")
 						end },
 						{ type = "button", label = "Neutral", onClick = function()
-							switchTeam(TEAM_COLOR.Neutral)
+							requestTeamChange("Neutral")
 						end },
-						{ type = "hint", text = "Guard team caps at 8 players." },
+						{ type = "hint", text = "Uses Remotes.RequestTeamChange (Guards cap at 9)." },
 					},
 				},
 			},
@@ -1089,13 +1492,31 @@ UILib.create({
 						{ type = "button", label = "Taser", onClick = function()
 							giveGiverWeapon("Taser")
 						end },
+						{ type = "button", label = "MP5", onClick = function()
+							giveGiverWeapon("MP5")
+						end },
+						{ type = "button", label = "FAL", onClick = function()
+							giveGiverWeapon("FAL")
+						end },
+						{ type = "button", label = "M4A1", onClick = function()
+							giveGiverWeapon("M4A1")
+						end },
+						{ type = "button", label = "M700", onClick = function()
+							giveGiverWeapon("M700")
+						end },
+						{ type = "button", label = "Revolver", onClick = function()
+							giveGiverWeapon("Revolver")
+						end },
 					},
 				},
 				{
 					title = "AUTOMATION",
 					items = {
 						{ type = "toggle", key = "AutoHeal", label = "Auto Heal", hud = "Auto Heal" },
+						{ type = "toggle", key = "AutoArmor", label = "Auto Armor", hud = "Auto Armor" },
 						{ type = "toggle", key = "AutoPickup", label = "Auto Pickup", hud = "Auto Pickup" },
+						{ type = "toggle", key = "AutoDetonate", label = "Auto Detonate C4", hud = "Auto C4" },
+						{ type = "toggle", key = "AutoDetonateSafe", label = "C4 Safety Check", hud = "C4 Safe" },
 						{ type = "toggle", key = "AntiRiotShield", label = "Anti Riot Shield", hud = "Anti Shield" },
 						{ type = "toggle", key = "C4ESP", label = "C4 ESP", hud = "C4 ESP" },
 					},
@@ -1116,6 +1537,8 @@ UILib.create({
 						{ type = "color", key = "ESPAllyColor", label = "Ally" },
 						{ type = "color", key = "ESPNeutralColor", label = "Neutral" },
 						{ type = "color", key = "ESPHostileColor", label = "Hostile Inmate" },
+						{ type = "toggle", key = "FullBright", label = "Full Bright", hud = "Full Bright" },
+						{ type = "toggle", key = "KillNotify", label = "Death Notify", hud = "Death Notify" },
 						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
 					},
 				},
@@ -1124,15 +1547,37 @@ UILib.create({
 	},
 	hud = { showKey = "ShowHUD" },
 	onToggle = function(key, value)
-		if key == "SpeedBoost" or key == "NoJumpCooldown" then
+		if key == "SpeedBoost" or key == "NoJumpCooldown" or key == "AlwaysSprint" then
 			applyMovement()
 			setNoJumpCooldown(Config.NoJumpCooldown)
 		end
-		if key == "SilentAim" or key == "GunMods" or key == "AutoReload" or key == "GunNoSpread" or key == "GunAutomatic" then
+		if
+			key == "SilentAim"
+			or key == "GunMods"
+			or key == "AutoReload"
+			or key == "AutoReloadSwap"
+			or key == "GunNoSpread"
+			or key == "GunAutomatic"
+		then
 			refreshGunFeatures()
 		end
 		if key == "C4ESP" then
 			syncC4ESP()
+		end
+		if key == "FullBright" then
+			applyFullBright()
+		end
+		if key == "AntiKillPlane" then
+			syncKillPlane()
+		end
+		if key == "Disabler" then
+			setDisabler(value)
+		end
+		if key == "AntiTaze" then
+			setAntiTaze(value)
+		end
+		if key == "VehicleWallbang" and not value then
+			runVehicleWallbang()
 		end
 	end,
 	onChange = function(key)
@@ -1149,6 +1594,7 @@ table.insert(connections, LocalPlayer.CharacterAdded:Connect(function()
 	task.defer(function()
 		applyMovement()
 		setNoJumpCooldown(Config.NoJumpCooldown)
+		setDisabler(Config.Disabler)
 		resolveGunController()
 		refreshGunFeatures()
 	end)
@@ -1177,8 +1623,58 @@ table.insert(connections, CollectionService:GetInstanceAddedSignal("C4"):Connect
 	if Config.C4ESP then
 		addC4Highlight(obj)
 	end
+	if obj:GetAttribute("UserId") == LocalPlayer.UserId then
+		localC4 = obj
+	end
 end))
-table.insert(connections, CollectionService:GetInstanceRemovedSignal("C4"):Connect(removeC4Highlight))
+table.insert(connections, CollectionService:GetInstanceRemovedSignal("C4"):Connect(function(obj)
+	removeC4Highlight(obj)
+	if obj == localC4 then
+		localC4 = nil
+	end
+end))
+
+local killfeed = ReplicatedStorage:FindFirstChild("Killfeed")
+if killfeed then
+	table.insert(connections, killfeed.ChildAdded:Connect(function(obj)
+		local text = obj.Name
+		local killerStart = text:find("@")
+		local killerEnd = text:find(")")
+		local victimStart = text:find("killed ")
+		local victimEnd = victimStart and text:find(" ", victimStart + 7)
+		if killerStart and killerEnd and victimStart and victimEnd then
+			local killer = text:sub(killerStart + 1, killerEnd - 1)
+			local victim = text:sub(victimStart + 7, victimEnd - 1)
+			notifyKillfeed(killer, victim)
+		end
+	end))
+end
+
+local prisonItems = workspace:FindFirstChild("Prison_ITEMS")
+local clothesFolder = prisonItems and prisonItems:FindFirstChild("clothes")
+if clothesFolder then
+	for _, vest in clothesFolder:GetChildren() do
+		table.insert(armorPickups, vest)
+	end
+	table.insert(connections, clothesFolder.ChildAdded:Connect(function(obj)
+		table.insert(armorPickups, obj)
+	end))
+	table.insert(connections, clothesFolder.ChildRemoved:Connect(function(obj)
+		local index = table.find(armorPickups, obj)
+		if index then
+			table.remove(armorPickups, index)
+		end
+	end))
+end
+
+local carContainer = workspace:FindFirstChild("CarContainer")
+if carContainer then
+	table.insert(connections, carContainer.DescendantAdded:Connect(function()
+		if Config.VehicleWallbang then
+			runVehicleWallbang()
+		end
+	end))
+end
 
 for _, obj in workspace:GetChildren() do
 	trackPickup(obj)
@@ -1194,7 +1690,9 @@ startLoop(function()
 	runKillaura()
 	runAutoArrest()
 	runAutoHeal()
+	runAutoArmor()
 	runAutoPickup()
+	runAutoDetonate()
 	runAntiRiotShield()
 end)
 
@@ -1203,14 +1701,29 @@ table.insert(
 	RunService.RenderStepped:Connect(function()
 		applyMovement()
 		modifyGunData()
+		applyInfiniteAmmo()
 		runVehicleSpeed()
+		runVehicleWallbang()
 		updateESP()
+		if Config.AutoFire and os.clock() >= autoFireCooldown then
+			autoFireCooldown = os.clock() + (1 / math.max(Config.AutoFireRate, 1))
+			tryAutoFire()
+		end
 	end)
 )
 
 task.defer(function()
 	resolveGunController()
 	refreshGunFeatures()
+	setDisabler(Config.Disabler)
+	setAntiTaze(Config.AntiTaze)
+	applyFullBright()
+	syncKillPlane()
+	for _, obj in CollectionService:GetTagged("C4") do
+		if obj:GetAttribute("UserId") == LocalPlayer.UserId then
+			localC4 = obj
+		end
+	end
 end)
 
 print(
