@@ -187,7 +187,26 @@ local acdbgOverlayGui = nil
 local acdbgOverlayLabel = nil
 local acdbgNamecallHook = nil
 local acdbgBridgeNetRef = nil
+local acdbgBridgeNetHooked = false
+local acdbgHookedFns = {}
 local acdbgDescendantConn = nil
+
+local function acdbgShouldWatchRemote(remote)
+	if not remote or not remote:IsA("Instance") then
+		return false
+	end
+	if remote.Name == "PingCheck" then
+		return false
+	end
+	local fullName = remote:GetFullName()
+	if fullName:find("RobloxReplicatedStorage", 1, true) then
+		return false
+	end
+	if Config.DebugFilterOnly then
+		return acdbgMatchesKeywords(fullName .. " " .. remote.Name)
+	end
+	return true
+end
 
 local function acdbgKind(value)
 	if typeof then
@@ -310,12 +329,28 @@ local function acdbgLogRemote(direction, remote, args)
 	if not Config.DebugAC or not Config.DebugRemotes then
 		return
 	end
-	local packed = table.pack(unpack(args))
-	local text = string.format("%s %s | %s", direction, acdbgRemotePath(remote), acdbgSerializeArgs(packed))
-	if Config.DebugVerbose and debug and typeof(debug.info) == "function" then
-		text ..= " | " .. debug.info(3, "slnfa")
+	if not acdbgShouldWatchRemote(remote) then
+		return
 	end
-	acdbgPush("REMOTE", text)
+	local ok, err = pcall(function()
+		local packed = table.pack(unpack(args))
+		local text = string.format(
+			"%s %s | %s",
+			tostring(direction),
+			acdbgRemotePath(remote),
+			acdbgSerializeArgs(packed)
+		)
+		if Config.DebugVerbose and debug and typeof(debug.info) == "function" then
+			local infoOk, info = pcall(debug.info, 3, "slnfa")
+			if infoOk and info ~= nil then
+				text ..= " | " .. tostring(info)
+			end
+		end
+		acdbgPush("REMOTE", text)
+	end)
+	if not ok then
+		acdbgPush("REMOTE", "log error: " .. tostring(err), true)
+	end
 end
 
 local function acdbgLogBridge(direction, bridgeName, args)
@@ -365,28 +400,37 @@ local function acdbgOnShot(redirectAim)
 	)
 end
 
+local function acdbgHookFunction(fn, handler)
+	if typeof(fn) ~= "function" or acdbgHookedFns[fn] or typeof(hookfunction) ~= "function" then
+		return false
+	end
+	acdbgHookedFns[fn] = true
+	local oldFn = fn
+	hookfunction(oldFn, handler)
+	return true
+end
+
 local function acdbgWrapBridge(bridgeName, bridge)
 	if not bridge or acdbgWrappedBridges[bridge] then
 		return
 	end
 	acdbgWrappedBridges[bridge] = bridgeName
 
-	for methodName in { "Fire", "Invoke", "Send" } do
+	for _, methodName in { "Fire", "Invoke", "Send" } do
 		local method = bridge[methodName]
-		if typeof(method) == "function" and not bridge["_acdbg" .. methodName] then
-			bridge["_acdbg" .. methodName] = true
+		if typeof(method) == "function" then
 			local oldMethod = method
-			bridge[methodName] = function(...)
+			acdbgHookFunction(oldMethod, function(...)
 				acdbgLogBridge("OUT", bridgeName, { ... })
 				return oldMethod(...)
-			end
+			end)
 		end
 	end
 
-	if typeof(bridge.Connect) == "function" and not bridge._acdbgConnect then
-		bridge._acdbgConnect = true
-		local oldConnect = bridge.Connect
-		bridge.Connect = function(self, callback)
+	local connect = bridge.Connect
+	if typeof(connect) == "function" then
+		local oldConnect = connect
+		acdbgHookFunction(oldConnect, function(self, callback)
 			if typeof(callback) ~= "function" then
 				return oldConnect(self, callback)
 			end
@@ -394,12 +438,12 @@ local function acdbgWrapBridge(bridgeName, bridge)
 				acdbgLogBridge("IN", bridgeName, { ... })
 				return callback(...)
 			end)
-		end
+		end)
 	end
 end
 
 local function acdbgHookIncomingRemote(remote)
-	if acdbgHookedRemotes[remote] then
+	if not acdbgShouldWatchRemote(remote) or acdbgHookedRemotes[remote] then
 		return
 	end
 	acdbgHookedRemotes[remote] = true
@@ -408,24 +452,15 @@ local function acdbgHookIncomingRemote(remote)
 		table.insert(acdbgConns, remote.OnClientEvent:Connect(function(...)
 			acdbgLogRemote("IN", remote, { ... })
 		end))
-	elseif remote:IsA("RemoteFunction") then
-		local oldInvoke = remote.InvokeClient
-		if typeof(oldInvoke) == "function" and not remote._acdbgInvokeClient then
-			remote._acdbgInvokeClient = true
-			remote.InvokeClient = function(self, ...)
-				acdbgLogRemote("IN", remote, { ... })
-				return oldInvoke(self, ...)
-			end
-		end
 	end
 end
 
-local function acdbgScanRemotes(logEach)
+local function acdbgScanRemotes(logEach, hookIncoming)
 	local remotes = {}
 	for _, descendant in ipairs(game:GetDescendants()) do
 		if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") or descendant:IsA("UnreliableRemoteEvent") then
 			table.insert(remotes, descendant)
-			if Config.DebugAC then
+			if hookIncoming and Config.DebugAC then
 				acdbgHookIncomingRemote(descendant)
 			end
 		end
@@ -482,20 +517,22 @@ local function acdbgProbeBridges(bridgeNet)
 end
 
 local function acdbgInstallBridgeNet(bridgeNet)
-	if not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" or bridgeNet._acdbgRefHooked then
+	if not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" or acdbgBridgeNetHooked then
 		return
 	end
 	acdbgBridgeNetRef = bridgeNet
-	bridgeNet._acdbgRefHooked = true
+	acdbgBridgeNetHooked = true
+
 	local oldReference = bridgeNet.ReferenceBridge
-	bridgeNet.ReferenceBridge = function(name)
+	acdbgHookFunction(oldReference, function(name)
 		local bridge = oldReference(name)
 		if Config.DebugAC and Config.DebugBridgeNet then
 			acdbgWrapBridge(name, bridge)
 			acdbgPush("BRIDGE", "ReferenceBridge(" .. tostring(name) .. ")", true)
 		end
 		return bridge
-	end
+	end)
+
 	acdbgProbeBridges(bridgeNet)
 end
 
@@ -545,7 +582,9 @@ local function acdbgInstallNamecallHook()
 		if Config.DebugAC then
 			if Config.DebugRemotes and (method == "FireServer" or method == "InvokeServer") then
 				if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") or self:IsA("UnreliableRemoteEvent") then
-					acdbgLogRemote("OUT", self, { ... })
+					if acdbgShouldWatchRemote(self) then
+						acdbgLogRemote("OUT", self, { ... })
+					end
 				end
 			end
 			if Config.DebugKicks then
@@ -583,9 +622,11 @@ local function acdbgInstallDescendantHook()
 		if not Config.DebugAC then
 			return
 		end
-		if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") or descendant:IsA("UnreliableRemoteEvent") then
-			acdbgHookIncomingRemote(descendant)
-			acdbgPush("SCAN", "New remote: " .. descendant:GetFullName(), true)
+		if descendant:IsA("RemoteEvent") or descendant:IsA("UnreliableRemoteEvent") then
+			if acdbgShouldWatchRemote(descendant) then
+				acdbgHookIncomingRemote(descendant)
+				acdbgPush("SCAN", "New remote: " .. descendant:GetFullName(), true)
+			end
 		end
 	end)
 	table.insert(acdbgConns, acdbgDescendantConn)
@@ -600,7 +641,6 @@ local function acdbgInstall()
 	acdbgInstallNamecallHook()
 	acdbgInstallLogHook()
 	acdbgInstallDescendantHook()
-	acdbgScanRemotes(false)
 	if acdbgBridgeNetRef then
 		acdbgInstallBridgeNet(acdbgBridgeNetRef)
 	end
@@ -611,7 +651,6 @@ local function acdbgSync()
 	if Config.DebugAC then
 		acdbgInstall()
 		acdbgEnsureOverlay()
-		acdbgScanRemotes(false)
 		if acdbgBridgeNetRef then
 			acdbgProbeBridges(acdbgBridgeNetRef)
 		end
@@ -1009,7 +1048,7 @@ local HubUI = UILib.create({
 						{ type = "toggle", key = "DebugFilterOnly", label = "AC Keywords Only", hud = "Dbg Filter" },
 						{ type = "hint", text = "Output: F9 console + getgenv().__WarfareACLog. Enable before fighting to catch kick traffic." },
 						{ type = "button", id = "acDumpRemotes", label = "Dump Remotes", onClick = function()
-							acdbgScanRemotes(true)
+							acdbgScanRemotes(true, true)
 						end },
 						{ type = "button", id = "acDumpModules", label = "Scan AC Modules", onClick = function()
 							acdbgScanSuspiciousModules()
