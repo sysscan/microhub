@@ -80,7 +80,6 @@ local function getLocalTeam(): any
 		id = rec and rec:GetAttribute("Team")
 	end
 	return if id == nil then nil else normTeam(id)
-	end
 end
 
 local function getGameMode(): string
