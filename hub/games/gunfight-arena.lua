@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "24-sa-safe"
+local GAME_BUILD = "25-sa-forward-fix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -517,7 +517,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "24-sa-safe"
+local DBG_HOOK_BUILD = "25-sa-forward-fix"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -1008,6 +1008,49 @@ local function dbgPrintInit(label: string, path: string)
 	print("[GFA-DBG] init", label, "@", path)
 end
 
+local function dbgViewModelFlame(): BasePart?
+	if dbgCachedFlame and dbgCachedFlame.Parent then
+		return dbgCachedFlame
+	end
+
+	local now = os.clock()
+	if now < dbgNextFlameScan then
+		return dbgCachedFlame
+	end
+	dbgNextFlameScan = now + DBG_FLAME_CACHE_INTERVAL
+
+	local vm = workspace:FindFirstChild("ViewModel")
+	if not vm or not vm:IsA("Model") then
+		dbgCachedFlame = nil
+		return nil
+	end
+
+	for _, desc in vm:GetDescendants() do
+		if desc.Name == "Flame" and desc:IsA("BasePart") then
+			dbgCachedFlame = desc
+			return desc
+		end
+	end
+
+	dbgCachedFlame = nil
+	return nil
+end
+
+local function saRewriteFirePayload(payload: { any }): { any }
+	local part = combatTargetPart
+	if not part or not Config.SilentAim or not combatHoldActive() then
+		return payload
+	end
+	local flame = dbgViewModelFlame()
+	local serverCf = dbgMaybeDecode(payload[3])
+	if typeof(serverCf) ~= "CFrame" then
+		return payload
+	end
+	local origin = if flame then flame.Position else serverCf.Position
+	payload[3] = CFrame.new(origin, part.Position)
+	return payload
+end
+
 local function dbgHookNetworkApi()
 	if dbgNetworkHooked then
 		return
@@ -1153,49 +1196,6 @@ local function dbgHookSync()
 			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
 		end
 	end
-end
-
-local function dbgViewModelFlame(): BasePart?
-	if dbgCachedFlame and dbgCachedFlame.Parent then
-		return dbgCachedFlame
-	end
-
-	local now = os.clock()
-	if now < dbgNextFlameScan then
-		return dbgCachedFlame
-	end
-	dbgNextFlameScan = now + DBG_FLAME_CACHE_INTERVAL
-
-	local vm = workspace:FindFirstChild("ViewModel")
-	if not vm or not vm:IsA("Model") then
-		dbgCachedFlame = nil
-		return nil
-	end
-
-	for _, desc in vm:GetDescendants() do
-		if desc.Name == "Flame" and desc:IsA("BasePart") then
-			dbgCachedFlame = desc
-			return desc
-		end
-	end
-
-	dbgCachedFlame = nil
-	return nil
-end
-
-local function saRewriteFirePayload(payload: { any }): { any }
-	local part = combatTargetPart
-	if not part or not Config.SilentAim or not combatHoldActive() then
-		return payload
-	end
-	local flame = dbgViewModelFlame()
-	local serverCf = dbgMaybeDecode(payload[3])
-	if typeof(serverCf) ~= "CFrame" then
-		return payload
-	end
-	local origin = if flame then flame.Position else serverCf.Position
-	payload[3] = CFrame.new(origin, part.Position)
-	return payload
 end
 
 local function dbgAngleTo(origin: Vector3, look: Vector3, target: Vector3): number
