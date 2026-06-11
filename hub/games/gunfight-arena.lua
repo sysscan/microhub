@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "60-sa-silent"
+local GAME_BUILD = "61-sa-diag"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -569,6 +569,23 @@ local function netEncode(net: any, sample: any, value: any): any
 	return if ok then out else value
 end
 
+local function dbgDumpTable(tbl: any, depth: number?): string
+	if typeof(tbl) ~= "table" then return dbgShort(tbl) end
+	local d = depth or 0
+	if d > 2 then return "{...}" end
+	local parts = {}
+	for k, v in tbl do
+		local ks = if typeof(k) == "number" then string.format("[%d]", k) else tostring(k)
+		local vs = if typeof(v) == "table" then dbgDumpTable(v, d + 1) else dbgShort(v)
+		table.insert(parts, ks .. "=" .. vs)
+		if #parts >= 12 then
+			table.insert(parts, "...")
+			break
+		end
+	end
+	return "{" .. table.concat(parts, ", ") .. "}"
+end
+
 local function saRewriteHitcheck(net: any, payload: { any }, part: BasePart): { any }
 	local model = part.Parent
 	if not model or not model:IsA("Model") then
@@ -656,10 +673,15 @@ local function installNetworkHook(): boolean
 					end
 				end
 			elseif eventName == "Hitcheck" and part then
+				if Config.AimDebugger then
+					local oa, ob, oc, od = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
+					print("[GFA-DBG] HC-orig", dbgShort(oa), "|", dbgShort(ob), "|", dbgShort(oc), "|", dbgDumpTable(od))
+				end
 				payload = saRewriteHitcheck(net, payload, part)
 				if Config.AimDebugger then
 					local tgt = if part.Parent then part.Parent.Name else "?"
-					print("[GFA-DBG] SA-Hitcheck ->", tgt)
+					local ra, rb, rc, rd = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
+					print("[GFA-DBG] HC-rewr ->", tgt, "|", dbgShort(ra), "|", dbgShort(rb), "|", dbgShort(rc), "|", dbgDumpTable(rd))
 				end
 			elseif eventName == "Fire" and Config.AimDebugger then
 				print("[GFA-DBG] SA-skip no target")
