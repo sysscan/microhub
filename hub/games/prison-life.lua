@@ -20,7 +20,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "7-vape-port"
+local GAME_BUILD = "7-vape-port-fix"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local MAX_SAFE_WALKSPEED = 24
@@ -195,7 +195,7 @@ pcall(function()
 	GunTracers = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("GunTracers"))
 end)
 
-local TracerHook = { Hooks = {} :: { { string, (any) -> boolean, number } } }
+local TracerHook = { Hooks = {} }
 local oldTracerBullet: any = nil
 local oldTracerSniper: any = nil
 local tracerDrawingObjs: { [any]: { Vector3, Vector3, number } } = {}
@@ -221,7 +221,7 @@ local overlapBulletParams = OverlapParams.new()
 overlapBulletParams.CollisionGroup = "ClientBullet"
 overlapBulletParams.FilterType = Enum.RaycastFilterType.Exclude
 
-local OriginScanner = { Cache = {} :: { [Instance]: { any } } }
+local OriginScanner = { Cache = {} }
 local originRayParams = RaycastParams.new()
 originRayParams.CollisionGroup = "ClientBullet"
 originRayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -2013,7 +2013,8 @@ local function onViewmodelToolAdded(tool: Tool)
 	restoreViewmodel()
 	viewmodelRealTool = tool
 	viewmodelClone = tool:Clone()
-	viewmodelHandle = viewmodelClone:FindFirstChild("Handle") :: BasePart?
+	local handle = viewmodelClone:FindFirstChild("Handle")
+	viewmodelHandle = if handle and handle:IsA("BasePart") then handle else nil
 	viewmodelClone.Parent = Camera
 	for _, part in viewmodelClone:GetDescendants() do
 		if part:IsA("BasePart") then
@@ -2174,7 +2175,7 @@ local function stopVehicleFly()
 	for _, weld in vehicleFlyWelds do
 		pcall(function()
 			if typeof(weld) == "Instance" and weld:IsA("Constraint") then
-				(weld :: any).Enabled = true
+				weld.Enabled = true
 			end
 		end)
 	end
@@ -2246,7 +2247,7 @@ local function syncVehicleFly(enabled: boolean)
 							for _, weld in wheels:GetDescendants() do
 								if weld:IsA("HingeConstraint") or weld:IsA("CylindricalConstraint") or weld.Name == "Rotate" then
 									pcall(function()
-										(weld :: any).Enabled = false
+										weld.Enabled = false
 									end)
 									table.insert(vehicleFlyWelds, weld)
 								end
@@ -2267,8 +2268,8 @@ local function syncVehicleFly(enabled: boolean)
 				vehicleFlySeat = nil
 				for _, weld in vehicleFlyWelds do
 					pcall(function()
-						if typeof(weld) == "Instance" then
-							(weld :: any).Enabled = true
+						if typeof(weld) == "Instance" and weld:IsA("Constraint") then
+							weld.Enabled = true
 						end
 					end)
 				end
