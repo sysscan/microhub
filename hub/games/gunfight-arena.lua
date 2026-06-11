@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "53-sa-befire"
+local GAME_BUILD = "54-sa-dbgfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -551,6 +551,41 @@ local function saInjectHitables(hitables: any, part: BasePart): any
 	return hitables
 end
 
+local function dbgDecode(v: any): any
+	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
+	local mod = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
+	if not mod then return v end
+	local ok, codec = pcall(require, mod)
+	if not ok or typeof(codec) ~= "table" or typeof(codec.AutoDecode) ~= "function" then return v end
+	local ok2, out = pcall(codec.AutoDecode, v)
+	return if ok2 then out else v
+end
+
+local function dbgShortCf(cf: any): string
+	if typeof(cf) ~= "CFrame" then return "-" end
+	local p, l = cf.Position, cf.LookVector
+	return string.format("p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z, l.X, l.Y, l.Z)
+end
+
+local function dbgShort(v: any): string
+	local t = typeof(v)
+	if t == "string" then return #v > 32 and string.sub(v, 1, 29) .. "..." or v end
+	if t == "number" then return string.format("%.3f", v) end
+	if t == "boolean" then return tostring(v) end
+	if t == "CFrame" then return dbgShortCf(v) end
+	if t == "Instance" then return v.Name end
+	return t
+end
+
+local function netEncode(net: any, sample: any, value: any): any
+	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then return value end
+	local enc = rawget(net, "EncodeData")
+	if typeof(enc) ~= "function" then return value end
+	local ok, out = pcall(function() return enc(net, value) end)
+	if not ok then ok, out = pcall(enc, value) end
+	return if ok then out else value
+end
+
 local function isVortexSync(self: any): boolean
 	if vortexSyncRef and self == vortexSyncRef then
 		return true
@@ -639,41 +674,6 @@ local function tryHookVortexSync()
 		print("[GFA] Vortex.Sync hooked via", vortexHookMode)
 		bindSyncDbg()
 	end
-end
-
-local function dbgDecode(v: any): any
-	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
-	local mod = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
-	if not mod then return v end
-	local ok, codec = pcall(require, mod)
-	if not ok or typeof(codec) ~= "table" or typeof(codec.AutoDecode) ~= "function" then return v end
-	local ok2, out = pcall(codec.AutoDecode, v)
-	return if ok2 then out else v
-end
-
-local function dbgShortCf(cf: any): string
-	if typeof(cf) ~= "CFrame" then return "-" end
-	local p, l = cf.Position, cf.LookVector
-	return string.format("p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z, l.X, l.Y, l.Z)
-end
-
-local function netEncode(net: any, sample: any, value: any): any
-	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then return value end
-	local enc = rawget(net, "EncodeData")
-	if typeof(enc) ~= "function" then return value end
-	local ok, out = pcall(function() return enc(net, value) end)
-	if not ok then ok, out = pcall(enc, value) end
-	return if ok then out else value
-end
-
-local function dbgShort(v: any): string
-	local t = typeof(v)
-	if t == "string" then return #v > 32 and string.sub(v, 1, 29) .. "..." or v end
-	if t == "number" then return string.format("%.3f", v) end
-	if t == "boolean" then return tostring(v) end
-	if t == "CFrame" then return dbgShortCf(v) end
-	if t == "Instance" then return v.Name end
-	return t
 end
 
 local function installNetworkHook(): boolean
