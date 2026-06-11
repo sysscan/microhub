@@ -599,8 +599,10 @@ function M.create(opts)
 					return oldNamecall(self, ...)
 				end
 
+				local args = { ... }
+
 				-- InvokeServer must complete before any logging; IsA during namecall breaks some executors.
-				local results = { oldNamecall(self, ...) }
+				local results = { oldNamecall(self, table.unpack(args)) }
 
 				pcall(function()
 					if shouldLogRemote then
@@ -611,13 +613,13 @@ function M.create(opts)
 								or self:IsA("UnreliableRemoteEvent")
 						end)
 						if isRemote and isFrameworkRemote(self) then
-							logFrameworkRemote("OUT", self, { ... })
+							logFrameworkRemote("OUT", self, args)
 						end
 					elseif shouldLogKick then
 						if method == "Kick" and self == LocalPlayer then
-							logKick("LocalPlayer:Kick", { ... })
+							logKick("LocalPlayer:Kick", args)
 						else
-							logKick("TeleportService:" .. method, { ... })
+							logKick("TeleportService:" .. method, args)
 						end
 					end
 				end)
