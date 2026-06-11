@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "51-sa-filtergc"
+local GAME_BUILD = "52-sa-sync"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -354,7 +354,7 @@ local function combatHoldActive(): boolean
 end
 
 local function combatAimWanted(): boolean
-	return Config.Aimbot
+	return Config.Aimbot or Config.SilentAim
 end
 
 local function resolveAimTarget(origin: Vector2): BasePart?
@@ -424,6 +424,10 @@ local function updateCombatAim(dt: number)
 		stickyNeedsRelease = false
 	end
 
+	if Config.SilentAim and not Config.Aimbot and combatTargetPart then
+		setMouseHit(combatTargetPart.Position)
+	end
+
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
 		return
 	end
@@ -451,14 +455,17 @@ local function voltApi(name: string): any
 end
 
 local filtergc = voltApi("filtergc")
+local hookfn = voltApi("hookfunction")
+local newcc = voltApi("newcclosure")
 local netHooked = false
 local netInstalling = false
-local netApiRef: any = nil
+local vortexHooked = false
 local dbgCounts = { fire = 0, hit = 0 }
+local saStickyPart: BasePart? = nil
+local saStickyUntil = 0
+local SA_STICKY_SEC = 0.2
 
-local function saFireTarget(): BasePart?
-	local p = combatTargetPart
-	if p and p.Parent then return p end
+local function saScanTarget(): BasePart?
 	local origin = aimOrigin()
 	local bestPart: BasePart? = nil
 	local bestDist = math.huge
@@ -472,6 +479,72 @@ local function saFireTarget(): BasePart?
 		end
 	end
 	return bestPart
+end
+
+local function saLockTarget(part: BasePart?)
+	if not part or not part.Parent then return nil end
+	saStickyPart, saStickyUntil = part, os.clock() + SA_STICKY_SEC
+	return part
+end
+
+local function saFireTarget(): BasePart?
+	local now = os.clock()
+	if saStickyPart and saStickyPart.Parent and now < saStickyUntil then
+		local model = saStickyPart.Parent
+		if model and model:IsA("Model") and isAimEligible(model, targetName(model)) then
+			saStickyUntil = now + SA_STICKY_SEC
+			return saStickyPart
+		end
+	end
+	local p = combatTargetPart
+	if p and p.Parent then return saLockTarget(p) end
+	return saLockTarget(saScanTarget())
+end
+
+local function saAimCf(cf: CFrame, part: BasePart): CFrame
+	return CFrame.new(cf.Position, part.Position)
+end
+
+local function saInjectHitables(hitables: any, part: BasePart): any
+	local model = part.Parent
+	if not model or not model:IsA("Model") or typeof(hitables) ~= "table" then return hitables end
+	for _, e in hitables do if e == model then return hitables end end
+	table.insert(hitables, model)
+	return hitables
+end
+
+local function tryHookVortexSync()
+	if vortexHooked or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
+	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+	local vortex = ps and ps:FindFirstChild("Vortex")
+	local sync = vortex and vortex:FindFirstChild("Sync")
+	if not sync or not sync:IsA("BindableEvent") then return end
+	local syncFire = sync.Fire
+	if typeof(syncFire) ~= "function" then return end
+	local wrap = if typeof(newcc) == "function" then newcc else function(f) return f end
+	local vortexOrig: ((...any) -> ...any)?
+	local ok = pcall(function()
+		vortexOrig = hookfn(syncFire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+			if Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
+				local part = saFireTarget()
+				if part then
+					setMouseHit(part.Position)
+					a4 = saAimCf(a4, part)
+					a7 = saInjectHitables(a7, part)
+					if Config.AimDebugger then
+						local tgt = if part.Parent then part.Parent.Name else "?"
+						print("[GFA-DBG] SA-Sync ->", tgt, dbgShortCf(a4))
+					end
+				end
+			end
+			local o = vortexOrig
+			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
+		end))
+	end)
+	if ok and typeof(vortexOrig) == "function" then
+		vortexHooked = true
+		print("[GFA] Vortex.Sync hooked")
+	end
 end
 
 local function dbgDecode(v: any): any
@@ -519,7 +592,6 @@ local function installNetworkHook(): boolean
 	local oldFire = rawget(net, "FireServer")
 	if typeof(oldFire) ~= "function" then return false end
 
-	netApiRef = net
 	rawset(net, "FireServer", function(...)
 		local args = { ... }
 		local eventName = args[2]
@@ -532,7 +604,7 @@ local function installNetworkHook(): boolean
 				local raw = payload[3]
 				local cf = dbgDecode(raw)
 				if typeof(cf) == "CFrame" then
-					payload[3] = netEncode(net, raw, CFrame.new(cf.Position, part.Position))
+					payload[3] = netEncode(net, raw, saAimCf(cf, part))
 					if Config.AimDebugger then
 						local tgt = if part.Parent then part.Parent.Name else "?"
 						print("[GFA-DBG] SA-Fire ->", tgt, dbgShortCf(dbgDecode(payload[3])))
@@ -560,7 +632,13 @@ local function installNetworkHook(): boolean
 	end)
 
 	netHooked = true
-	print("[GFA] network hooked via filtergc", if Config.SilentAim then "| silent aim" else "", if Config.AimDebugger then "| debugger" else "")
+	tryHookVortexSync()
+	print(
+		"[GFA] network hooked via filtergc",
+		if Config.SilentAim then "| silent aim" else "",
+		if vortexHooked then "| Vortex.Sync" else "",
+		if Config.AimDebugger then "| debugger" else ""
+	)
 	return true
 end
 
@@ -580,6 +658,7 @@ end
 local function updateCombatNetwork()
 	if Config.SilentAim or Config.AimDebugger then
 		ensureNetworkHook()
+		if netHooked then tryHookVortexSync() end
 	end
 end
 
