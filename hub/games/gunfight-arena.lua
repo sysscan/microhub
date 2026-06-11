@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "42-netonly"
+local GAME_BUILD = "43-dlogfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -626,6 +626,24 @@ local function viewFlame(): BasePart?
 	cachedFlame = nil; return nil
 end
 
+-- Debugger state + dlog (must be above SA so saRewriteFire can call dlog)
+
+local dbg = {
+	fire = 0, hit = 0, sync = 0, syncBound = 0,
+	lastFire = nil :: any, lastHit = nil :: any,
+	lastSyncCf = nil :: CFrame?, lastSyncWep = "",
+	logCd = {} :: { [string]: number },
+}
+
+local function dlog(key: string, msg: string, cd: number?)
+	if not Config.AimDebugger then return end
+	cd = cd or 4
+	local now = os.clock()
+	if cd > 0 and now - (dbg.logCd[key] or 0) < cd then return end
+	dbg.logCd[key] = now
+	print("[GFA-DBG]", key, msg)
+end
+
 -- Silent aim state
 
 local sa = {
@@ -691,24 +709,9 @@ end
 
 -- Debugger state + logging (must be above hooks so dbgRecordEvent is visible)
 
-local dbg = {
-	fire = 0, hit = 0, sync = 0, syncBound = 0,
-	lastFire = nil :: any, lastHit = nil :: any,
-	lastSyncCf = nil :: CFrame?, lastSyncWep = "",
-	logCd = {} :: { [string]: number },
-}
 local ovLines: { any } = {}
 local syncConns: { [Instance]: RBXScriptConnection } = {}
 local nextOv, nextSyncScan = 0, 0
-
-local function dlog(key: string, msg: string, cd: number?)
-	if not Config.AimDebugger then return end
-	cd = cd or 4
-	local now = os.clock()
-	if cd > 0 and now - (dbg.logCd[key] or 0) < cd then return end
-	dbg.logCd[key] = now
-	print("[GFA-DBG]", key, msg)
-end
 
 local function dbgRecordFire(payload: { any })
 	if not Config.AimDebugger then return end
