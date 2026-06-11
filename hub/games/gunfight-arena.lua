@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "27-sa-vortex"
+local GAME_BUILD = "28-sa-silent"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -396,6 +396,13 @@ local function combatAimWanted(): boolean
 	return Config.Aimbot or Config.SilentAim
 end
 
+local function resolveSilentAimTarget(origin: Vector2): BasePart?
+	if not Config.SilentAim then
+		return nil
+	end
+	return closestAimPart(origin)
+end
+
 local function resolveAimTarget(origin: Vector2): BasePart?
 	if not combatHoldActive() then
 		stickyChar = nil
@@ -442,22 +449,14 @@ local function updateCombatAim(dt: number)
 	end
 
 	combatTargetPart = nil
-	if combatAimWanted() and combatHoldActive() then
+	if Config.Aimbot and combatHoldActive() then
 		combatTargetPart = resolveAimTarget(origin)
-	elseif not combatAimWanted() then
+	elseif Config.SilentAim then
+		combatTargetPart = resolveSilentAimTarget(origin)
+	end
+	if not combatAimWanted() then
 		stickyChar = nil
 		stickyNeedsRelease = false
-	end
-
-	if Config.SilentAim and combatTargetPart then
-		setMouseHit(combatTargetPart.Position)
-		if
-			not Config.Aimbot
-			and not isThirdPerson()
-			and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-		then
-			Camera.CFrame = CFrame.new(Camera.CFrame.Position, combatTargetPart.Position)
-		end
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
@@ -525,7 +524,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "27-sa-vortex"
+local DBG_HOOK_BUILD = "28-sa-silent"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -1096,14 +1095,16 @@ local function saInjectHitables(hitables: any, part: BasePart): any
 end
 
 local function saRewriteFirePayload(payload: { any }): { any }
-	if not Config.SilentAim or not combatHoldActive() then
+	if not Config.SilentAim then
 		return payload
 	end
-	local part = resolveAimTarget(aimOrigin())
+	local part = resolveSilentAimTarget(aimOrigin())
 	if not part then
 		return payload
 	end
-	setMouseHit(part.Position)
+	if isThirdPerson() then
+		setMouseHit(part.Position)
+	end
 	local rawCf = payload[3]
 	local serverCf = dbgMaybeDecode(rawCf)
 	if typeof(serverCf) ~= "CFrame" then
@@ -1118,11 +1119,16 @@ local function saRewriteFirePayload(payload: { any }): { any }
 end
 
 local function saRewriteSyncShot(shotCf: CFrame, hitables: any): (CFrame, any)
-	local part = resolveAimTarget(aimOrigin())
-	if not part or not Config.SilentAim or not combatHoldActive() then
+	if not Config.SilentAim then
 		return shotCf, hitables
 	end
-	setMouseHit(part.Position)
+	local part = resolveSilentAimTarget(aimOrigin())
+	if not part then
+		return shotCf, hitables
+	end
+	if isThirdPerson() then
+		setMouseHit(part.Position)
+	end
 	local newCf = CFrame.new(shotCf.Position, part.Position)
 	saLastSyncCf = newCf
 	sa.lastSyncAt = os.clock()
@@ -1408,7 +1414,7 @@ local function saUpdateStatus()
 			if sa.vortexSync then "OK" else "—",
 			dbg.status
 		),
-		string.format("Target: %s | hold RMB + shoot", targetNameStr),
+		string.format("Target: %s | FOV lock (no camera move)", targetNameStr),
 		string.format("Last redirect  fire:%s  sync:%s", fireAge, syncAge),
 		string.format("Sync angle° to target: %s", if syncToTarget then string.format("%.1f", syncToTarget) else "—"),
 		"Enable Debugger below to compare Fire/Sync/Hitcheck",
@@ -1821,7 +1827,7 @@ UILib.create({
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
 						{
 							type = "hint",
-							text = "Hold RMB, aim in FOV, shoot. Uses Combat team/FOV/bone/sticky. Enable Debugger to verify angles.",
+							text = "Redirects shots to closest FOV target. No camera move. Uses Combat team check, FOV, bone.",
 						},
 					},
 				},
