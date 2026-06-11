@@ -393,9 +393,9 @@ local HubUI = UILib.create({
 						{ type = "toggle", key = "DebugOverlay", label = "On-Screen Log", hud = "Dbg Overlay" },
 						{ type = "toggle", key = "DebugVerbose", label = "Verbose", hud = "Dbg Verbose" },
 						{ type = "toggle", key = "DebugFilterOnly", label = "AC Keywords Only", hud = "Dbg Filter" },
-						{ type = "hint", text = "Output: F9 console + getgenv().__WarfareACLog. Enable before fighting to catch kick traffic." },
+						{ type = "hint", text = "Buffered log: getgenv().__WarfareACLog. Print Log dumps F9. Enable AC Debug before fighting." },
 						{ type = "button", id = "acDumpRemotes", label = "Dump Remotes", onClick = function()
-							acDbg.scanRemotes(true, true)
+							acDbg.scanRemotes(true, false)
 						end },
 						{ type = "button", id = "acDumpModules", label = "Scan AC Modules", onClick = function()
 							acDbg.scanSuspiciousModules()
@@ -2595,9 +2595,7 @@ local function installCombatHooks()
 		acDbg.installBridgeNet(bridgeNet)
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
 		if confirmBridge and confirmBridge.Connect then
-			if Config.DebugAC and Config.DebugBridgeNet then
-				acDbg.wrapBridge("HitConfirm", confirmBridge)
-			end
+			acDbg.wrapBridge("HitConfirm", confirmBridge)
 			confirmBridge:Connect(function(payload)
 				if typeof(payload) ~= "table" then
 					return
@@ -3118,8 +3116,9 @@ end
 installSimulateHook(BulletSimulator.Simulate, "BulletSimulator.Simulate", true)
 installSimulateHook(BulletSimulator.CosmeticSimulate, "BulletSimulator.CosmeticSimulate", false)
 
-task.defer(acDbg.install)
-task.defer(acDbg.sync)
+if Config.DebugAC then
+	task.defer(acDbg.sync)
+end
 
 local genv = if typeof(getgenv) == "function" then getgenv() else _G
 genv.__WarfareUnload = acDbg.unload

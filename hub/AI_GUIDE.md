@@ -553,21 +553,21 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 
 ### 11.9 Anti-cheat debugging (Warfare)
 
-`games/warfare/ac-debug.lua` — enable via Config `DebugAC`, `DebugRemotes`, etc.
+`games/warfare/ac-debug.lua` — **lazy, passive logger**. Hooks install only when `DebugAC` is enabled (toggle or `acDbg.sync()`).
 
 | API | Purpose |
 |-----|---------|
-| `acDbg.install()` | LogService + overlay |
-| `acDbg.sync()` | Apply config toggles |
-| `acDbg.scanRemotes(verbose, deep?)` | List suspicious remotes |
-| `acDbg.probeBridges(bridgeNet)` | Guess bridge names |
-| `acDbg.wrapBridge(name, bridge)` | Log bridge traffic |
-| `acDbg.dumpHitStats()` | Hit-rate window stats |
+| `acDbg.sync()` | Install hooks + overlay when `DebugAC` on |
+| `acDbg.scanRemotes(logEach)` | List remotes only — **no** mass `OnClientEvent` hooks |
+| `acDbg.probeBridges(bridgeNet)` | Existence check only — **no** `hookfunction` on bridges |
+| `acDbg.wrapBridge(name, bridge)` | Registers bridge name (no method hooks) |
+| `acDbg.onHitConfirm` / `onShot` | Hit logging from combat hooks |
+| `acDbg.printLog()` | Dump buffer to F9 (hot path does not `warn` every line) |
 | `acDbg.unload()` | Disconnect + destroy overlay |
 
-**Important:** Do not recursively hook `hookfunction` or auto-probe BridgeNet on load — causes stack overflow / kick. Probe only on button click.
+**Performance rules:** outbound remotes via `__namecall` only (with `checkcaller` skip + 2s cooldown); no `hookfunction` on BridgeNet methods; no `DescendantAdded` remote fan-out; overlay refresh throttled (~0.35s).
 
-Filtered remotes: `PingCheck`, `dataRemoteEvent`, `ReplicatedStorage.Game.*` (rate limited).
+Filtered remotes: `PingCheck`, `dataRemoteEvent`, `ReplicatedStorage.Game.*` (unless Verbose).
 
 ---
 
@@ -771,7 +771,7 @@ Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust v
 | Loader | `VERSION = "1.7.0"` in `loader.lua` |
 | UI adapter | `4.0.1` in `lib/ui.lua` |
 | Prison Life build | `11-entry-split` |
-| Warfare build | `1-modular` |
+| Warfare build | `2-acdbg-lite` |
 | Gunfight Arena build | `67-modular` |
 
 ---
