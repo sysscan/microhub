@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "45-nofovlimit"
+local GAME_BUILD = "46-hitfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -411,7 +411,7 @@ local function updateCombatAim(dt: number)
 		local bestPart, bestDist = nil, math.huge
 		for char, name in collectTargets() do
 			if not isAimEligible(char, name) then continue end
-			local part = aimPart(char)
+			local part = saAimPart(char)
 			if not part then continue end
 			local distSq = screenDistSq(part.Position, origin)
 			if distSq and distSq < bestDist then bestPart, bestDist = part, distSq end
@@ -621,24 +621,6 @@ local function bindNetworkApi(self: any)
 	if typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re) then netRemote = re end
 end
 
--- Muzzle flame (for server CFrame origin)
-
-local cachedFlame: BasePart? = nil
-local nextFlameScan = 0
-
-local function viewFlame(): BasePart?
-	if cachedFlame and cachedFlame.Parent then return cachedFlame end
-	local now = os.clock()
-	if now < nextFlameScan then return cachedFlame end
-	nextFlameScan = now + 0.5
-	local vm = workspace:FindFirstChild("ViewModel")
-	if not vm or not vm:IsA("Model") then cachedFlame = nil; return nil end
-	for _, d in vm:GetDescendants() do
-		if d.Name == "Flame" and d:IsA("BasePart") then cachedFlame = d; return d end
-	end
-	cachedFlame = nil; return nil
-end
-
 -- Debugger state + dlog (must be above SA so saRewriteFire can call dlog)
 
 local dbg = {
@@ -667,12 +649,16 @@ local sa = {
 local vortexSyncRef = nil
 local vSyncConn = nil
 
+local function saAimPart(char)
+	return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head") or char.PrimaryPart
+end
+
 local function closestEnemyPart()
 	local origin = aimOrigin()
 	local bestPart, bestDist = nil, math.huge
 	for char, name in collectTargets() do
 		if not isAimEligible(char, name) then continue end
-		local part = aimPart(char)
+		local part = saAimPart(char)
 		if not part then continue end
 		local distSq = screenDistSq(part.Position, origin)
 		if distSq and distSq < bestDist then
@@ -689,27 +675,23 @@ local function saTarget()
 	return if p then p else nil, if p then "screen" else "none"
 end
 
-local function saOrigin(fallback)
-	local f = viewFlame()
-	return if f then f.Position else fallback
-end
 
 local function saRewriteFire(payload)
 	if not Config.SilentAim then return payload end
 	local part = saTarget()
 	if not part then
-		if Config.AimDebugger then dlog("SA-skip", "Fire: no target in FOV", 0.5) end
+		if Config.AimDebugger then dlog("SA-skip", "Fire: no target", 0.5) end
 		return payload
 	end
 	setMouseHit(part.Position)
 	local raw = payload[3]
 	local cf = decode(raw)
 	if typeof(cf) ~= "CFrame" then
-		if Config.AimDebugger then dlog("SA-skip", "Fire: payload[3] not CFrame (" .. typeof(cf) .. ")", 0.5) end
+		if Config.AimDebugger then dlog("SA-skip", "Fire: payload[3] not CFrame", 0.5) end
 		return payload
 	end
 	local tgtName = if part.Parent then part.Parent.Name else "?"
-	local newCf = CFrame.new(saOrigin(cf.Position), part.Position)
+	local newCf = CFrame.new(cf.Position, part.Position)
 	payload[3] = encode(raw, newCf)
 	sa.fireAt = os.clock()
 	if Config.AimDebugger then dlog("SA-Fire", "-> " .. tgtName .. " " .. shortCf(newCf), 0.3) end
@@ -880,7 +862,6 @@ local function dbgOverlay(now: number)
 	dbgBindSyncListeners()
 	local part = combatTargetPart or closestAimPart(aimOrigin())
 	local tName = if part and part.Parent then part.Parent.Name else "-"
-	local flame = viewFlame()
 	local camLook = Camera.CFrame.LookVector
 	local camAng = if part then angleTo(Camera.CFrame.Position, camLook, part.Position) else nil
 	local srvAng = if part and dbg.lastFire and dbg.lastFire.serverCf
@@ -890,7 +871,7 @@ local function dbgOverlay(now: number)
 	overlaySet({
 		"-- SA Debugger --",
 		string.format("net:%s sync:%d | %s", if sa.hooked then "OK" else "-", dbg.syncBound, sa.status),
-		string.format("API: %s | flame: %s | remote: %s", if hasFullApi() then "full" else "gc-fn", if flame then "OK" else "-", if sa.remote ~= "" then sa.remote else "-"),
+		string.format("API: %s | remote: %s", if hasFullApi() then "full" else "gc-fn", if sa.remote ~= "" then sa.remote else "-"),
 		string.format("Target: %s | volley #%d | Fire:%d Hit:%d", tName, sa.volley, dbg.fire, dbg.hit),
 		string.format("Angles  cam:%s  srv:%s  sync:%s",
 			if camAng then string.format("%.1f", camAng) else "-",
