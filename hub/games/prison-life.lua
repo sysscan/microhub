@@ -20,7 +20,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "7-vape-port-fix"
+local GAME_BUILD = "7-vape-port-fix2"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local MAX_SAFE_WALKSPEED = 24
@@ -198,7 +198,7 @@ end)
 local TracerHook = { Hooks = {} }
 local oldTracerBullet: any = nil
 local oldTracerSniper: any = nil
-local tracerDrawingObjs: { [any]: { Vector3, Vector3, number } } = {}
+local tracerDrawingObjs = {}
 local antiInvisibleThreads: { [any]: thread } = {}
 local animWhitelist: { [string]: boolean } = {}
 local cheatFlags: { [number]: { [string]: number } } = {}
@@ -594,7 +594,7 @@ local function tracerHookDispatch(...)
 	return false
 end
 
-function TracerHook:Add(key: string, fn: (any) -> boolean, priority: number?)
+function TracerHook:Add(key: string, fn: any, priority: number?)
 	if not canHook or not GunTracers then
 		return
 	end
@@ -716,7 +716,7 @@ local function statusSuffix(char: Model): string
 	return ""
 end
 
-local function getEntitiesInRange(range: number, mode: string): { { player: Player, char: Model, root: BasePart } }
+local function getEntitiesInRange(range: number, mode: string)
 	local localChar = LocalPlayer.Character
 	local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
 	if not localRoot then
