@@ -1843,6 +1843,9 @@ local function installNoRecoilHooks()
 			end
 			if Config.HitRateSafe then
 				spread = math.max(spread, Constants.HIT_RATE_SAFE_MIN_SPREAD)
+				if Config.BulletTP then
+					spread = math.max(spread, Constants.BULLET_TP_MIN_SPREAD)
+				end
 			end
 			return spread
 		end)
@@ -2656,7 +2659,7 @@ local function installCombatHooks()
 				if typeof(payload) ~= "table" then
 					return
 				end
-				hitRate.recordHitRateHit()
+				hitRate.recordHitRateHit(payload.isHeadshot == true)
 				acDbg.onHitConfirm(payload)
 				if not Config.HitMarkers then
 					return
@@ -3050,7 +3053,7 @@ local function pinBulletsAfterShot(bulletsBefore, target, muzzleCF, bulletPart)
 end
 
 applyBulletTP = function()
-	if not Config.BulletTP then
+	if not Config.BulletTP or not hitRate.shouldPinActiveBullets() then
 		return
 	end
 
@@ -3091,7 +3094,7 @@ local function getShotAimPart(target)
 	return target.part
 end
 
-local function applySilentAim(muzzleCF, initialSpeed, aimPartOverride)
+local function applySilentAim(muzzleCF, initialSpeed, aimPartOverride, useBulletTP)
 	local target = getActiveAimTarget()
 	if not target or (not Config.SilentAim and not Config.BulletTP and not sharedState.killAllForcedTarget) then
 		return muzzleCF, initialSpeed
@@ -3105,7 +3108,7 @@ local function applySilentAim(muzzleCF, initialSpeed, aimPartOverride)
 		direction = Camera.CFrame.LookVector
 	end
 
-	if Config.BulletTP then
+	if useBulletTP and Config.BulletTP then
 		local t2 = weaponStateRef or discoverWeaponState()
 		local settings = t2 and t2.Assets and t2.Assets.SettingsGun
 		local isRocket = settings and settings.Rocket and settings.BulletType == settings.Rocket
@@ -3135,9 +3138,11 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 			local bulletsBefore = 0
 
 			local redirectAim = false
+			local useBulletTP = false
 			if applyAim and not checkcaller() then
 				hitRate.recordHitRateShot()
 				redirectAim = hitRate.shouldRedirectAimShot()
+				useBulletTP = redirectAim and hitRate.shouldUseBulletTP()
 				local shotAimPart = nil
 				if redirectAim and (Config.BulletTP or Config.SilentAim or sharedState.killAllForcedTarget) then
 					shotTarget = getActiveAimTarget()
@@ -3147,16 +3152,17 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 					end
 				end
 				if redirectAim then
-					muzzleCF, initialSpeed = applySilentAim(muzzleCF, initialSpeed, shotAimPart)
+					muzzleCF, initialSpeed = applySilentAim(muzzleCF, initialSpeed, shotAimPart, useBulletTP)
 				end
 				acDbg.onSimulateShot({
 					redirected = redirectAim,
+					bulletTp = useBulletTP,
 					hubAim = Config.SilentAim or Config.BulletTP or sharedState.killAllForcedTarget ~= nil,
 					aimPart = shotAimPart and shotAimPart.Name,
 					bulletType = bulletType,
 					muzzleCF = muzzleCF,
 				})
-				if redirectAim and Config.BulletTP then
+				if useBulletTP then
 					discoverBulletRegistry()
 					bulletsBefore = bulletRegistryRef and #bulletRegistryRef or 0
 				end
@@ -3164,7 +3170,7 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 
 			local results = { previousSimulate(self, muzzleCF, bullet, bulletPool, initialSpeed, bulletType, ...) }
 
-			if applyAim and Config.BulletTP and not checkcaller() and shotTarget and redirectAim then
+			if applyAim and useBulletTP and not checkcaller() and shotTarget then
 				discoverBulletRegistry()
 				pinBulletsAfterShot(bulletsBefore, shotTarget, muzzleCF, bullet)
 				applyBulletTP()

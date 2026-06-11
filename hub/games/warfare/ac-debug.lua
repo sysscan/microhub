@@ -242,7 +242,7 @@ function M.create(opts)
 			"dmg=%s head=%s target=%s pos=%s",
 			tostring(p.damage or "?"),
 			tostring(p.isHeadshot),
-			playerLabel(p.hitUserId or p.userId),
+			playerLabel(p.hitUserId or p.userId or p.targetUserId or p.victimUserId),
 			vec3(p.hitPosition)
 		)
 	end
@@ -283,6 +283,7 @@ function M.create(opts)
 
 	local function findPendingShot(fireTime, bulletType)
 		local now = tick()
+		local newestOpen = nil
 		for index = #pendingShots, 1, -1 do
 			local shot = pendingShots[index]
 			if now - shot.t > SHOT_MATCH_WINDOW then
@@ -297,8 +298,11 @@ function M.create(opts)
 			if bulletType and shot.bulletType and shot.bulletType == bulletType and not shot.hitPlayer then
 				return shot
 			end
+			if not newestOpen or shot.t > newestOpen.t then
+				newestOpen = shot
+			end
 		end
-		return nil
+		return newestOpen
 	end
 
 	local function onBridgeOutbound(name, payload)
@@ -538,24 +542,25 @@ function M.create(opts)
 		if not Config.DebugAC or not Config.DebugHits then
 			return
 		end
-		if not Config.DebugVerbose and not meta.redirected then
-			return
-		end
 
 		registerPendingShot(nil, meta)
 
-		push(
-			"SHOT",
-			string.format(
-				"redirect=%s aim=%s part=%s type=%s muzzle=%s ratio=%.2f",
-				tostring(meta.redirected),
-				tostring(meta.hubAim),
-				tostring(meta.aimPart or "?"),
-				tostring(meta.bulletType or "?"),
-				cfPos(meta.muzzleCF),
-				getRecentHitRatio()
+		if Config.DebugVerbose or meta.redirected or meta.bulletTp then
+			push(
+				"SHOT",
+				string.format(
+					"redirect=%s tp=%s aim=%s part=%s type=%s muzzle=%s ratio=%.2f hs=%.2f",
+					tostring(meta.redirected),
+					tostring(meta.bulletTp),
+					tostring(meta.hubAim),
+					tostring(meta.aimPart or "?"),
+					tostring(meta.bulletType or "?"),
+					cfPos(meta.muzzleCF),
+					getRecentHitRatio(),
+					if hitRate.getRecentHeadshotRatio then hitRate.getRecentHeadshotRatio() else 0
+				)
 			)
-		)
+		end
 	end
 
 	local oldNamecall = nil
@@ -822,13 +827,15 @@ function M.create(opts)
 	end
 
 	local function dumpHitStats()
+		local headRatio = if hitRate.getRecentHeadshotRatio then hitRate.getRecentHeadshotRatio() else 0
 		push(
 			"STAT",
 			string.format(
-				"hub hits=%d shots=%d ratio=%.2f | pipeline FB=%d HP=%d HC=%d orphanHP=%d orphanHC=%d reject=%d secure=%d",
+				"hub hits=%d shots=%d ratio=%.2f hs=%.2f | pipeline FB=%d HP=%d HC=%d orphanHP=%d orphanHC=%d reject=%d secure=%d",
 				#hitRateRecentHits,
 				#hitRateRecentShots,
 				getRecentHitRatio(),
+				headRatio,
 				pipelineStats.fireBullet,
 				pipelineStats.hitPlayer,
 				pipelineStats.hitConfirm,

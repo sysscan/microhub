@@ -1,8 +1,8 @@
 return {
 	SilentAim = true,
 	HitRateSafe = true,
-	SilentAimHitChance = 88,
-	SilentAimHeadshotChance = 60,
+	SilentAimHitChance = 72,
+	SilentAimHeadshotChance = 45,
 	Teamcheck = true,
 	Tracer = true,
 	ESP = true,
@@ -13,6 +13,7 @@ return {
 	NoRecoil = false,
 	StableAim = false,
 	BulletTP = false,
+	BulletTPHitChance = 52,
 	RapidFire = false,
 	RapidFireBoost = 88,
 	InfiniteAmmo = false,
