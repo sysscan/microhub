@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "50-netdbg"
+local GAME_BUILD = "51-sa-filtergc"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -23,6 +23,7 @@ local Config = {
 	AimSmooth = 35,
 	AimPart = "Head",
 	AimFOVCircle = false,
+	SilentAim = false,
 	AimDebugger = false,
 	ESP = true,
 	ESPAllies = true,
@@ -404,6 +405,19 @@ local function updateCombatAim(dt: number)
 	combatTargetPart = nil
 	if Config.Aimbot and combatHoldActive() then
 		combatTargetPart = resolveAimTarget(origin)
+	elseif Config.SilentAim then
+		local bestPart: BasePart? = nil
+		local bestDist = math.huge
+		for char, name in collectTargets() do
+			if not isAimEligible(char, name) then continue end
+			local part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
+			if not part then continue end
+			local distSq = screenDistSq(part.Position, origin)
+			if distSq and distSq < bestDist then
+				bestPart, bestDist = part, distSq
+			end
+		end
+		combatTargetPart = bestPart
 	end
 	if not combatAimWanted() then
 		stickyChar = nil
@@ -426,7 +440,7 @@ local function updateCombatAim(dt: number)
 	end
 end
 
--- Network debugger (filtergc table hook — same pattern as hook.lua)
+-- Network hook: silent aim + debugger (filtergc table rawset)
 
 local function voltApi(name: string): any
 	if typeof(getgenv) == "function" then
@@ -437,11 +451,28 @@ local function voltApi(name: string): any
 end
 
 local filtergc = voltApi("filtergc")
-local dbgHooked = false
-local dbgInstalling = false
-local dbgCounts = { fire = 0, hit = 0, other = 0 }
-local dbgLastFire: any = nil
-local dbgLastHit: any = nil
+local netHooked = false
+local netInstalling = false
+local netApiRef: any = nil
+local dbgCounts = { fire = 0, hit = 0 }
+
+local function saFireTarget(): BasePart?
+	local p = combatTargetPart
+	if p and p.Parent then return p end
+	local origin = aimOrigin()
+	local bestPart: BasePart? = nil
+	local bestDist = math.huge
+	for char, name in collectTargets() do
+		if not isAimEligible(char, name) then continue end
+		local part = char:FindFirstChild("HumanoidRootPart") or aimPart(char)
+		if not part then continue end
+		local distSq = screenDistSq(part.Position, origin)
+		if distSq and distSq < bestDist then
+			bestPart, bestDist = part, distSq
+		end
+	end
+	return bestPart
+end
 
 local function dbgDecode(v: any): any
 	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
@@ -459,6 +490,15 @@ local function dbgShortCf(cf: any): string
 	return string.format("p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z, l.X, l.Y, l.Z)
 end
 
+local function netEncode(net: any, sample: any, value: any): any
+	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then return value end
+	local enc = rawget(net, "EncodeData")
+	if typeof(enc) ~= "function" then return value end
+	local ok, out = pcall(function() return enc(net, value) end)
+	if not ok then ok, out = pcall(enc, value) end
+	return if ok then out else value
+end
+
 local function dbgShort(v: any): string
 	local t = typeof(v)
 	if t == "string" then return #v > 32 and string.sub(v, 1, 29) .. "..." or v end
@@ -469,8 +509,8 @@ local function dbgShort(v: any): string
 	return t
 end
 
-local function installNetworkDebugger(): boolean
-	if dbgHooked or typeof(filtergc) ~= "function" then return false end
+local function installNetworkHook(): boolean
+	if netHooked or typeof(filtergc) ~= "function" then return false end
 	if LocalPlayer:GetAttribute("ClockOffset") == nil then return false end
 
 	local ok, net = pcall(filtergc, "table", { Keys = { "FireServer", "InvokeClient" } }, true)
@@ -479,56 +519,67 @@ local function installNetworkDebugger(): boolean
 	local oldFire = rawget(net, "FireServer")
 	if typeof(oldFire) ~= "function" then return false end
 
+	netApiRef = net
 	rawset(net, "FireServer", function(...)
 		local args = { ... }
 		local eventName = args[2]
 		local payload = { table.unpack(args, 3) }
 
-		if Config.AimDebugger and eventName == "Fire" then
-			dbgCounts.fire += 1
-			local w, clk, cf = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3])
-			dbgLastFire = { weapon = dbgShort(w), clock = clk, cf = if typeof(cf) == "CFrame" then cf else nil }
-			print("[GFA-DBG] Fire", string.format("#%d %s clk=%s %s", dbgCounts.fire, dbgLastFire.weapon, dbgShort(clk), dbgShortCf(cf)))
-		elseif Config.AimDebugger and eventName == "Hitcheck" then
-			dbgCounts.hit += 1
-			local a, b, c, d = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-			dbgLastHit = { a = a, b = b, c = c, d = d }
-			print("[GFA-DBG] Hitcheck", string.format("#%d %s | %s | %s | %s", dbgCounts.hit, dbgShort(a), dbgShort(b), dbgShort(c), dbgShort(d)))
-		elseif Config.AimDebugger then
-			dbgCounts.other += 1
-			if dbgCounts.other <= 5 then
-				local parts = {}
-				for i, v in payload do
-					parts[#parts + 1] = string.format("[%d]=%s", i, dbgShort(dbgDecode(v)))
+		if eventName == "Fire" and Config.SilentAim then
+			local part = saFireTarget()
+			if part then
+				setMouseHit(part.Position)
+				local raw = payload[3]
+				local cf = dbgDecode(raw)
+				if typeof(cf) == "CFrame" then
+					payload[3] = netEncode(net, raw, CFrame.new(cf.Position, part.Position))
+					if Config.AimDebugger then
+						local tgt = if part.Parent then part.Parent.Name else "?"
+						print("[GFA-DBG] SA-Fire ->", tgt, dbgShortCf(dbgDecode(payload[3])))
+					end
 				end
-				print("[GFA-DBG]", eventName or "?", table.concat(parts, " "))
+			elseif Config.AimDebugger then
+				print("[GFA-DBG] SA-skip no target")
 			end
 		end
 
+		if Config.AimDebugger and eventName == "Fire" then
+			dbgCounts.fire += 1
+			local w, clk, cf = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3])
+			print("[GFA-DBG] Fire", string.format("#%d %s clk=%s %s", dbgCounts.fire, dbgShort(w), dbgShort(clk), dbgShortCf(cf)))
+		elseif Config.AimDebugger and eventName == "Hitcheck" then
+			dbgCounts.hit += 1
+			local a, b, c, d = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
+			print("[GFA-DBG] Hitcheck", string.format("#%d %s | %s | %s | %s", dbgCounts.hit, dbgShort(a), dbgShort(b), dbgShort(c), dbgShort(d)))
+		end
+
+		if #payload > 0 then
+			return oldFire(args[1], eventName, table.unpack(payload))
+		end
 		return oldFire(table.unpack(args))
 	end)
 
-	dbgHooked = true
-	print("[GFA-DBG] hooked Network.FireServer via filtergc table")
+	netHooked = true
+	print("[GFA] network hooked via filtergc", if Config.SilentAim then "| silent aim" else "", if Config.AimDebugger then "| debugger" else "")
 	return true
 end
 
-local function ensureNetworkDebugger()
-	if not Config.AimDebugger or dbgHooked or dbgInstalling then return end
-	dbgInstalling = true
+local function ensureNetworkHook()
+	if not (Config.SilentAim or Config.AimDebugger) or netHooked or netInstalling then return end
+	netInstalling = true
 	task.spawn(function()
 		for _ = 1, 20 do
-			if not Config.AimDebugger then break end
-			if installNetworkDebugger() then break end
+			if not (Config.SilentAim or Config.AimDebugger) then break end
+			if installNetworkHook() then break end
 			task.wait(1)
 		end
-		dbgInstalling = false
+		netInstalling = false
 	end)
 end
 
-local function updateNetworkDebugger()
-	if Config.AimDebugger then
-		ensureNetworkDebugger()
+local function updateCombatNetwork()
+	if Config.SilentAim or Config.AimDebugger then
+		ensureNetworkHook()
 	end
 end
 
@@ -804,10 +855,12 @@ UILib.create({
 					},
 				},
 				{
-					title = "Debug",
+					title = "Silent Aim",
 					items = {
+						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
+						{ type = "hint", text = "Redirects Fire CFrame to closest on-screen enemy. No camera move. Uses team check." },
 						{ type = "toggle", key = "AimDebugger", label = "Network Debugger", hud = "Net Debug" },
-						{ type = "hint", text = "Logs Fire / Hitcheck from Network.FireServer. Enable in-match, rejoin after toggling." },
+						{ type = "hint", text = "Logs Fire / Hitcheck / SA-Fire. Rejoin after toggling hooks." },
 					},
 				},
 			},
@@ -836,7 +889,7 @@ UILib.create({
 
 RunService.RenderStepped:Connect(function()
 	updateESP()
-	updateNetworkDebugger()
+	updateCombatNetwork()
 end)
 RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateCombatAim)
 
