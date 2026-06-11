@@ -11,8 +11,21 @@ function M.create(opts)
 
 	local bulletTracerDrawings = {}
 	local gunChamHighlights = {}
+	local gunChamPartSaved = {}
+	local chamContainer = nil
 	local triggerBotLastFire = 0
 	local spinbotYaw = 0
+
+	local function getChamContainer()
+		if chamContainer and chamContainer.Parent then
+			return chamContainer
+		end
+		local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
+		chamContainer = Instance.new("Folder")
+		chamContainer.Name = "MicroHub_GunChams"
+		chamContainer.Parent = playerGui
+		return chamContainer
+	end
 
 	local function spawnBulletTracer(origin, direction)
 		if not Config.BulletTracers then
@@ -107,6 +120,16 @@ function M.create(opts)
 			end)
 		end
 		table.clear(gunChamHighlights)
+
+		for part, saved in gunChamPartSaved do
+			if part and part.Parent then
+				pcall(function()
+					part.Color = saved.Color
+					part.Material = saved.Material
+				end)
+			end
+		end
+		table.clear(gunChamPartSaved)
 	end
 
 	local function styleGunHighlight(highlight)
@@ -117,11 +140,11 @@ function M.create(opts)
 		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	end
 
-	local function ensureGunHighlight(adornee)
+	local function ensureGunHighlight(key, adornee)
 		if not adornee or not adornee.Parent then
 			return
 		end
-		local existing = gunChamHighlights[adornee]
+		local existing = gunChamHighlights[key]
 		if existing and existing.Parent then
 			existing.Adornee = adornee
 			styleGunHighlight(existing)
@@ -130,36 +153,94 @@ function M.create(opts)
 		local highlight = Instance.new("Highlight")
 		highlight.Name = "MicroHub_GunCham"
 		highlight.Adornee = adornee
-		highlight.Parent = adornee
+		highlight.Parent = getChamContainer()
 		styleGunHighlight(highlight)
-		gunChamHighlights[adornee] = highlight
+		gunChamHighlights[key] = highlight
 	end
 
-	local function updateGunChams(getWeaponState)
+	local function applyPartChams(root)
+		if not root or not root.Parent then
+			return
+		end
+		for _, descendant in ipairs(root:GetDescendants()) do
+			if not descendant:IsA("BasePart") then
+				continue
+			end
+			if not gunChamPartSaved[descendant] then
+				gunChamPartSaved[descendant] = {
+					Color = descendant.Color,
+					Material = descendant.Material,
+				}
+			end
+			descendant.Color = Config.GunChamColor
+			descendant.Material = Enum.Material.ForceField
+		end
+		if root:IsA("BasePart") then
+			if not gunChamPartSaved[root] then
+				gunChamPartSaved[root] = {
+					Color = root.Color,
+					Material = root.Material,
+				}
+			end
+			root.Color = Config.GunChamColor
+			root.Material = Enum.Material.ForceField
+		end
+	end
+
+	local function prunePartChams(activeParts)
+		for part, saved in gunChamPartSaved do
+			if not activeParts[part] then
+				if part and part.Parent then
+					pcall(function()
+						part.Color = saved.Color
+						part.Material = saved.Material
+					end)
+				end
+				gunChamPartSaved[part] = nil
+			end
+		end
+	end
+
+	local function updateGunChams(getAdornees)
 		if not Config.GunChams then
 			clearGunChams()
 			return
 		end
-
-		local seen = {}
-		local t2 = getWeaponState()
-		if t2 and t2.currentTool then
-			ensureGunHighlight(t2.currentTool)
-			seen[t2.currentTool] = true
+		if typeof(getAdornees) ~= "function" then
+			return
 		end
 
-		local viewmodel = workspace:FindFirstChild("Viewmodel")
-		if viewmodel then
-			ensureGunHighlight(viewmodel)
-			seen[viewmodel] = true
+		local seenHighlights = {}
+		local activeParts = {}
+		for _, entry in ipairs(getAdornees()) do
+			if typeof(entry) ~= "table" then
+				continue
+			end
+			local adornee = entry.adornee
+			local key = entry.key or tostring(adornee)
+			if adornee and adornee.Parent then
+				ensureGunHighlight(key, adornee)
+				seenHighlights[key] = true
+				applyPartChams(adornee)
+				for _, descendant in ipairs(adornee:GetDescendants()) do
+					if descendant:IsA("BasePart") then
+						activeParts[descendant] = true
+					end
+				end
+				if adornee:IsA("BasePart") then
+					activeParts[adornee] = true
+				end
+			end
 		end
 
-		for adornee, highlight in gunChamHighlights do
-			if not seen[adornee] then
+		prunePartChams(activeParts)
+
+		for key, highlight in gunChamHighlights do
+			if not seenHighlights[key] then
 				pcall(function()
 					highlight:Destroy()
 				end)
-				gunChamHighlights[adornee] = nil
+				gunChamHighlights[key] = nil
 			end
 		end
 	end
@@ -225,6 +306,12 @@ function M.create(opts)
 		end
 		table.clear(bulletTracerDrawings)
 		clearGunChams()
+		if chamContainer then
+			pcall(function()
+				chamContainer:Destroy()
+			end)
+			chamContainer = nil
+		end
 	end
 
 	return {

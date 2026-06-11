@@ -1639,7 +1639,36 @@ RunService.RenderStepped:Connect(function(dt)
 	updateHitMarkers()
 	extras.updateBulletTracerDrawings()
 	extras.updateGunChams(function()
-		return weaponStateRef or discoverWeaponState()
+		local list = {}
+		local seen = {}
+		local function add(key, adornee)
+			if not adornee or not adornee.Parent or seen[adornee] then
+				return
+			end
+			seen[adornee] = true
+			table.insert(list, { key = key, adornee = adornee })
+		end
+
+		local t2 = weaponStateRef or discoverWeaponState()
+		if t2 then
+			if t2.Assets then
+				add("gunModel", t2.Assets.GunModel)
+				add("viewmodel", t2.Assets.Viewmodel)
+			end
+			add("currentTool", t2.currentTool)
+		end
+
+		local character = LocalPlayer.Character
+		if character then
+			for _, child in ipairs(character:GetChildren()) do
+				if child:IsA("Tool") then
+					add("tool:" .. child.Name, child)
+				end
+			end
+		end
+
+		add("workspaceViewmodel", workspace:FindFirstChild("Viewmodel"))
+		return list
 	end)
 	extras.updateTriggerBot(getActiveAimTarget, tryAutoFireWeapon, function(targetPos, targetCharacter)
 		return hasLineOfSight(targetPos, targetCharacter)
@@ -2694,6 +2723,7 @@ applyCombatMods = function()
 	end
 
 	if t2 then
+		weaponStateRef = t2
 		applyGrenadeMods(t2)
 
 		sanitizeSettingsGunFireRate(t2)
@@ -3182,22 +3212,21 @@ local function pinBulletsAfterShot(bulletsBefore, target, muzzleCF, bulletPart)
 end
 
 applyBulletTP = function()
-	if not Config.BulletTP or not hitRate.shouldPinActiveBullets() then
+	if not Config.BulletTP then
 		return
 	end
 
-	local fallbackTarget = getActiveAimTarget()
 	local registry = discoverBulletRegistry()
 	if not registry then
 		return
 	end
 
 	for _, state in ipairs(registry) do
-		if not isActiveBulletState(state) then
+		if not isActiveBulletState(state) or not state._tpTarget then
 			continue
 		end
 
-		local targetPos, targetRef = resolveBulletTPTarget(state, fallbackTarget)
+		local targetPos, targetRef = resolveBulletTPTarget(state, nil)
 		if not targetPos then
 			continue
 		end

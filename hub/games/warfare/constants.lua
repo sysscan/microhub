@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "6-combat-extras",
+	GAME_BUILD = "6-chams-tp-fix",
 	BOOST_WALK_SPEED = 28,
 	BOOST_SPRINT_SPEED = 36,
 	FLIGHT_SPEED = 90,

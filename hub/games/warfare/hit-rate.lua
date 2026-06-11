@@ -115,7 +115,9 @@ function M.create(opts: {
 		end
 
 		local chance = Config.SilentAimHitChance or 72
-		if isBulletTPActive() then
+		if isBulletTPActive() and not Config.SilentAim then
+			chance = Config.BulletTPHitChance or BULLET_TP_HIT_CHANCE_CAP
+		elseif isBulletTPActive() then
 			chance = math.min(chance, BULLET_TP_HIT_CHANCE_CAP + 18)
 		end
 		if Config.NoRecoil then
