@@ -30,9 +30,7 @@ You should see `[MicroHub] v… @ <commit> -> <game>` and `ready — UI …`. Re
 |-----------------|------------------|
 | Warfare         | `83902709332473` |
 | Gunfight Arena  | `15514727567`, `14518422161` |
-| Tha Bronx 3     | `16472538603`, `18642421777` |
-
-Tha Bronx 3 includes scripts from [GetRioToday/16472538603-ThaBronx3](https://github.com/GetRioToday/16472538603-ThaBronx3): AC bypass, instant prompts/equip, no fall ragdoll, studio farm, kool-aid infinite money farm, and LTK money dupe.
+| Prison Life     | `155615604`, `4669040` |
 
 ## Structure
 

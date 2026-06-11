@@ -10,7 +10,7 @@ local UI_KEY = "__MicroHubUILib"
 local GAMES = {
 	{ name = "Warfare", path = "games/warfare.lua", placeIds = { 83902709332473 } },
 	{ name = "Gunfight Arena", path = "games/gunfight-arena.lua", placeIds = { 15514727567, 14518422161 } },
-	{ name = "Tha Bronx 3", path = "games/tha-bronx3.lua", placeIds = { 16472538603, 18642421777 } },
+	{ name = "Prison Life", path = "games/prison-life.lua", placeIds = { 155615604, 4669040 } },
 }
 
 local resolvedSha = nil
@@ -231,14 +231,13 @@ end
 
 local function unloadOld()
 	local genv = getGenv()
-	if typeof(genv.__ThaBronx3Unload) == "function" then
-		pcall(genv.__ThaBronx3Unload)
+	if typeof(genv.__PrisonLifeUnload) == "function" then
+		pcall(genv.__PrisonLifeUnload)
 	end
 	if typeof(genv.__GunfightArenaUnload) == "function" then
 		pcall(genv.__GunfightArenaUnload)
 	end
-	genv.__ThaBronx3Unload = nil
-	genv.__ThaBronx3FlyStep = nil
+	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
