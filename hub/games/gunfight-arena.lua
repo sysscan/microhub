@@ -569,21 +569,22 @@ local function netEncode(net: any, sample: any, value: any): any
 	return if ok then out else value
 end
 
-local function dbgDumpTable(tbl: any, depth: number?): string
+local function dbgDumpTable(tbl: any): string
 	if typeof(tbl) ~= "table" then return dbgShort(tbl) end
-	local d = depth or 0
-	if d > 2 then return "{...}" end
-	local parts = {}
-	for k, v in tbl do
-		local ks = if typeof(k) == "number" then string.format("[%d]", k) else tostring(k)
-		local vs = if typeof(v) == "table" then dbgDumpTable(v, d + 1) else dbgShort(v)
-		table.insert(parts, ks .. "=" .. vs)
-		if #parts >= 12 then
-			table.insert(parts, "...")
-			break
+	local ok, result = pcall(function()
+		local parts = {}
+		local n = 0
+		for k, v in pairs(tbl) do
+			n += 1
+			if n > 8 then table.insert(parts, "...") break end
+			local ks = tostring(k)
+			local vs = tostring(v)
+			if #vs > 40 then vs = string.sub(vs, 1, 37) .. "..." end
+			table.insert(parts, ks .. "=" .. vs)
 		end
-	end
-	return "{" .. table.concat(parts, ", ") .. "}"
+		return "{" .. table.concat(parts, ", ") .. "}"
+	end)
+	return if ok then result else "{ERR}"
 end
 
 local function saRewriteHitcheck(net: any, payload: { any }, part: BasePart): { any }
@@ -674,14 +675,18 @@ local function installNetworkHook(): boolean
 				end
 			elseif eventName == "Hitcheck" and part then
 				if Config.AimDebugger then
-					local oa, ob, oc, od = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-					print("[GFA-DBG] HC-orig", dbgShort(oa), "|", dbgShort(ob), "|", dbgShort(oc), "|", dbgDumpTable(od))
+					pcall(function()
+						local oa, ob, oc, od = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
+						print("[GFA-DBG] HC-orig", dbgShort(oa), "|", dbgShort(ob), "|", dbgShort(oc), "|", dbgDumpTable(od))
+					end)
 				end
 				payload = saRewriteHitcheck(net, payload, part)
 				if Config.AimDebugger then
-					local tgt = if part.Parent then part.Parent.Name else "?"
-					local ra, rb, rc, rd = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-					print("[GFA-DBG] HC-rewr ->", tgt, "|", dbgShort(ra), "|", dbgShort(rb), "|", dbgShort(rc), "|", dbgDumpTable(rd))
+					pcall(function()
+						local tgt = if part.Parent then part.Parent.Name else "?"
+						local ra, rb, rc, rd = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
+						print("[GFA-DBG] HC-rewr ->", tgt, "|", dbgShort(ra), "|", dbgShort(rb), "|", dbgShort(rc), "|", dbgDumpTable(rd))
+					end)
 				end
 			elseif eventName == "Fire" and Config.AimDebugger then
 				print("[GFA-DBG] SA-skip no target")
