@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "28-sa-silent"
+local GAME_BUILD = "29-sa-hooksafe"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -66,6 +66,7 @@ local aimFovCircle: any = nil
 local stickyChar: Model? = nil
 local stickyNeedsRelease = false
 local combatTargetPart: BasePart? = nil
+local saShotTarget: BasePart? = nil
 
 local function setAimFOV(value: number)
 	Config.AimFOV = math.clamp(math.floor(value), 20, 500)
@@ -449,14 +450,20 @@ local function updateCombatAim(dt: number)
 	end
 
 	combatTargetPart = nil
+	saShotTarget = nil
 	if Config.Aimbot and combatHoldActive() then
 		combatTargetPart = resolveAimTarget(origin)
 	elseif Config.SilentAim then
 		combatTargetPart = resolveSilentAimTarget(origin)
 	end
+	saShotTarget = if Config.SilentAim and combatTargetPart and combatTargetPart.Parent then combatTargetPart else nil
 	if not combatAimWanted() then
 		stickyChar = nil
 		stickyNeedsRelease = false
+	end
+
+	if Config.SilentAim and not Config.Aimbot and saShotTarget and isThirdPerson() then
+		setMouseHit(saShotTarget.Position)
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
@@ -524,7 +531,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "28-sa-silent"
+local DBG_HOOK_BUILD = "29-sa-hooksafe"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -1090,29 +1097,36 @@ local function saInjectHitables(hitables: any, part: BasePart): any
 			return hitables
 		end
 	end
-	table.insert(hitables, model)
-	return hitables
+	local out = table.create(#hitables + 1)
+	for i, entry in hitables do
+		out[i] = entry
+	end
+	out[#out + 1] = model
+	return out
+end
+
+local function saHookTarget(): BasePart?
+	local part = saShotTarget
+	if part and part.Parent then
+		return part
+	end
+	return nil
 end
 
 local function saRewriteFirePayload(payload: { any }): { any }
 	if not Config.SilentAim then
 		return payload
 	end
-	local part = resolveSilentAimTarget(aimOrigin())
+	local part = saHookTarget()
 	if not part then
 		return payload
-	end
-	if isThirdPerson() then
-		setMouseHit(part.Position)
 	end
 	local rawCf = payload[3]
 	local serverCf = dbgMaybeDecode(rawCf)
 	if typeof(serverCf) ~= "CFrame" then
 		return payload
 	end
-	local flame = dbgViewModelFlame()
-	local origin = if flame then flame.Position else serverCf.Position
-	local newCf = CFrame.new(origin, part.Position)
+	local newCf = CFrame.new(serverCf.Position, part.Position)
 	payload[3] = saMaybeEncode(rawCf, newCf)
 	sa.lastFireAt = os.clock()
 	return payload
@@ -1122,12 +1136,9 @@ local function saRewriteSyncShot(shotCf: CFrame, hitables: any): (CFrame, any)
 	if not Config.SilentAim then
 		return shotCf, hitables
 	end
-	local part = resolveSilentAimTarget(aimOrigin())
+	local part = saHookTarget()
 	if not part then
 		return shotCf, hitables
-	end
-	if isThirdPerson() then
-		setMouseHit(part.Position)
 	end
 	local newCf = CFrame.new(shotCf.Position, part.Position)
 	saLastSyncCf = newCf
@@ -1155,7 +1166,10 @@ local function combatHookVortexSync()
 	local ok = pcall(function()
 		vortexSyncOriginal = voltHookfunction(fireMethod, dbgWrapHook(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
 			if dbgFromGame() and Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
-				a4, a7 = saRewriteSyncShot(a4, a7)
+				local okRewrite, newCf, newHit = pcall(saRewriteSyncShot, a4, a7)
+				if okRewrite and typeof(newCf) == "CFrame" then
+					a4, a7 = newCf, newHit
+				end
 			end
 			local original = vortexSyncOriginal
 			if typeof(original) ~= "function" then
@@ -1215,7 +1229,10 @@ local function dbgHookNetworkApi()
 			local args = { ... }
 			if dbgFromGame() then
 				if Config.SilentAim and eventName == "Fire" then
-					args = saRewriteFirePayload(args)
+					local okRewrite, newArgs = pcall(saRewriteFirePayload, args)
+					if okRewrite and typeof(newArgs) == "table" then
+						args = newArgs
+					end
 				end
 				if Config.AimDebugger then
 					dbgMaybeBindRemote(self)
