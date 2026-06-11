@@ -2213,6 +2213,26 @@ local function restoreRapidFire(t2)
 	end
 end
 
+-- SettingsGun.FireRate is RPM; interval seconds (< 60) left by old bugs break equip.
+local function sanitizeSettingsGunFireRate(t2)
+	if not t2 or Config.RapidFire then
+		return
+	end
+	local settings = t2.Assets and t2.Assets.SettingsGun
+	if not settings then
+		return
+	end
+	local rpm = tonumber(settings.FireRate)
+	if not rpm or rpm <= 0 then
+		return
+	end
+	if rpm < 60 then
+		pcall(function()
+			settings.FireRate = 60 / rpm
+		end)
+	end
+end
+
 local function applyRapidFire(t2)
 	if not t2 then
 		return
@@ -2578,6 +2598,7 @@ applyCombatMods = function()
 	if t2 then
 		applyGrenadeMods(t2)
 
+		sanitizeSettingsGunFireRate(t2)
 		applyRapidFire(t2)
 		applyNoJam(t2)
 
@@ -2629,7 +2650,6 @@ local function installCombatHooks()
 
 	local ok, bridgeNet = pcall(require, Modules:WaitForChild("BridgeNet2"))
 	if ok and bridgeNet and bridgeNet.ReferenceBridge then
-		acDbg.installGameBridges(bridgeNet)
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
 		if confirmBridge and confirmBridge.Connect then
 			confirmBridge:Connect(function(payload)

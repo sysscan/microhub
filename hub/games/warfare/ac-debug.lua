@@ -369,13 +369,38 @@ function M.create(opts)
 	end
 
 	local function tapBridgeFire(bridgeName, bridge)
-		if not bridge or bridgeTaps[bridge] or typeof(bridge.Fire) ~= "function" then
+		if not bridge or bridgeTaps[bridge] then
+			return
+		end
+
+		-- Use BridgeNet OutboundMiddleware — replacing bridge.Fire breaks ClientBridge:Fire checks.
+		if typeof(bridge.OutboundMiddleware) == "function" then
+			local middlewareFn = function(payload)
+				pcall(onBridgeOutbound, bridgeName, payload)
+				return payload
+			end
+			local prevMiddleware = bridge._outboundMiddleware
+			local combined = { middlewareFn }
+			if typeof(prevMiddleware) == "table" then
+				for _, fn in prevMiddleware do
+					table.insert(combined, fn)
+				end
+			end
+			bridge:OutboundMiddleware(combined)
+			bridgeTaps[bridge] = {
+				name = bridgeName,
+				prevMiddleware = prevMiddleware,
+			}
+			return
+		end
+
+		if typeof(bridge.Fire) ~= "function" then
 			return
 		end
 		local oldFire = bridge.Fire
 		bridgeTaps[bridge] = { name = bridgeName, oldFire = oldFire }
 		function bridge.Fire(self, payload, ...)
-			onBridgeOutbound(bridgeName, payload)
+			pcall(onBridgeOutbound, bridgeName, payload)
 			return oldFire(self, payload, ...)
 		end
 	end
@@ -385,14 +410,41 @@ function M.create(opts)
 			return
 		end
 		local conn = bridge:Connect(function(payload, ...)
-			onBridgeInbound(bridgeName, payload)
+			pcall(onBridgeInbound, bridgeName, payload)
 		end)
 		table.insert(bridgeInboundConns, conn)
-		table.insert(conns, conn)
+	end
+
+	local function restoreBridgeTaps()
+		for bridge, tap in bridgeTaps do
+			if tap.oldFire then
+				bridge.Fire = tap.oldFire
+			elseif tap.name then
+				bridge._outboundMiddleware = tap.prevMiddleware
+			end
+		end
+		table.clear(bridgeTaps)
+	end
+
+	local function uninstallGameBridges()
+		if not bridgesInstalled then
+			return
+		end
+		restoreBridgeTaps()
+		for _, conn in bridgeInboundConns do
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+		table.clear(bridgeInboundConns)
+		bridgesInstalled = false
 	end
 
 	local function installGameBridges(bridgeNet)
 		if bridgesInstalled or not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" then
+			return
+		end
+		if not Config.DebugAC then
 			return
 		end
 		bridgesInstalled = true
@@ -524,26 +576,53 @@ function M.create(opts)
 			game,
 			"__namecall",
 			wrap(function(self, ...)
-				if Config.DebugAC then
-					local method = getnamecallmethod()
-					if typeof(checkcaller) == "function" and checkcaller() then
-						return oldNamecall(self, ...)
-					end
-					if Config.DebugRemotes and (method == "FireServer" or method == "InvokeServer") then
-						if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") or self:IsA("UnreliableRemoteEvent") then
-							if isFrameworkRemote(self) then
-								logFrameworkRemote("OUT", self, { ... })
-							end
+				if not Config.DebugAC then
+					return oldNamecall(self, ...)
+				end
+				if typeof(checkcaller) == "function" and checkcaller() then
+					return oldNamecall(self, ...)
+				end
+
+				local method = getnamecallmethod()
+				local shouldLogRemote = Config.DebugRemotes
+					and (method == "FireServer" or method == "InvokeServer")
+				local shouldLogKick = Config.DebugKicks
+					and (
+						(method == "Kick" and self == LocalPlayer)
+						or (
+							(method == "Teleport" or method == "TeleportToPlaceInstance")
+							and self == TeleportService
+						)
+					)
+
+				if not shouldLogRemote and not shouldLogKick then
+					return oldNamecall(self, ...)
+				end
+
+				-- InvokeServer must complete before any logging; IsA during namecall breaks some executors.
+				local results = { oldNamecall(self, ...) }
+
+				pcall(function()
+					if shouldLogRemote then
+						local isRemote = false
+						pcall(function()
+							isRemote = self:IsA("RemoteEvent")
+								or self:IsA("RemoteFunction")
+								or self:IsA("UnreliableRemoteEvent")
+						end)
+						if isRemote and isFrameworkRemote(self) then
+							logFrameworkRemote("OUT", self, { ... })
 						end
-					elseif Config.DebugKicks then
+					elseif shouldLogKick then
 						if method == "Kick" and self == LocalPlayer then
 							logKick("LocalPlayer:Kick", { ... })
-						elseif (method == "Teleport" or method == "TeleportToPlaceInstance") and self == TeleportService then
+						else
 							logKick("TeleportService:" .. method, { ... })
 						end
 					end
-				end
-				return oldNamecall(self, ...)
+				end)
+
+				return table.unpack(results)
 			end)
 		)
 	end
@@ -632,6 +711,18 @@ function M.create(opts)
 
 	local overlayConn = nil
 
+	local function findDescendantByName(root, name)
+		if not root then
+			return nil
+		end
+		for _, descendant in root:GetDescendants() do
+			if descendant.Name == name then
+				return descendant
+			end
+		end
+		return nil
+	end
+
 	local function scanGameSurfaces()
 		push("SCAN", "Warfare security surfaces", true)
 
@@ -640,8 +731,6 @@ function M.create(opts)
 			"ReplicatedStorage.Framework.Modules.BulletSimulator",
 			"ReplicatedStorage.Framework.Modules.MagazineController",
 			"ReplicatedStorage.Framework.Remotes.GetSecureSettings",
-			"ReplicatedStorage.Game.Modules.TeamsService",
-			"ReplicatedStorage.Game.Modules.Packets",
 		}
 		for _, path in paths do
 			local inst = game
@@ -651,32 +740,59 @@ function M.create(opts)
 			push("SCAN", path .. " → " .. (if inst then inst.ClassName else "MISSING"), true)
 		end
 
-		local weaponScript = Players.LocalPlayer:FindFirstChild("PlayerScripts")
-		if weaponScript then
-			weaponScript = weaponScript:FindFirstChild("WeaponClient")
-			if weaponScript then
-				weaponScript = weaponScript:FindFirstChild("WeaponClient")
-			end
-			push(
-				"SCAN",
-				"WeaponClient main → " .. (if weaponScript then weaponScript.ClassName else "MISSING"),
-				true
-			)
-		end
+		local gameRoot = ReplicatedStorage:FindFirstChild("Game")
+		local teams = findDescendantByName(gameRoot, "TeamsService")
+		local packets = findDescendantByName(gameRoot, "Packets")
+		push(
+			"SCAN",
+			"TeamsService → " .. (if teams then teams:GetFullName() else "MISSING"),
+			true
+		)
+		push(
+			"SCAN",
+			"Packets → " .. (if packets then packets:GetFullName() else "MISSING"),
+			true
+		)
+
+		local playerScripts = Players.LocalPlayer:FindFirstChild("PlayerScripts")
+		local weaponClient = playerScripts and findDescendantByName(playerScripts, "WeaponClient")
+		push(
+			"SCAN",
+			"WeaponClient → " .. (if weaponClient then weaponClient:GetFullName() else "MISSING"),
+			true
+		)
 
 		return paths
+	end
+
+	local function requireBridgeNet()
+		local framework = ReplicatedStorage:FindFirstChild("Framework")
+		local modules = framework and framework:FindFirstChild("Modules")
+		local bridgeMod = modules and modules:FindFirstChild("BridgeNet2")
+		if not bridgeMod then
+			return nil
+		end
+		local ok, bridgeNet = pcall(require, bridgeMod)
+		if ok then
+			return bridgeNet
+		end
+		return nil
 	end
 
 	local function sync()
 		if Config.DebugAC then
 			ensureHooks()
+			installGameBridges(requireBridgeNet())
 			ensureOverlay()
 			ensureOverlayLoop()
 			if overlayGui then
 				overlayGui.Enabled = Config.DebugOverlay
 			end
-		elseif overlayGui then
-			overlayGui.Enabled = false
+		else
+			uninstallGameBridges()
+			if overlayGui then
+				overlayGui.Enabled = false
+			end
 		end
 	end
 
@@ -734,25 +850,14 @@ function M.create(opts)
 		push("PIPE", string.format("pending unmatched shots=%d / %d", open, #pendingShots), true)
 	end
 
-	local function restoreBridgeTaps()
-		for bridge, tap in bridgeTaps do
-			if tap.oldFire then
-				bridge.Fire = tap.oldFire
-			end
-		end
-		table.clear(bridgeTaps)
-	end
-
 	local function unload()
+		uninstallGameBridges()
 		for _, conn in ipairs(conns) do
 			pcall(function()
 				conn:Disconnect()
 			end)
 		end
 		table.clear(conns)
-		table.clear(bridgeInboundConns)
-		restoreBridgeTaps()
-		bridgesInstalled = false
 		logConn = nil
 		overlayConn = nil
 		hooksReady = false
