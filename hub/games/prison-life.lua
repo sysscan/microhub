@@ -862,17 +862,16 @@ local function installGunHooks()
 	end
 
 	if Config.GunMods and gun.Equip and not hookedEquip then
-		oldEquipFn = gun.Equip
-		hookedEquip = hookfunction(gun.Equip, function(...)
+		oldEquipFn = hookfunction(gun.Equip, function(...)
 			local res = table.pack(oldEquipFn(...))
 			modifyGunData()
 			return table.unpack(res, 1, res.n)
 		end)
+		hookedEquip = true
 	end
 
 	if Config.AutoReload and gun.Shoot and not hookedShoot then
-		oldShootFn = gun.Shoot
-		hookedShoot = hookfunction(gun.Shoot, function(...)
+		oldShootFn = hookfunction(gun.Shoot, function(...)
 			local res = table.pack(oldShootFn(...))
 			local tool = debug.getupvalue(oldShootFn, 1)
 			if tool and tool:GetAttribute("Local_CurrentAmmo") and tool:GetAttribute("Local_CurrentAmmo") <= 0 then
@@ -887,6 +886,7 @@ local function installGunHooks()
 			end
 			return table.unpack(res, 1, res.n)
 		end)
+		hookedShoot = true
 	end
 
 	if Config.SilentAim and gun.Bullet and not hookedBullet then
