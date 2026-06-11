@@ -13,11 +13,14 @@ local UserInputService = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
 local StarterGui = game:GetService("StarterGui")
+local MarketplaceService = game:GetService("MarketplaceService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "6-anticheat-hits"
+local GAME_BUILD = "7-vape-port"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local MAX_SAFE_WALKSPEED = 24
@@ -59,6 +62,12 @@ local Config = {
 	SilentAimHead = true,
 	SilentAimTeamCheck = true,
 	SilentAimWallCheck = true,
+	SilentAimMode = "Mouse",
+	SilentAimRange = 150,
+	SilentAimHitChance = 85,
+	SilentAimHeadshotChance = 65,
+	SilentAimWallbang = false,
+	SilentAimRangeCircle = false,
 	AutoReload = false,
 	AutoReloadSwap = false,
 	AutoFire = false,
@@ -91,6 +100,26 @@ local Config = {
 	ESPAllyColor = Color3.fromRGB(72, 168, 255),
 	ESPNeutralColor = Color3.fromRGB(180, 180, 180),
 	ESPHostileColor = Color3.fromRGB(255, 56, 56),
+	AntiInvisible = false,
+	VehicleFly = false,
+	VehicleFlyMode = "CFrame",
+	VehicleFlySpeed = 60,
+	CheatDetector = false,
+	CameraPhase = false,
+	BulletTracers = false,
+	BulletTracerDrawing = false,
+	BulletTracerLifetime = 0.2,
+	BulletTracerFade = true,
+	BulletTracerColor = Color3.fromRGB(255, 200, 80),
+	DamageIndicator = false,
+	HitSound = false,
+	KillSound = false,
+	Viewmodel = false,
+	ViewmodelDepth = 3,
+	ViewmodelHorizontal = 2,
+	ViewmodelVertical = -1.5,
+	ViewmodelSway = true,
+	Crosshair = false,
 }
 
 local UILib = shared.__MicroHubUILib
@@ -103,6 +132,7 @@ local canHook = typeof(hookfunction) == "function"
 	and typeof(getconnections) == "function"
 	and typeof(debug) == "table"
 	and typeof(debug.getupvalue) == "function"
+local canDebug = canHook and typeof(debug.setstack) == "function" and typeof(debug.setconstant) == "function"
 
 local WHITE = Color3.fromRGB(248, 250, 252)
 local DIM = Color3.fromRGB(148, 156, 168)
@@ -150,6 +180,52 @@ local spawnTimes: { [Model]: number } = {}
 local bulletRayParams = RaycastParams.new()
 bulletRayParams.CollisionGroup = "ClientBullet"
 bulletRayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local aimRand = Random.new()
+local aimTimer, shootTimer, aimVec = os.clock(), os.clock(), Vector3.zero
+local detonateTicks = 0
+local gamepasses: { [string]: boolean } = {}
+local sortedPickups = {
+	Guard = { [1] = "MP5", [2] = "Remington 870" },
+	Prisoner = { [1] = "MP5", [2] = "Remington 870" },
+	Criminal = { [1] = "AK-47", [2] = "Remington 870" },
+}
+local GunTracers: any = nil
+pcall(function()
+	GunTracers = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("GunTracers"))
+end)
+
+local TracerHook = { Hooks = {} :: { { string, (any) -> boolean, number } } }
+local oldTracerBullet: any = nil
+local oldTracerSniper: any = nil
+local tracerDrawingObjs: { [any]: { Vector3, Vector3, number } } = {}
+local antiInvisibleThreads: { [any]: thread } = {}
+local animWhitelist: { [string]: boolean } = {}
+local cheatFlags: { [number]: { [string]: number } } = {}
+local cheatFlagged: { [number]: boolean } = {}
+local vehicleFlyWelds: { Instance } = {}
+local vehicleFlyUp, vehicleFlyDown = 0, 0
+local vehicleFlyPart: BasePart? = nil
+local cameraPhaseFn: any = nil
+local viewmodelTool: Tool? = nil
+local viewmodelClone: Tool? = nil
+local viewmodelHandle: BasePart? = nil
+local viewmodelRealTool: Tool? = nil
+local damageTargetChar: Model? = nil
+local damageTargetHealth = 0
+local damageTargetTimer = 0
+local damageIndicatorPart: BasePart? = nil
+local damageIndicatorThread: thread? = nil
+local silentAimCircle: any = nil
+local overlapBulletParams = OverlapParams.new()
+overlapBulletParams.CollisionGroup = "ClientBullet"
+overlapBulletParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local OriginScanner = { Cache = {} :: { [Instance]: { any } } }
+local originRayParams = RaycastParams.new()
+originRayParams.CollisionGroup = "ClientBullet"
+originRayParams.FilterType = Enum.RaycastFilterType.Exclude
+OriginScanner.Ray = originRayParams
 
 local function stopLoop(threadRef: thread?)
 	if threadRef then
@@ -287,6 +363,309 @@ end
 
 local function sameTeam(a: Player, b: Player): boolean
 	return a.Team ~= nil and b.Team ~= nil and a.Team == b.Team
+end
+
+local function getMousePosition(): Vector2
+	if UserInputService.TouchEnabled then
+		return Camera.ViewportSize / 2
+	end
+	return UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
+end
+
+local function checkPoint(pos: Vector3, params: OverlapParams): boolean
+	for _, part in workspace:GetPartBoundsInRadius(pos, 0, params) do
+		if part.CanCollide and (part:GetClosestPointOnSurface(pos) - pos).Magnitude <= 0 then
+			return false
+		end
+	end
+	return true
+end
+
+local function updateOriginIgnore()
+	local ignore = { LocalPlayer.Character }
+	for _, player in Players:GetPlayers() do
+		if player ~= LocalPlayer and player.Character then
+			table.insert(ignore, player.Character)
+		end
+	end
+	originRayParams.FilterDescendantsInstances = ignore
+	overlapBulletParams.FilterDescendantsInstances = ignore
+end
+
+local ORIGIN_POSITIONS = {
+	Vector3.new(0, 1, 0), Vector3.new(1, 0, 0), Vector3.new(0.7, -0.5, -0.5),
+	Vector3.new(-0.1, -0.8, -0.8), Vector3.new(-0.8, -0.5, -0.5), Vector3.new(-1, 0, 0),
+	Vector3.new(-0.8, 0.4, 0.4), Vector3.new(0, 0.7, 0.7), Vector3.new(0.7, 0.5, 0.5),
+	Vector3.new(0.7, 0, -0.8), Vector3.new(-0.1, 0, -1), Vector3.new(0, 0, 1),
+	Vector3.new(0, -1, 0),
+}
+
+function OriginScanner:Scan(origin: Vector3, target: Vector3, extra: Vector3?, part: Instance)
+	if self.Cache[part] then
+		return table.unpack(self.Cache[part])
+	end
+	local scanPositions = {}
+	local hitboxPositions = {}
+	local diff = CFrame.lookAt(origin * Vector3.new(1, 0, 1), target * Vector3.new(1, 0, 1)).LookVector
+	if extra then
+		if (origin - extra).Magnitude < 7.5 then
+			table.insert(scanPositions, extra)
+		else
+			table.insert(hitboxPositions, target)
+			for _, normal in Enum.NormalId:GetEnumItems() do
+				local vec = Vector3.fromNormalId(normal)
+				if (vec * Vector3.new(1, 0, 1)):Dot(-diff) > -0.5 then
+					local pos = target + vec * 6
+					if checkPoint(pos, overlapBulletParams) then
+						table.insert(hitboxPositions, pos)
+					end
+				end
+			end
+		end
+	end
+	if #scanPositions <= 0 then
+		for _, offset in ORIGIN_POSITIONS do
+			if (offset * Vector3.new(1, 0, 1)):Dot(diff) > -0.5 then
+				table.insert(scanPositions, origin + offset * 6)
+			end
+		end
+	end
+	if #hitboxPositions > 0 then
+		for _, hitbox in hitboxPositions do
+			for _, pos in scanPositions do
+				if workspace:Raycast(hitbox, pos - hitbox, originRayParams) == nil and checkPoint(pos, overlapBulletParams) then
+					self.Cache[part] = { pos, hitbox }
+					return pos, hitbox
+				end
+			end
+		end
+	else
+		for _, pos in scanPositions do
+			if workspace:Raycast(target, pos - target, originRayParams) == nil and checkPoint(pos, overlapBulletParams) then
+				self.Cache[part] = { pos }
+				return pos
+			end
+		end
+	end
+end
+
+local function wallcheck(origin: Vector3, position: Vector3, wallbang: Vector3?, part: Instance?): boolean
+	local ray = workspace:Raycast(position, origin - position, originRayParams)
+	if ray then
+		return not wallbang or not OriginScanner:Scan(wallbang, position, ray.Position + ray.Normal * 0.01, part or workspace)
+	end
+	return false
+end
+
+local function getPlayerPart(player: Player, partName: string): BasePart?
+	local char = getCharacter(player)
+	if not char then
+		return nil
+	end
+	local part = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
+	return if part and part:IsA("BasePart") then part else nil
+end
+
+local function selectCombatTarget(settings: {
+	origin: Vector3,
+	range: number,
+	rangePosition: number?,
+	attackCheck: boolean,
+	wallcheck: boolean?,
+	wallbang: Vector3?,
+	part: string,
+	mode: string,
+}): (Player?, BasePart?)
+	local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not localRoot or not localRoot:IsA("BasePart") then
+		return nil, nil
+	end
+	local mousePos = getMousePosition()
+	local origin = settings.origin
+	local bestPlayer: Player? = nil
+	local bestPart: BasePart? = nil
+	local bestMag = math.huge
+
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then
+			continue
+		end
+		if Config.SilentAimTeamCheck and sameTeam(player, LocalPlayer) then
+			continue
+		end
+		local char = getCharacter(player)
+		if not char or not isVulnerable(player, char, settings.attackCheck) then
+			continue
+		end
+		local part = getPlayerPart(player, settings.part)
+		if not part then
+			continue
+		end
+		local worldMag = (part.Position - origin).Magnitude
+		if settings.rangePosition and worldMag > settings.rangePosition then
+			continue
+		end
+		local screenMag = math.huge
+		if settings.mode == "Mouse" then
+			local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+			if not onScreen or screenPos.Z <= 0 then
+				continue
+			end
+			screenMag = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+			if screenMag > settings.range then
+				continue
+			end
+		else
+			local dist = (part.Position - localRoot.Position).Magnitude
+			if dist > settings.range then
+				continue
+			end
+			screenMag = dist
+		end
+		if settings.wallcheck and wallcheck(origin, part.Position, settings.wallbang, part) then
+			continue
+		end
+		if screenMag < bestMag then
+			bestMag = screenMag
+			bestPlayer = player
+			bestPart = part
+		end
+	end
+	return bestPlayer, bestPart
+end
+
+local function getCombatTarget(origin: Vector3, gunData: any?): (Player?, BasePart?)
+	if not Config.AutoFire and aimRand:NextNumber(0, 100) > Config.SilentAimHitChance then
+		return nil, nil
+	end
+	local headChance = if Config.AutoFire then 100 else Config.SilentAimHeadshotChance
+	local partName = if Config.SilentAimHead and aimRand:NextNumber(0, 100) < headChance then "Head" else "HumanoidRootPart"
+	local limit = if gunData and gunData.Range then gunData.Range else 1000
+	local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	return selectCombatTarget({
+		origin = origin,
+		range = if Config.SilentAimMode == "Position" then math.min(Config.SilentAimRange, limit) else Config.SilentAimRange,
+		rangePosition = limit,
+		attackCheck = not gunData or gunData.Behavior ~= "Taser",
+		wallcheck = Config.SilentAimWallCheck,
+		wallbang = if Config.SilentAimWallbang and localRoot and localRoot:IsA("BasePart") then localRoot.Position else nil,
+		part = partName,
+		mode = Config.SilentAimMode,
+	})
+end
+
+local Spring = {}
+Spring.__index = Spring
+function Spring.new(props: { [string]: any }?)
+	props = props or {}
+	return setmetatable({
+		Target = Vector3.zero,
+		Position = Vector3.zero,
+		Velocity = Vector3.zero,
+		Mass = props.Mass or 5,
+		Force = props.Force or 50,
+		Damping = props.Damping or 4,
+		Speed = props.Speed or 4,
+	}, Spring)
+end
+function Spring:Update(dt: number): Vector3
+	local iterations = math.max(1, math.round(dt / ((1 / 60) / 8)))
+	local scaledDt = dt * self.Speed / iterations
+	for _ = 1, iterations do
+		local force = self.Target - self.Position
+		local acceleration = (force * self.Force) / self.Mass - self.Velocity * self.Damping
+		self.Velocity += acceleration * scaledDt
+		self.Position += self.Velocity * scaledDt
+	end
+	return self.Position
+end
+
+local moveSpring = Spring.new()
+local aimSpring = Spring.new({ Speed = 15 })
+
+local function tracerHookDispatch(...)
+	if debug.info(3, "s") ~= "ReplicatedStorage.Scripts.Replication.ClientReplicator" then
+		for _, hook in TracerHook.Hooks do
+			if hook[2](...) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+function TracerHook:Add(key: string, fn: (any) -> boolean, priority: number?)
+	if not canHook or not GunTracers then
+		return
+	end
+	table.insert(self.Hooks, { key, fn, priority or 0 })
+	table.sort(self.Hooks, function(a, b)
+		return a[3] < b[3]
+	end)
+	if GunTracers and not oldTracerBullet then
+		oldTracerBullet = hookfunction(GunTracers.createBullet, function(...)
+			if tracerHookDispatch(...) then
+				return
+			end
+			return oldTracerBullet(...)
+		end)
+		oldTracerSniper = hookfunction(GunTracers.createSniper, function(...)
+			if tracerHookDispatch(...) then
+				return
+			end
+			return oldTracerSniper(...)
+		end)
+	end
+end
+
+function TracerHook:Remove(key: string)
+	for i, hook in self.Hooks do
+		if hook[1] == key then
+			table.remove(self.Hooks, i)
+			break
+		end
+	end
+	if #self.Hooks == 0 and GunTracers and oldTracerBullet then
+		if typeof(restorefunction) == "function" then
+			restorefunction(GunTracers.createBullet)
+			restorefunction(GunTracers.createSniper)
+		else
+			hookfunction(GunTracers.createBullet, oldTracerBullet)
+			hookfunction(GunTracers.createSniper, oldTracerSniper)
+		end
+		oldTracerBullet = nil
+		oldTracerSniper = nil
+	end
+end
+
+local function flagCheater(player: Player, flagType: string, limit: number)
+	if cheatFlagged[player.UserId] then
+		return
+	end
+	if not cheatFlags[player.UserId] then
+		cheatFlags[player.UserId] = {}
+	end
+	local flags = cheatFlags[player.UserId]
+	flags[flagType] = (flags[flagType] or 0) + 1
+	if flags[flagType] > limit then
+		cheatFlagged[player.UserId] = true
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {
+				Title = "Cheat Detector",
+				Text = player.Name .. " may be cheating (" .. flagType .. ")",
+				Duration = 8,
+			})
+		end)
+	end
+end
+
+local function playSoundId(soundId: string, volume: number)
+	local sound = Instance.new("Sound")
+	sound.SoundId = soundId
+	sound.Volume = volume
+	sound.PlayOnRemove = true
+	sound.Parent = workspace
+	sound:Destroy()
 end
 
 local function getRelation(player: Player, char: Model): string
@@ -892,63 +1271,50 @@ local function restoreGunData()
 	gunDataBackup = nil
 end
 
-local function hasLineOfSight(origin: Vector3, targetPos: Vector3, targetChar: Model?): boolean
-	if not Config.SilentAimWallCheck then
-		return true
+local function hookSilentBullet(...)
+	local args = table.pack(...)
+	local origin = args[1]
+	if typeof(origin) ~= "Vector3" then
+		return oldBulletFn(table.unpack(args, 1, args.n))
 	end
-	local ignore = { LocalPlayer.Character }
-	if targetChar then
-		table.insert(ignore, targetChar)
+	local gunData = getGunData()
+	local _, targetPart = getCombatTarget(origin, gunData)
+	if not targetPart then
+		return oldBulletFn(table.unpack(args, 1, args.n))
 	end
-	bulletRayParams.FilterDescendantsInstances = ignore
-	local direction = targetPos - origin
-	if direction.Magnitude <= 0 then
-		return true
-	end
-	return workspace:Raycast(origin, direction, bulletRayParams) == nil
-end
-
-local function getSilentTarget(origin: Vector3, fov: number, gunData: any?): BasePart?
-	local mousePos = UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
-	local maxRange = if gunData and gunData.Range then gunData.Range else 1000
-	local attackCheck = not gunData or gunData.Behavior ~= "Taser"
-	local partName = if Config.SilentAimHead then "Head" else "HumanoidRootPart"
-	local bestPart: BasePart? = nil
-	local bestDist = fov * fov
-
-	for _, player in Players:GetPlayers() do
-		if player == LocalPlayer then
-			continue
+	args[2] = targetPart.Position
+	aimTimer = os.clock() + 0.3
+	aimVec = args[2]
+	if Config.SilentAimWallbang then
+		local ignore = { LocalPlayer.Character }
+		for _, player in Players:GetPlayers() do
+			if player.Character then
+				table.insert(ignore, player.Character)
+			end
 		end
-		if Config.SilentAimTeamCheck and sameTeam(player, LocalPlayer) then
-			continue
-		end
-		local char = getCharacter(player)
-		if not char or not isVulnerable(player, char, attackCheck) then
-			continue
-		end
-		local part = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
-		if not part or not part:IsA("BasePart") then
-			continue
-		end
-		if (part.Position - origin).Magnitude > maxRange then
-			continue
-		end
-		if not hasLineOfSight(origin, part.Position, char) then
-			continue
-		end
-		local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-		if not onScreen or screenPos.Z <= 0 then
-			continue
-		end
-		local distSq = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude ^ 2
-		if distSq < bestDist then
-			bestDist = distSq
-			bestPart = part
+		bulletRayParams.FilterDescendantsInstances = ignore
+		local ray = workspace:Raycast(args[2], origin - args[2], bulletRayParams)
+		if ray then
+			local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if localRoot and localRoot:IsA("BasePart") then
+				local newOrigin, hitbox = OriginScanner:Scan(localRoot.Position, args[2], ray.Position + ray.Normal * 0.01, targetPart)
+				if newOrigin and canDebug then
+					pcall(function()
+						for i = 1, 40 do
+							if debug.getstack(3, i) == origin then
+								debug.setstack(3, i, newOrigin)
+							end
+						end
+					end)
+					args[1] = newOrigin
+					if hitbox then
+						return targetPart, hitbox
+					end
+				end
+			end
 		end
 	end
-
-	return bestPart
+	return oldBulletFn(table.unpack(args, 1, args.n))
 end
 
 local function installGunHooks()
@@ -991,19 +1357,7 @@ local function installGunHooks()
 	end
 
 	if Config.SilentAim and gun.Bullet and not hookedBullet then
-		oldBulletFn = hookfunction(gun.Bullet, function(...)
-			local args = table.pack(...)
-			local origin = args[1]
-			if typeof(origin) ~= "Vector3" then
-				return oldBulletFn(table.unpack(args, 1, args.n))
-			end
-			local gunData = getGunData()
-			local target = getSilentTarget(origin, Config.SilentAimFOV, gunData)
-			if target then
-				args[2] = target.Position
-			end
-			return oldBulletFn(table.unpack(args, 1, args.n))
-		end)
+		oldBulletFn = hookfunction(gun.Bullet, hookSilentBullet)
 		hookedBullet = true
 	end
 end
@@ -1058,11 +1412,11 @@ local function tryAutoFire()
 	local data = getGunData()
 	local head = char:FindFirstChild("Head")
 	local origin = if head and head:IsA("BasePart") then head.Position else char:GetPivot().Position
-	local target = getSilentTarget(origin, Config.SilentAimFOV, data)
+	local _, target = getCombatTarget(origin, data)
 	if not target then
 		return
 	end
-	if data and data.Behavior == "Taser" and target.Parent:GetAttribute("Tased") then
+	if data and data.Behavior == "Taser" and target.Parent and target.Parent:GetAttribute("Tased") then
 		return
 	end
 	local input = {
@@ -1191,8 +1545,11 @@ local function registerPickup(obj: Instance, touchGiver: boolean)
 	if pickupSeen[obj] then
 		return
 	end
+	if not obj:IsA("Model") or obj.Name == "Model" or not obj:GetAttribute("ToolName") then
+		return
+	end
 	pickupSeen[obj] = true
-	table.insert(pickupItems, { obj, touchGiver })
+	table.insert(pickupItems, { obj, touchGiver or obj.Name == "TouchGiver" })
 end
 
 local function unregisterPickup(obj: Instance)
@@ -1237,13 +1594,21 @@ local function runAutoArmor()
 		return
 	end
 	for _, vest in armorPickups do
-		if vest.Parent and (vest:GetPivot().Position - root.Position).Magnitude < 10 then
-			local part = vest:FindFirstChildWhichIsA("BasePart", true)
-			if part then
-				pcall(function()
-					interact:InvokeServer(part)
-				end)
-			end
+		if not vest.Parent or (vest:GetPivot().Position - root.Position).Magnitude >= 10 then
+			continue
+		end
+		if vest.Name == "Light Vest" and gamepasses[if LocalPlayer.Team == TeamCriminals then "Mafia" else "Riot Police"] then
+			continue
+		end
+		local required = vest:GetAttribute("RequiredGamepass")
+		if required and not gamepasses[required] then
+			continue
+		end
+		local part = vest:FindFirstChildWhichIsA("BasePart", true)
+		if part then
+			pcall(function()
+				interact:InvokeServer(part)
+			end)
 		end
 	end
 end
@@ -1268,28 +1633,41 @@ local function runAutoDetonate()
 		return
 	end
 
-	local targetRoot: BasePart? = nil
-	for _, ent in getEntitiesInRange(25, "combat") do
-		targetRoot = ent.root
-		break
-	end
-	if not targetRoot then
+	local c4Pos = if localC4:IsA("BasePart") then localC4.Position else localC4:GetPivot().Position
+	local _, targetPart = selectCombatTarget({
+		origin = c4Pos,
+		range = 25,
+		rangePosition = 25,
+		attackCheck = false,
+		wallcheck = false,
+		wallbang = nil,
+		part = "HumanoidRootPart",
+		mode = "Position",
+	})
+	if not targetPart then
+		detonateTicks = 0
 		return
 	end
 
-	if Config.AutoDetonateSafe then
-		local rayParams = RaycastParams.new()
-		rayParams.FilterType = Enum.RaycastFilterType.Exclude
-		rayParams.FilterDescendantsInstances = { char, targetRoot.Parent, localC4 }
-		local toTarget = targetRoot.Position - localC4:GetPivot().Position
-		if workspace:Raycast(localC4:GetPivot().Position, toTarget, rayParams) then
-			return
-		end
-		local toSelf = root.Position - localC4:GetPivot().Position
-		if not workspace:Raycast(localC4:GetPivot().Position, toSelf, rayParams) and toSelf.Magnitude <= 40 then
-			return
-		end
+	local rayParams = RaycastParams.new()
+	rayParams.CollisionGroup = "ClientBullet"
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = { targetPart.Parent, char, localC4 }
+	local blocked = workspace:Raycast(c4Pos, targetPart.Position - c4Pos, rayParams)
+	if Config.AutoDetonateSafe and not blocked then
+		local rootDiff = root.Position - c4Pos
+		blocked = not (workspace:Raycast(c4Pos, rootDiff, rayParams) or rootDiff.Magnitude > 40)
 	end
+	if blocked then
+		detonateTicks = 0
+		return
+	end
+
+	detonateTicks += 1
+	if detonateTicks <= 3 then
+		return
+	end
+	detonateTicks = 0
 
 	local equipped = char:FindFirstChildWhichIsA("Tool")
 	if equipped then
@@ -1352,12 +1730,38 @@ local function runAutoPickup()
 			continue
 		end
 		local toolName = model:GetAttribute("ToolName") or model.Name
-		if typeof(toolName) == "string" and not backpack:FindFirstChild(toolName) then
-			revealGiver(model)
-			pcall(function()
-				giverPressed:FireServer(model)
-			end)
+		if typeof(toolName) ~= "string" or backpack:FindFirstChild(toolName) then
+			continue
 		end
+		if entry[2] then
+			local teamKey = if LocalPlayer.Team == TeamGuards
+				then "Guard"
+				elseif LocalPlayer.Team == TeamCriminals then "Criminal"
+				else "Prisoner"
+			local wanted = sortedPickups[teamKey]
+			local skip = false
+			local indices = {}
+			for idx in wanted do
+				table.insert(indices, idx)
+			end
+			table.sort(indices)
+			for _, idx in indices do
+				local itemName = wanted[idx]
+				if not backpack:FindFirstChild(itemName) then
+					if toolName ~= itemName then
+						skip = true
+					end
+					break
+				end
+			end
+			if skip then
+				continue
+			end
+		end
+		revealGiver(model)
+		pcall(function()
+			giverPressed:FireServer(model)
+		end)
 	end
 end
 
@@ -1392,6 +1796,539 @@ local function runVehicleSpeed()
 		if child:IsA("VehicleSeat") then
 			child.MaxSpeed = Config.VehicleSpeedValue
 			child.Torque = 4
+		end
+	end
+end
+
+local function syncSilentAimCircle()
+	if not canDraw then
+		return
+	end
+	if Config.SilentAim and Config.SilentAimRangeCircle and Config.SilentAimMode == "Mouse" then
+		if not silentAimCircle then
+			silentAimCircle = Drawing.new("Circle")
+			silentAimCircle.NumSides = 64
+			silentAimCircle.Thickness = 1
+			silentAimCircle.Filled = false
+			silentAimCircle.Color = Color3.fromRGB(255, 255, 255)
+			silentAimCircle.Transparency = 0.5
+		end
+		silentAimCircle.Position = getMousePosition()
+		silentAimCircle.Radius = Config.SilentAimRange
+		silentAimCircle.Visible = true
+	elseif silentAimCircle then
+		silentAimCircle.Visible = false
+	end
+end
+
+local function syncBulletTracers(enabled: boolean)
+	if enabled and GunTracers then
+		TracerHook:Add("BulletTracers", function(origin, dir)
+			local startPos = origin
+			if viewmodelClone then
+				local muzzle = viewmodelClone:FindFirstChild("Muzzle", true)
+				if muzzle and muzzle:IsA("BasePart") then
+					startPos = muzzle.Position
+				end
+			end
+			local velocity = CFrame.lookAt(startPos, dir).LookVector * 1000
+			if Config.BulletTracerDrawing and canDraw then
+				local line = Drawing.new("Line")
+				line.Thickness = 2
+				line.Color = Config.BulletTracerColor
+				tracerDrawingObjs[line] = { startPos, startPos + velocity, os.clock() }
+				task.delay(Config.BulletTracerLifetime, function()
+					tracerDrawingObjs[line] = nil
+					pcall(function()
+						line.Visible = false
+						line:Remove()
+					end)
+				end)
+			else
+				local part = Instance.new("Part")
+				part.Size = Vector3.new(0.1, 0.1, velocity.Magnitude)
+				part.CFrame = CFrame.lookAt(startPos + velocity / 2, startPos + velocity)
+				part.CanCollide = false
+				part.CanQuery = false
+				part.Anchored = true
+				part.Color = Config.BulletTracerColor
+				part.Transparency = 0.35
+				part.Parent = workspace
+				if Config.BulletTracerFade then
+					TweenService:Create(part, TweenInfo.new(Config.BulletTracerLifetime), { Transparency = 1 }):Play()
+				end
+				task.delay(Config.BulletTracerLifetime, part.Destroy, part)
+			end
+			return true
+		end, 1)
+	else
+		TracerHook:Remove("BulletTracers")
+	end
+end
+
+local function updateBulletTracerDrawings()
+	if not Config.BulletTracers or not Config.BulletTracerDrawing then
+		return
+	end
+	for line, data in tracerDrawingObjs do
+		local from, vis1 = Camera:WorldToViewportPoint(data[1])
+		local to, vis2 = Camera:WorldToViewportPoint(data[2])
+		if vis1 and vis2 then
+			line.Visible = true
+			line.From = Vector2.new(from.X, from.Y)
+			line.To = Vector2.new(to.X, to.Y)
+			if Config.BulletTracerFade then
+				line.Transparency = 1 - math.clamp((os.clock() - data[3]) / Config.BulletTracerLifetime, 0, 1)
+			end
+		else
+			line.Visible = false
+		end
+	end
+end
+
+local function syncDamageIndicator(enabled: boolean)
+	if enabled then
+		TracerHook:Add("DamageIndicator", function()
+			if not canDebug then
+				return false
+			end
+			local part = debug.getstack(4, 17)
+			if typeof(part) ~= "Instance" then
+				return false
+			end
+			for _, player in Players:GetPlayers() do
+				local char = getCharacter(player)
+				if char and part:IsDescendantOf(char) and isVulnerable(player, char, true) then
+					if damageTargetTimer <= os.clock() or damageTargetChar ~= char then
+						local hum = char:FindFirstChildOfClass("Humanoid")
+						damageTargetHealth = hum and hum.Health or 0
+					end
+					damageTargetChar = char
+					damageTargetTimer = os.clock() + 0.5
+					break
+				end
+			end
+			return false
+		end, 2)
+	else
+		TracerHook:Remove("DamageIndicator")
+	end
+end
+
+local function runDamageIndicator()
+	if not Config.DamageIndicator or not damageTargetChar or damageTargetTimer <= os.clock() then
+		return
+	end
+	local hum = damageTargetChar:FindFirstChildOfClass("Humanoid")
+	local head = damageTargetChar:FindFirstChild("Head")
+	if not hum or not head or not head:IsA("BasePart") then
+		return
+	end
+	if damageTargetHealth > hum.Health then
+		local damage = damageTargetHealth - hum.Health
+		damageTargetHealth = hum.Health
+		if damageIndicatorThread then
+			pcall(task.cancel, damageIndicatorThread)
+		end
+		if not damageIndicatorPart then
+			damageIndicatorPart = Instance.new("Part")
+			damageIndicatorPart.Size = Vector3.zero
+			damageIndicatorPart.Anchored = true
+			damageIndicatorPart.CanCollide = false
+			damageIndicatorPart.CanQuery = false
+			damageIndicatorPart.Transparency = 1
+			local billboard = Instance.new("BillboardGui")
+			billboard.Size = UDim2.fromOffset(30, 30)
+			billboard.AlwaysOnTop = true
+			billboard.Parent = damageIndicatorPart
+			local label = Instance.new("TextLabel")
+			label.Name = "Damage"
+			label.BackgroundTransparency = 1
+			label.TextStrokeTransparency = 0
+			label.Size = UDim2.fromScale(1, 1)
+			label.TextScaled = true
+			label.Font = Enum.Font.GothamBlack
+			label.TextColor3 = Color3.fromRGB(255, 72, 72)
+			label.Parent = billboard
+		end
+		damageIndicatorPart.Position = head.Position + Vector3.new(0, 2, 0)
+		damageIndicatorPart.Parent = workspace
+		local label = damageIndicatorPart:FindFirstChildWhichIsA("BillboardGui", true)
+		label = label and label:FindFirstChild("Damage")
+		if label and label:IsA("TextLabel") then
+			label.Text = tostring(math.ceil(damage))
+		end
+		damageIndicatorThread = task.delay(1, function()
+			if damageIndicatorPart then
+				damageIndicatorPart.Parent = nil
+			end
+			damageIndicatorThread = nil
+		end)
+	end
+end
+
+local function syncHitSound(enabled: boolean)
+	if enabled then
+		TracerHook:Add("HitSound", function()
+			if not canDebug then
+				return false
+			end
+			local part = debug.getstack(4, 17)
+			if typeof(part) == "Instance" then
+				for _, player in Players:GetPlayers() do
+					local char = getCharacter(player)
+					if char and part:IsDescendantOf(char) and isVulnerable(player, char, true) then
+						playSoundId("rbxassetid://12222216", 1)
+						break
+					end
+				end
+			end
+			return false
+		end, 3)
+	else
+		TracerHook:Remove("HitSound")
+	end
+end
+
+local function restoreViewmodel()
+	if viewmodelRealTool then
+		for _, part in viewmodelRealTool:GetDescendants() do
+			if part:IsA("BasePart") or part:IsA("Decal") or part:IsA("Texture") then
+				part.LocalTransparencyModifier = 0
+			end
+		end
+		viewmodelRealTool = nil
+	end
+	if viewmodelClone then
+		viewmodelClone:Destroy()
+		viewmodelClone = nil
+		viewmodelHandle = nil
+	end
+end
+
+local function onViewmodelToolAdded(tool: Tool)
+	if not Config.Viewmodel then
+		return
+	end
+	restoreViewmodel()
+	viewmodelRealTool = tool
+	viewmodelClone = tool:Clone()
+	viewmodelHandle = viewmodelClone:FindFirstChild("Handle") :: BasePart?
+	viewmodelClone.Parent = Camera
+	for _, part in viewmodelClone:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.CanCollide = false
+		end
+	end
+	for _, part in tool:GetDescendants() do
+		if part:IsA("BasePart") or part:IsA("Decal") or part:IsA("Texture") then
+			part.LocalTransparencyModifier = 1
+		end
+	end
+end
+
+local function syncViewmodel(enabled: boolean)
+	if enabled then
+		TracerHook:Add("Viewmodel", function()
+			shootTimer = os.clock() + 0.3
+			return false
+		end, 0)
+		local char = LocalPlayer.Character
+		if char then
+			local tool = char:FindFirstChildWhichIsA("Tool")
+			if tool then
+				onViewmodelToolAdded(tool)
+			end
+		end
+	else
+		TracerHook:Remove("Viewmodel")
+		restoreViewmodel()
+	end
+end
+
+local function updateViewmodel(dt: number)
+	if not Config.Viewmodel or not viewmodelHandle then
+		return
+	end
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	moveSpring.Target = if root and root:IsA("BasePart") then root.AssemblyLinearVelocity * 0.005 else Vector3.zero
+	if Config.ViewmodelSway and moveSpring.Target.Magnitude > 0.1 then
+		moveSpring.Target += (Camera.CFrame * CFrame.new(math.sin(os.clock() * 10) * 0.06, 0, 0)).Position - Camera.CFrame.Position
+	end
+	local cf = (Camera.CFrame * CFrame.new(Config.ViewmodelHorizontal, Config.ViewmodelVertical, -Config.ViewmodelDepth)) + moveSpring:Update(dt)
+	aimSpring.Target = if aimTimer > os.clock() then CFrame.lookAt(cf.Position, aimVec).LookVector else Camera.CFrame.LookVector
+	local recoil = math.max(shootTimer - os.clock(), 0)
+	viewmodelHandle.CFrame = CFrame.lookAlong(cf.Position, aimSpring:Update(dt))
+		* CFrame.Angles(math.rad(recoil * 10), 0, 0)
+		* CFrame.new(0, 0, recoil)
+	viewmodelHandle.AssemblyLinearVelocity = Vector3.zero
+end
+
+local function syncCrosshair(enabled: boolean)
+	if not canDebug or (not gun.Equip and not oldEquipFn) then
+		return
+	end
+	local fn = oldEquipFn or gun.Equip
+	if not fn then
+		return
+	end
+	pcall(function()
+		debug.setconstant(fn, 30, if enabled then "" else "rbxassetid://98794608762931")
+	end)
+end
+
+local function syncCameraPhase(enabled: boolean)
+	if not canDebug then
+		return
+	end
+	if enabled then
+		pcall(function()
+			local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+			local playerModule = playerScripts and playerScripts:FindFirstChild("PlayerModule")
+			local cameraModule = playerModule and playerModule:FindFirstChild("CameraModule")
+			local zoomController = cameraModule and cameraModule:FindFirstChild("ZoomController")
+			local popper = zoomController and zoomController:FindFirstChild("Popper")
+			if popper then
+				local req = require(popper)
+				cameraPhaseFn = debug.getupvalue(debug.getupvalue(req, 3), 7)
+				debug.setconstant(cameraPhaseFn, 16, 0)
+			end
+		end)
+	elseif cameraPhaseFn then
+		pcall(function()
+			debug.setconstant(cameraPhaseFn, 16, 0.25)
+		end)
+		cameraPhaseFn = nil
+	end
+end
+
+local animWhitelistDefaults = {
+	["http://www.roblox.com/asset/?id=125750702"] = true,
+	["rbxassetid://279227693"] = true,
+	["rbxassetid://279229192"] = true,
+}
+
+local function isAnimWhitelisted(id: string): boolean
+	return animWhitelist[id] == true or animWhitelistDefaults[id] == true
+end
+
+local function onAntiInvisibleAnimation(track: AnimationTrack, player: Player?)
+	if not Config.AntiInvisible or not player or isAnimWhitelisted(track.Animation.AnimationId) then
+		return
+	end
+	flagCheater(player, "invalid animation", 1)
+	if antiInvisibleThreads[track] then
+		pcall(task.cancel, antiInvisibleThreads[track])
+	end
+	antiInvisibleThreads[track] = task.spawn(function()
+		while track.IsPlaying and Config.AntiInvisible do
+			track:AdjustWeight(0, 0)
+			task.wait()
+		end
+		antiInvisibleThreads[track] = nil
+	end)
+end
+
+local function bindAntiInvisiblePlayer(player: Player)
+	if player == LocalPlayer or not Config.AntiInvisible then
+		return
+	end
+	local function onChar(char: Model)
+		local hum = char:WaitForChild("Humanoid", 5)
+		local animator = hum and hum:WaitForChild("Animator", 5)
+		if not animator then
+			return
+		end
+		table.insert(connections, animator.AnimationPlayed:Connect(function(track)
+			onAntiInvisibleAnimation(track, player)
+		end))
+		for _, track in animator:GetPlayingAnimationTracks() do
+			task.spawn(onAntiInvisibleAnimation, track, player)
+		end
+	end
+	if player.Character then
+		task.spawn(onChar, player.Character)
+	end
+	table.insert(connections, player.CharacterAdded:Connect(onChar))
+end
+
+local function syncAntiInvisible(enabled: boolean)
+	if not enabled then
+		for _, threadRef in antiInvisibleThreads do
+			pcall(task.cancel, threadRef)
+		end
+		table.clear(antiInvisibleThreads)
+	end
+end
+
+local vehicleFlyConn: RBXScriptConnection? = nil
+local vehicleFlySeat: Instance? = nil
+local vehicleFlyInputBound = false
+
+local function stopVehicleFly()
+	if vehicleFlyPart then
+		vehicleFlyPart:Destroy()
+		vehicleFlyPart = nil
+	end
+	for _, weld in vehicleFlyWelds do
+		pcall(function()
+			if typeof(weld) == "Instance" and weld:IsA("Constraint") then
+				(weld :: any).Enabled = true
+			end
+		end)
+	end
+	table.clear(vehicleFlyWelds)
+	vehicleFlySeat = nil
+	if vehicleFlyConn then
+		vehicleFlyConn:Disconnect()
+		vehicleFlyConn = nil
+	end
+end
+
+local function syncVehicleFly(enabled: boolean)
+	stopVehicleFly()
+	if not enabled then
+		return
+	end
+	if not vehicleFlyInputBound then
+		vehicleFlyInputBound = true
+		for _, eventName in { "InputBegan", "InputEnded" } do
+			table.insert(connections, UserInputService[eventName]:Connect(function(input)
+				if UserInputService:GetFocusedTextBox() then
+					return
+				end
+				if input.KeyCode == Enum.KeyCode.E then
+					vehicleFlyUp = if eventName == "InputBegan" then 1 else 0
+				elseif input.KeyCode == Enum.KeyCode.Q then
+					vehicleFlyDown = if eventName == "InputBegan" then -1 else 0
+				end
+			end))
+		end
+	end
+	if Config.VehicleFlyMode == "Part" then
+		vehicleFlyPart = Instance.new("Part")
+		vehicleFlyPart.Size = Vector3.new(50, 1, 50)
+		vehicleFlyPart.Anchored = true
+		vehicleFlyPart.CanQuery = false
+		vehicleFlyPart.Transparency = 1
+		vehicleFlyPart.Parent = nil
+		startLoop(function()
+			if not Config.VehicleFly then
+				return
+			end
+			local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+			local seat = hum and hum.SeatPart
+			if seat and vehicleFlyPart then
+				vehicleFlyPart.CFrame = CFrame.new(seat.Position - Vector3.new(0, 2.2 - (vehicleFlyUp + vehicleFlyDown), 0))
+				vehicleFlyPart.Parent = workspace
+			elseif vehicleFlyPart then
+				vehicleFlyPart.Parent = nil
+			end
+		end)
+	else
+		local inCar = false
+		vehicleFlyConn = RunService.PreSimulation:Connect(function(dt)
+			if not Config.VehicleFly then
+				return
+			end
+			local char = LocalPlayer.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			local seat = hum and hum.SeatPart
+			local root = seat and char:FindFirstChild("HumanoidRootPart")
+			if root and root:IsA("BasePart") and seat then
+				if seat ~= vehicleFlySeat then
+					inCar = seat:IsDescendantOf(workspace:FindFirstChild("CarContainer") or workspace) and seat:IsA("VehicleSeat")
+					table.clear(vehicleFlyWelds)
+					if inCar then
+						local wheels = seat.Parent and seat.Parent.Parent and seat.Parent.Parent:FindFirstChild("Wheels")
+						if wheels then
+							for _, weld in wheels:GetDescendants() do
+								if weld:IsA("HingeConstraint") or weld:IsA("CylindricalConstraint") or weld.Name == "Rotate" then
+									pcall(function()
+										(weld :: any).Enabled = false
+									end)
+									table.insert(vehicleFlyWelds, weld)
+								end
+							end
+						end
+					end
+					vehicleFlySeat = seat
+				end
+				if inCar then
+					root.AssemblyLinearVelocity = Vector3.new(0, 2.25, 0)
+					root.CFrame = CFrame.lookAlong(
+						root.Position,
+						Camera.CFrame.LookVector
+					) + (hum.MoveDirection + Vector3.new(0, vehicleFlyUp + vehicleFlyDown, 0)) * Config.VehicleFlySpeed * dt
+					Camera.CameraSubject = hum
+				end
+			elseif vehicleFlySeat then
+				vehicleFlySeat = nil
+				for _, weld in vehicleFlyWelds do
+					pcall(function()
+						if typeof(weld) == "Instance" then
+							(weld :: any).Enabled = true
+						end
+					end)
+				end
+				table.clear(vehicleFlyWelds)
+			end
+		end)
+		table.insert(connections, vehicleFlyConn)
+	end
+end
+
+local cheatOverlap = OverlapParams.new()
+cheatOverlap.CollisionGroup = "Players"
+cheatOverlap.FilterDescendantsInstances = { workspace:FindFirstChild("CarContainer"), workspace:FindFirstChild("Doors") }
+cheatOverlap.FilterType = Enum.RaycastFilterType.Exclude
+local carOverlap = OverlapParams.new()
+carOverlap.FilterDescendantsInstances = { workspace:FindFirstChild("CarContainer") }
+carOverlap.FilterType = Enum.RaycastFilterType.Include
+carOverlap.MaxParts = 1
+local whitelistStates = {
+	[Enum.HumanoidStateType.Running] = true,
+	[Enum.HumanoidStateType.Jumping] = true,
+	[Enum.HumanoidStateType.Freefall] = true,
+	[Enum.HumanoidStateType.Landed] = true,
+	[Enum.HumanoidStateType.FallingDown] = true,
+	[Enum.HumanoidStateType.Climbing] = true,
+	[Enum.HumanoidStateType.Seated] = true,
+	[Enum.HumanoidStateType.Ragdoll] = true,
+	[Enum.HumanoidStateType.Dead] = true,
+	[Enum.HumanoidStateType.None] = true,
+}
+
+local function runCheatDetector()
+	if not Config.CheatDetector then
+		return
+	end
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then
+			continue
+		end
+		local char = getCharacter(player)
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local head = char and char:FindFirstChild("Head")
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not hum or not head or not root or hum.Health <= 0 then
+			continue
+		end
+		if head:IsA("BasePart") and not checkPoint(head.Position, cheatOverlap) then
+			flagCheater(player, "phase/noclip", 20)
+		end
+		if not whitelistStates[hum:GetState()] then
+			flagCheater(player, "invalid state " .. hum:GetState().Name, 1)
+		end
+		if not hum.SeatPart then
+			local velo = root.AssemblyLinearVelocity
+			if (velo * Vector3.new(1, 0, 1)).Magnitude > 26 and #workspace:GetPartBoundsInRadius(root.Position, 10, carOverlap) <= 0 then
+				flagCheater(player, "speed", 20)
+			end
+			if velo.Y > 50 then
+				flagCheater(player, "highjump", 20)
+			end
 		end
 	end
 end
@@ -1688,6 +2625,32 @@ genv.__PrisonLifeUnload = function()
 	applyFullBright()
 	runVehicleWallbang()
 	syncKillPlane()
+	syncBulletTracers(false)
+	syncDamageIndicator(false)
+	syncHitSound(false)
+	syncViewmodel(false)
+	syncCrosshair(false)
+	syncCameraPhase(false)
+	syncAntiInvisible(false)
+	stopVehicleFly()
+	TracerHook:Remove("BulletTracers")
+	TracerHook:Remove("DamageIndicator")
+	TracerHook:Remove("HitSound")
+	TracerHook:Remove("Viewmodel")
+	if silentAimCircle then
+		pcall(function()
+			silentAimCircle:Remove()
+		end)
+		silentAimCircle = nil
+	end
+	if damageIndicatorPart then
+		damageIndicatorPart:Destroy()
+		damageIndicatorPart = nil
+	end
+	table.clear(cheatFlags)
+	table.clear(cheatFlagged)
+	table.clear(tracerDrawingObjs)
+	table.clear(antiInvisibleThreads)
 	for char, entry in esp do
 		destroyEntry(entry)
 		esp[char] = nil
@@ -1733,10 +2696,15 @@ UILib.create({
 					title = "GUNS",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "slider", key = "SilentAimFOV", label = "Aim FOV", min = 20, max = 500, step = 10 },
+						{ type = "select", key = "SilentAimMode", label = "Aim Mode", options = { "Mouse", "Position" } },
+						{ type = "slider", key = "SilentAimRange", label = "Aim Range", min = 1, max = 1000, step = 5 },
+						{ type = "slider", key = "SilentAimHitChance", label = "Hit Chance %", min = 0, max = 100, step = 1 },
+						{ type = "slider", key = "SilentAimHeadshotChance", label = "Headshot %", min = 0, max = 100, step = 1 },
 						{ type = "toggle", key = "SilentAimHead", label = "Head Priority", hud = "Head Aim" },
 						{ type = "toggle", key = "SilentAimTeamCheck", label = "Team Check", hud = "Team Check" },
 						{ type = "toggle", key = "SilentAimWallCheck", label = "Wall Check", hud = "Wall Check" },
+						{ type = "toggle", key = "SilentAimWallbang", label = "Wallbang", hud = "Wallbang" },
+						{ type = "toggle", key = "SilentAimRangeCircle", label = "Range Circle", hud = "Aim Circle" },
 						{ type = "toggle", key = "GunMods", label = "Gun Mods", hud = "Gun Mods" },
 						{ type = "toggle", key = "GunNoSpread", label = "No Spread", hud = "No Spread" },
 						{ type = "slider", key = "GunFireRate", label = "Fire Rate %", min = 1, max = 100, step = 1 },
@@ -1777,6 +2745,17 @@ UILib.create({
 						{ type = "toggle", key = "VehicleSpeed", label = "Vehicle Speed", hud = "Vehicle Speed" },
 						{ type = "slider", key = "VehicleSpeedValue", label = "Max Speed", min = 80, max = 200, step = 5 },
 						{ type = "toggle", key = "VehicleWallbang", label = "Shoot Through Cars", hud = "Car Wallbang" },
+						{ type = "toggle", key = "VehicleFly", label = "Vehicle Fly", hud = "Vehicle Fly" },
+						{ type = "select", key = "VehicleFlyMode", label = "Fly Mode", options = { "CFrame", "Part" } },
+						{ type = "slider", key = "VehicleFlySpeed", label = "Fly Speed", min = 1, max = 100, step = 1 },
+					},
+				},
+				{
+					title = "UTILITY",
+					items = {
+						{ type = "toggle", key = "AntiInvisible", label = "Anti Invisible", hud = "Anti Invis" },
+						{ type = "toggle", key = "CheatDetector", label = "Cheat Detector", hud = "Cheat Detect" },
+						{ type = "toggle", key = "CameraPhase", label = "Camera Phase", hud = "Cam Phase" },
 					},
 				},
 			},
@@ -1869,6 +2848,25 @@ UILib.create({
 						{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
 					},
 				},
+				{
+					title = "LEGIT",
+					items = {
+						{ type = "toggle", key = "BulletTracers", label = "Bullet Tracers", hud = "Tracers" },
+						{ type = "toggle", key = "BulletTracerDrawing", label = "Drawing Tracers", hud = "Draw Tracers" },
+						{ type = "slider", key = "BulletTracerLifetime", label = "Tracer Life", min = 0.05, max = 0.5, step = 0.05 },
+						{ type = "toggle", key = "BulletTracerFade", label = "Tracer Fade", hud = "Tracer Fade" },
+						{ type = "color", key = "BulletTracerColor", label = "Tracer Color" },
+						{ type = "toggle", key = "DamageIndicator", label = "Damage Indicator", hud = "Dmg Ind" },
+						{ type = "toggle", key = "HitSound", label = "Hit Sound", hud = "Hit Sound" },
+						{ type = "toggle", key = "KillSound", label = "Kill Sound", hud = "Kill Sound" },
+						{ type = "toggle", key = "Viewmodel", label = "Viewmodel", hud = "Viewmodel" },
+						{ type = "slider", key = "ViewmodelDepth", label = "VM Depth", min = 0, max = 3, step = 0.1 },
+						{ type = "slider", key = "ViewmodelHorizontal", label = "VM Horizontal", min = 0, max = 2, step = 0.1 },
+						{ type = "slider", key = "ViewmodelVertical", label = "VM Vertical", min = -1.5, max = 2, step = 0.1 },
+						{ type = "toggle", key = "ViewmodelSway", label = "VM Sway", hud = "VM Sway" },
+						{ type = "toggle", key = "Crosshair", label = "Custom Crosshair", hud = "Crosshair" },
+					},
+				},
 			},
 		},
 	},
@@ -1913,6 +2911,33 @@ UILib.create({
 		if key == "VehicleWallbang" and not value then
 			runVehicleWallbang()
 		end
+		if key == "VehicleFly" or (key == "VehicleFlyMode" and Config.VehicleFly) then
+			syncVehicleFly(Config.VehicleFly)
+		end
+		if key == "AntiInvisible" then
+			syncAntiInvisible(value)
+		end
+		if key == "CameraPhase" then
+			syncCameraPhase(value)
+		end
+		if key == "BulletTracers" then
+			syncBulletTracers(value)
+		end
+		if key == "DamageIndicator" then
+			syncDamageIndicator(value)
+		end
+		if key == "HitSound" then
+			syncHitSound(value)
+		end
+		if key == "Viewmodel" then
+			syncViewmodel(value)
+		end
+		if key == "Crosshair" then
+			syncCrosshair(value)
+		end
+		if key == "SilentAimRangeCircle" then
+			syncSilentAimCircle()
+		end
 	end,
 	onChange = function(key)
 		if key == "WalkSpeed" or key == "JumpPower" then
@@ -1942,6 +2967,16 @@ table.insert(connections, Players.PlayerAdded:Connect(bindSpawnTracking))
 
 table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(char)
 	trackSpawn(char)
+	table.insert(connections, char.ChildAdded:Connect(function(child)
+		if child:IsA("Tool") and Config.Viewmodel then
+			onViewmodelToolAdded(child)
+		end
+	end))
+	table.insert(connections, char.ChildRemoved:Connect(function(child)
+		if child == viewmodelRealTool then
+			restoreViewmodel()
+		end
+	end))
 	task.defer(function()
 		headCollideConn = nil
 		applyMovement()
@@ -1949,6 +2984,10 @@ table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(char)
 		syncMovementDisabler()
 		resolveGunController()
 		refreshGunFeatures()
+		local tool = char:FindFirstChildWhichIsA("Tool")
+		if tool and Config.Viewmodel then
+			onViewmodelToolAdded(tool)
+		end
 	end)
 end))
 
@@ -2002,6 +3041,9 @@ if killfeed then
 			local killer = text:sub(killerStart + 1, killerEnd - 1)
 			local victim = text:sub(victimStart + 7, victimEnd - 1)
 			notifyKillfeed(killer, victim)
+			if Config.KillSound and killer == LocalPlayer.Name then
+				playSoundId("rbxassetid://12222235", 1)
+			end
 		end
 	end))
 end
@@ -2042,17 +3084,24 @@ startLoop(function()
 	runAutoPickup()
 	runAutoDetonate()
 	runAntiRiotShield()
+	runCheatDetector()
 end)
 
 table.insert(
 	connections,
-	RunService.RenderStepped:Connect(function()
+	RunService.RenderStepped:Connect(function(dt)
+		table.clear(OriginScanner.Cache)
+		updateOriginIgnore()
 		applyMovement()
 		applyNoclip()
 		applyInfiniteAmmo()
 		runVehicleSpeed()
 		runVehicleWallbang()
 		updateESP()
+		syncSilentAimCircle()
+		updateBulletTracerDrawings()
+		runDamageIndicator()
+		updateViewmodel(dt)
 		if Config.AutoFire and os.clock() >= autoFireCooldown then
 			autoFireCooldown = os.clock() + (1 / math.max(Config.AutoFireRate, 1))
 			tryAutoFire()
@@ -2060,7 +3109,31 @@ table.insert(
 	end)
 )
 
+task.spawn(function()
+	pcall(function()
+		gamepasses = {
+			["Riot Police"] = MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 643697197),
+			Mafia = MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 1443271),
+			Sniper = MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 699360089),
+		}
+	end)
+end)
+
+pcall(function()
+	for _, anim in ReplicatedStorage:GetDescendants() do
+		if anim:IsA("Animation") then
+			animWhitelist[anim.AnimationId] = true
+		end
+	end
+end)
+
+for _, player in Players:GetPlayers() do
+	bindAntiInvisiblePlayer(player)
+end
+table.insert(connections, Players.PlayerAdded:Connect(bindAntiInvisiblePlayer))
+
 task.defer(function()
+	updateOriginIgnore()
 	if not resolveGunController() then
 		for _ = 1, 100 do
 			task.wait(0.1)
@@ -2075,6 +3148,14 @@ task.defer(function()
 	setAntiTaze(Config.AntiTaze)
 	applyFullBright()
 	syncKillPlane()
+	syncBulletTracers(Config.BulletTracers)
+	syncDamageIndicator(Config.DamageIndicator)
+	syncHitSound(Config.HitSound)
+	syncViewmodel(Config.Viewmodel)
+	syncCrosshair(Config.Crosshair)
+	syncCameraPhase(Config.CameraPhase)
+	syncVehicleFly(Config.VehicleFly)
+	syncSilentAimCircle()
 	for _, obj in CollectionService:GetTagged("C4") do
 		if obj:GetAttribute("UserId") == LocalPlayer.UserId then
 			localC4 = obj
