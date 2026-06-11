@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "41-nocrash"
+local GAME_BUILD = "42-netonly"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -629,12 +629,10 @@ end
 -- Silent aim state
 
 local sa = {
-	hooked = false, vortex = false, giveUp = false, installing = false, announced = false,
+	hooked = false, giveUp = false, installing = false, announced = false,
 	status = "idle", remote = "",
-	fireAt = 0, syncAt = 0, syncCf = nil :: CFrame?,
-	volley = 0, volleyAt = 0,
+	fireAt = 0, volley = 0, volleyAt = 0,
 }
-local vortexOrig: ((...any) -> ...any)? = nil
 local vortexSyncRef: BindableEvent? = nil
 local vSyncConn: RBXScriptConnection? = nil
 
@@ -648,14 +646,6 @@ end
 local function saOrigin(fallback: Vector3): Vector3
 	local f = viewFlame()
 	return if f then f.Position else fallback
-end
-
-local function saInjectHitables(hitables: any, part: BasePart): any
-	local model = part.Parent
-	if not model or not model:IsA("Model") or typeof(hitables) ~= "table" then return hitables end
-	for _, e in hitables do if e == model then return hitables end end
-	table.insert(hitables, model)
-	return hitables
 end
 
 local function saRewriteFire(payload: { any }): { any }
@@ -678,16 +668,6 @@ local function saRewriteFire(payload: { any }): { any }
 	sa.fireAt = os.clock()
 	if Config.AimDebugger then dlog("SA-Fire", "-> " .. tgtName .. " " .. shortCf(newCf), 0.3) end
 	return payload
-end
-
-local function saRewriteSync(shotCf: CFrame, hitables: any): (CFrame, any)
-	if not Config.SilentAim then return shotCf, hitables end
-	local part = saTarget()
-	if not part then return shotCf, hitables end
-	setMouseHit(part.Position)
-	local newCf = CFrame.new(saOrigin(shotCf.Position), part.Position)
-	sa.syncCf, sa.syncAt = newCf, os.clock()
-	return newCf, saInjectHitables(hitables, part)
 end
 
 -- Volley tracking (one per trigger, via VSync event)
@@ -753,30 +733,6 @@ end
 
 -- Hook install
 
-local function hookVortexSync()
-	if sa.vortex or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
-	if not vortexSyncRef then
-		local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-		local vortex = ps and ps:FindFirstChild("Vortex")
-		vortexSyncRef = vortex and vortex:FindFirstChild("Sync")
-	end
-	if not vortexSyncRef or not vortexSyncRef:IsA("BindableEvent") then return end
-	bindVolleyTracker()
-	local fire = vortexSyncRef.Fire
-	if typeof(fire) ~= "function" then return end
-	local ok = pcall(function()
-		vortexOrig = hookfn(fire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
-			if Config.SilentAim and self == vortexSyncRef and a1 == LocalPlayer and typeof(a4) == "CFrame" and fromGame() then
-				local ok2, nc, nh = pcall(saRewriteSync, a4, a7)
-				if ok2 and typeof(nc) == "CFrame" then a4, a7 = nc, nh end
-			end
-			local o = vortexOrig
-			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
-		end))
-	end)
-	if ok and typeof(vortexOrig) == "function" then sa.vortex = true end
-end
-
 local function installNetworkHook(allowGcFallback: boolean?)
 	if sa.hooked or LocalPlayer:GetAttribute("ClockOffset") == nil then return end
 	local api, remote = findNetworkApi()
@@ -803,13 +759,13 @@ local function installNetworkHook(allowGcFallback: boolean?)
 	if not ok or typeof(netOrig) ~= "function" then netOrig = nil; return end
 	sa.hooked = true
 	sa.status = "hooked"
-	hookVortexSync()
+	bindVolleyTracker()
 	if not sa.announced then
 		sa.announced = true
-		print("[GFA] silent aim ready", sa.remote, if sa.vortex then "| Vortex.Sync" else "")
+		print("[GFA] silent aim ready", sa.remote)
 	end
 	if Config.AimDebugger then
-		print("[GFA-DBG] init @", sa.remote, "api:", if hasFullApi() then "full" else "gc-fn", "vortex:", sa.vortex)
+		print("[GFA-DBG] init @", sa.remote, "api:", if hasFullApi() then "full" else "gc-fn")
 	end
 end
 
@@ -882,11 +838,9 @@ local function saOverlay(now: number)
 	local tName = if part and part.Parent then part.Parent.Name else "-"
 	overlaySet({
 		"-- Silent Aim --",
-		string.format("net:%s vortex:%s | %s", if sa.hooked then "OK" else "-", if sa.vortex then "OK" else "-", sa.status),
+		string.format("net:%s | %s", if sa.hooked then "OK" else "-", sa.status),
 		string.format("Target: %s | volley #%d", tName, sa.volley),
-		string.format("Last fire: %s  sync: %s",
-			if sa.fireAt > 0 then string.format("%.1fs ago", now - sa.fireAt) else "-",
-			if sa.syncAt > 0 then string.format("%.1fs ago", now - sa.syncAt) else "-"),
+		string.format("Last fire: %s", if sa.fireAt > 0 then string.format("%.1fs ago", now - sa.fireAt) else "-"),
 		string.format("API: %s | remote: %s", if hasFullApi() then "full" else "gc-fn", if sa.remote ~= "" then sa.remote else "-"),
 	})
 end
@@ -900,11 +854,11 @@ local function dbgOverlay(now: number)
 	local camAng = if part then angleTo(Camera.CFrame.Position, camLook, part.Position) else nil
 	local srvAng = if part and dbg.lastFire and dbg.lastFire.serverCf
 		then angleTo(dbg.lastFire.serverCf.Position, dbg.lastFire.serverCf.LookVector, part.Position) else nil
-	local syncCf = dbg.lastSyncCf or sa.syncCf
+	local syncCf = dbg.lastSyncCf
 	local syncAng = if part and syncCf then angleTo(syncCf.Position, syncCf.LookVector, part.Position) else nil
 	overlaySet({
 		"-- SA Debugger --",
-		string.format("net:%s vortex:%s sync:%d | %s", if sa.hooked then "OK" else "-", if sa.vortex then "OK" else "-", dbg.syncBound, sa.status),
+		string.format("net:%s sync:%d | %s", if sa.hooked then "OK" else "-", dbg.syncBound, sa.status),
 		string.format("API: %s | flame: %s | remote: %s", if hasFullApi() then "full" else "gc-fn", if flame then "OK" else "-", if sa.remote ~= "" then sa.remote else "-"),
 		string.format("Target: %s | volley #%d | Fire:%d Hit:%d", tName, sa.volley, dbg.fire, dbg.hit),
 		string.format("Angles  cam:%s  srv:%s  sync:%s",
@@ -938,7 +892,7 @@ end
 local function combatUpdate()
 	if Config.SilentAim or Config.AimDebugger then
 		ensureHooks()
-		if sa.hooked then hookVortexSync(); bindVolleyTracker() end
+		if sa.hooked then bindVolleyTracker() end
 	end
 	combatOverlayUpdate()
 end
