@@ -453,6 +453,9 @@ These are **not** Hyperion bypasses. They reduce **game-level** detection while 
 | Teleport / fly snap-back | Server position authority | movement modules | Prefer client visual fly knowing server may correct |
 | Ban after melee spam | Remote rate limit | `prison-life/automation.lua` | Range check + cooldown between `meleeEvent` fires |
 | Perfect headshot streak | Statistical heuristic | all silent aim | Headshot chance < 100%; torso mix (`SilentAimHeadshotChance`) |
+| Equip error / fire rate reject | `GetSecureSettings` vs client RPM | `warfare/init.lua` RapidFire | Never write interval seconds into `SettingsGun.FireRate`; cap boost |
+| Hit rejected despite crosshair on target | `FireBullet` muzzle vs `HitPlayer` claim | `BulletTP`, Kill All | Use SilentAim only; avoid trajectory teleport |
+| Invalid packet warn (F9) | BridgeNet schema / rate | `ac-debug.lua` | Enable `DebugBridgeNet`; do not fire unknown bridges |
 
 ---
 
@@ -561,7 +564,7 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 |-----|---------|
 | `acDbg.sync()` | Install hooks + overlay when `DebugAC` on |
 | `acDbg.scanRemotes(logEach)` | List remotes only — **no** mass `OnClientEvent` hooks |
-| `acDbg.probeBridges(bridgeNet)` | Existence check only — **no** `hookfunction` on bridges |
+| `acDbg.probeBridges(bridgeNet)` | Existence check only — auto-runs once at combat hook install when `DebugAC` + `DebugBridgeNet`; **no** `hookfunction` on bridges |
 | `acDbg.wrapBridge(name, bridge)` | Registers bridge name (no method hooks) |
 | `acDbg.onHitConfirm` / `onShot` | Hit logging from combat hooks |
 | `acDbg.printLog()` | Dump buffer to F9 (hot path does not `warn` every line) |
@@ -626,9 +629,11 @@ Requires executor hook support. Resolves on each character spawn via `bootstrap`
 
 ## 13. Game: Warfare
 
-**Build:** `games/warfare/constants.lua` → `GAME_BUILD` (`1-modular`)  
+**Build:** `games/warfare/constants.lua` → `GAME_BUILD` (`4-guide-security`)  
 **Place ID:** `83902709332473`  
 **Framework:** `ReplicatedStorage.Framework.Modules` — `BulletSimulator`, `BridgeNet2`, `MagazineController`, etc.
+
+**Decompile note:** Studio saves from UniversalSynSaveInstance are **client-only** (`ServerScriptService` empty). Server hit validation is inferred from shared BridgeNet modules and client bridges — not from live server scripts.
 
 ### Module map
 
@@ -640,31 +645,87 @@ Requires executor hook support. Resolves on each character spawn via `bootstrap`
 | `ac-debug.lua` | AC remote/bridge logging |
 | `init.lua` | Everything else (UI, ESP, flight, hooks) — **large** |
 
-### Key game paths
+### Key game paths (post-rename decompile)
 
 ```
 ReplicatedStorage.Framework.Modules.BulletSimulator
 ReplicatedStorage.Framework.Modules.BridgeNet2
 ReplicatedStorage.Framework.Modules.MagazineController
-ReplicatedStorage.Game.Modules.TeamsService  (optional)
-PlayerScripts → MovementModule, weapon state tables
+ReplicatedStorage.Framework.Remotes.GetSecureSettings   (RemoteFunction)
+ReplicatedStorage.Game.Modules.TeamsService
+ReplicatedStorage.Game.Modules.Packets                  (ByteNet-style)
+
+StarterPlayer.StarterPlayerScripts.PlayerModule
+StarterPlayer.StarterPlayerScripts.WeaponClient.WeaponClient   (main gun LocalScript)
+StarterPlayer.StarterPlayerScripts.WeaponClient.WeaponClient.LocalModules.MovementModule
+StarterPlayer.StarterPlayerScripts.WeaponClient.WeaponClient.LocalModules.HeadMovement
 ```
+
+### Combat pipeline (game)
+
+```
+TryFireOnce → BulletSimulator.Simulate
+  ├─ FireBullet bridge  (muzzleCF, bulletSpeed, BulletType, seed, fireTime)
+  └─ client raycast sim → HitPlayer bridge on humanoid hit
+        └─ server → HitConfirm bridge (client ack for damage)
+```
+
+`GetSecureSettings:InvokeServer(gunName)` returns authoritative `SettingsGun` on equip — client `SettingsGun.FireRate` is **RPM**, not seconds (`interval = 60 / rpm`).
+
+`BridgeNet2.src.Server.HandleInvalidPlayer` logs invalid bridge packets server-side (shared module present in ReplicatedStorage).
+
+### Bridge payloads (client → server)
+
+**`FireBullet`** (fired at start of `Simulate`, before raycast):
+
+| Field | Notes |
+|-------|--------|
+| `muzzleCF` | Shot origin + aim; MicroHub redirects via `applySilentAim` **before** `Simulate` body runs |
+| `bulletSpeed` | Initial speed (may be boosted for BulletTP rockets) |
+| `BulletType` | Ammo type string |
+| `seed` | RNG seed for ballistics (`t4.rng`) |
+| `fireTime` | Shot timestamp from weapon state |
+
+**`HitPlayer`** (fired when client sim hits a humanoid, non-cosmetic):
+
+| Field | Notes |
+|-------|--------|
+| `hitPartName`, `hitPosition`, `hitNormal` | Claimed impact |
+| `bulletType`, `bulletSpeed`, `velocityMagnitude` | Ballistics context |
+| `fireTime`, `clientHitTime`, `distanceTraveled` | Timing / distance |
+| `IsShotGun` | Spread-derived flag |
+| `hitUserId` | Target player UserId |
+| `victimVelocity` | HRP velocity when available |
+
+`hitPlayerId` on bullet state prevents one bullet claiming multiple players. **BulletTP** breaks muzzle→hit plausibility even when fields are well-formed.
+
+**`HitConfirm`** (server → client): MicroHub `hit-rate.lua` counts **only** these as confirmed hits (`recordHitRateHit`), not local raycast contacts.
 
 ### Feature → implementation
 
 | Config key | Implementation |
 |------------|----------------|
-| `SilentAim` | `BulletSimulator.Simulate` hook → `applySilentAim` |
-| `BulletTP` | Simulate hook + bullet registry scan + position pin each frame |
-| `NoRecoil` | Recoil module method hooks |
-| `StableAim` | CameraFeedback + Spring hooks zero recoil/sway |
-| `RapidFire` | Weapon state `_actionCooldowns` / fire rate fields |
-| `InfiniteAmmo` | `MagazineController.Fire` hook returns true |
-| `SpeedBoost` | Movement module `UpdateSpeed` hook + WalkSpeed |
+| `SilentAim` | `BulletSimulator.Simulate` hook → `applySilentAim` (not `CosmeticSimulate`) |
+| `BulletTP` | Simulate hook + bullet registry upvalue scan + per-frame pin (`PreSimulation`) |
+| `HitRateSafe` | `hit-rate.lua` — 88% redirect default, 72% max ratio / 2.5s, burst cap 6 |
+| `NoRecoil` | `RecoilModule` hooks; `GetSpreadDegrees` floored to `HIT_RATE_SAFE_MIN_SPREAD` (0.4°) when safe |
+| `StableAim` | `ViewmodelController`, `Bobble`, `CameraFeedback`, `Spring` hooks |
+| `RapidFire` | Boost `SettingsGun.FireRate` (RPM, max ~1.5× capped 900); clears overheat/jam/chamber blockers |
+| `InfiniteAmmo` | `MagazineController.Fire` hook returns `true` (client predict only) |
+| `SpeedBoost` | `MovementModule` `UpdateSpeed` / `SprintState` / `ChangeMult` + `WalkSpeed` |
 | `Flight` | `LinearVelocity` on HRP; clears weapon aim state |
-| `Kill All` button | Forces `sharedState.killAllForcedTarget`, enables BulletTP temporarily |
-| `ThermalESP` | `Highlight` per player |
-| `HitMarkers` | HitConfirm bridge → spawn billboard |
+| `Kill All` | Forces BulletTP + SilentAim, noclip, teleport orbit, `tryAutoFireWeapon` |
+| `ThermalESP` | `Highlight` per player + lighting |
+| `HitMarkers` | `HitConfirm` bridge → Drawing markers |
+
+### Risk tiers (detection)
+
+| Tier | Features | Server-visible |
+|------|----------|----------------|
+| Low | ESP, tracers, FOV, NVG, fullbright, hit markers | No / confirm-only |
+| Medium | SilentAim + `HitRateSafe` + teamcheck | FireBullet + HitPlayer (plausible) |
+| High | NoRecoil, RapidFire, InfiniteAmmo, SpeedBoost | Mixed; ammo/RPM may desync `GetSecureSettings` |
+| Extreme | BulletTP, Kill All, Flight | Trajectory / position violations |
 
 ### Shared state
 
@@ -773,7 +834,7 @@ Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust v
 | Loader | `VERSION = "1.7.0"` in `loader.lua` |
 | UI adapter | `4.0.1` in `lib/ui.lua` |
 | Prison Life build | `11-entry-split` |
-| Warfare build | `2-acdbg-lite-fix` |
+| Warfare build | `4-guide-security` |
 | Gunfight Arena build | `67-modular` |
 
 ---

@@ -31,9 +31,15 @@ function M.create(opts)
 	}
 
 	local BRIDGE_GUESSES = {
-		"HitConfirm", "Damage", "Hit", "Fire", "Bullet", "AntiCheat", "AC", "Kick", "Ban",
-		"Report", "Validate", "Sanity", "Cheat", "Flag", "Violation", "HitRate", "Combat",
-		"Weapon", "Shoot", "Kill", "Death", "Replication", "Replicate",
+		-- WeaponClient bridges (confirmed in decompile)
+		"HitConfirm", "HitPlayer", "FireBullet", "WeaponAction", "ReplicateBullet",
+		"SuppressorState", "Supression", "Sound", "MedicineEvent", "HolsterServer",
+		"Grenade", "AmmoBox", "LaserState", "MessageEvent", "Launcher", "LoadData",
+		"LoadGuns", "AdvancedDamage", "FallDamage", "HeadMovement", "DroneEvent",
+		"GlassShatter", "SaveData",
+		-- Generic guesses
+		"Damage", "Hit", "Fire", "Bullet", "AntiCheat", "AC", "Validate", "Sanity",
+		"Combat", "Shoot", "Kill", "Death",
 	}
 
 	local IGNORE_REMOTE_NAMES = {

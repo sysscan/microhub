@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "3-rapidfire-rpm",
+	GAME_BUILD = "4-guide-security",
 	BOOST_WALK_SPEED = 28,
 	BOOST_SPRINT_SPEED = 36,
 	FLIGHT_SPEED = 90,

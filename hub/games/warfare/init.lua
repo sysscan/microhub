@@ -2646,6 +2646,11 @@ local function installCombatHooks()
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
 		if confirmBridge and confirmBridge.Connect then
 			acDbg.wrapBridge("HitConfirm", confirmBridge)
+		end
+		if Config.DebugAC and Config.DebugBridgeNet then
+			task.defer(acDbg.probeBridges, bridgeNet)
+		end
+		if confirmBridge and confirmBridge.Connect then
 			confirmBridge:Connect(function(payload)
 				if typeof(payload) ~= "table" then
 					return
