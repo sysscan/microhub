@@ -10,14 +10,18 @@ local RunService = game:GetService("RunService")
 local Teams = game:GetService("Teams")
 local CollectionService = game:GetService("CollectionService")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
 local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "5-hookfix"
+local GAME_BUILD = "6-anticheat-hits"
 warn("[PrisonLife] build", GAME_BUILD)
+
+local MAX_SAFE_WALKSPEED = 24
+local MAX_SAFE_JUMP = 55
 
 local TeamGuards = Teams:FindFirstChild("Guards")
 local TeamInmates = Teams:FindFirstChild("Inmates")
@@ -35,7 +39,7 @@ local TEAM_COLOR = {
 
 local Config = {
 	WalkSpeed = 24,
-	JumpPower = 60,
+	JumpPower = 55,
 	SpeedBoost = false,
 	NoJumpCooldown = false,
 	AutoReset = false,
@@ -54,6 +58,7 @@ local Config = {
 	SilentAimFOV = 150,
 	SilentAimHead = true,
 	SilentAimTeamCheck = true,
+	SilentAimWallCheck = true,
 	AutoReload = false,
 	AutoReloadSwap = false,
 	AutoFire = false,
@@ -140,6 +145,11 @@ local oldBulletFn: any = nil
 local oldEquipFn: any = nil
 local toolAttrBackup: { [Instance]: { [string]: any } } = {}
 local pickupSeen: { [Instance]: boolean } = {}
+local spawnTimes: { [Model]: number } = {}
+
+local bulletRayParams = RaycastParams.new()
+bulletRayParams.CollisionGroup = "ClientBullet"
+bulletRayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local function stopLoop(threadRef: thread?)
 	if threadRef then
@@ -250,6 +260,10 @@ end
 local function isVulnerable(player: Player, char: Model, attackCheck: boolean): boolean
 	local alive = isAlive(char)
 	if not alive then
+		return false
+	end
+	local spawnedAt = spawnTimes[char]
+	if spawnedAt and spawnedAt > os.clock() then
 		return false
 	end
 	if char:FindFirstChildWhichIsA("ForceField") then
@@ -469,16 +483,14 @@ local function applyMovement()
 	if not hum then
 		return
 	end
-	hum.UseJumpPower = true
+	if Config.SpeedBoost or Config.AlwaysSprint then
+		hum.UseJumpPower = true
+	end
 	if Config.SpeedBoost then
-		hum.WalkSpeed = Config.WalkSpeed
-		hum.JumpPower = Config.JumpPower
+		hum.WalkSpeed = math.min(Config.WalkSpeed, MAX_SAFE_WALKSPEED)
+		hum.JumpPower = math.min(Config.JumpPower, MAX_SAFE_JUMP)
 	elseif Config.AlwaysSprint and isSprinting() then
-		hum.WalkSpeed = Config.SprintSpeed
-		hum.JumpPower = 50
-	else
-		hum.WalkSpeed = 16
-		hum.JumpPower = 50
+		hum.WalkSpeed = math.min(Config.SprintSpeed, MAX_SAFE_WALKSPEED)
 	end
 end
 
@@ -506,8 +518,12 @@ local function applyInfiniteAmmo()
 			return
 		end
 		local maxAmmo = tool:GetAttribute("MaxAmmo") or 30
-		tool:SetAttribute("Local_CurrentAmmo", maxAmmo)
-		if tool:GetAttribute("StoredAmmo") ~= nil then
+		local currentAmmo = tool:GetAttribute("Local_CurrentAmmo") or 0
+		if currentAmmo < maxAmmo then
+			tool:SetAttribute("Local_CurrentAmmo", maxAmmo)
+		end
+		local storedAmmo = tool:GetAttribute("StoredAmmo")
+		if storedAmmo ~= nil and storedAmmo < maxAmmo then
 			tool:SetAttribute("StoredAmmo", maxAmmo * 10)
 		end
 	end
@@ -876,11 +892,29 @@ local function restoreGunData()
 	gunDataBackup = nil
 end
 
-local function getSilentTarget(origin: Vector3, fov: number)
-	local mousePos = UserInputService:GetMouseLocation()
+local function hasLineOfSight(origin: Vector3, targetPos: Vector3, targetChar: Model?): boolean
+	if not Config.SilentAimWallCheck then
+		return true
+	end
+	local ignore = { LocalPlayer.Character }
+	if targetChar then
+		table.insert(ignore, targetChar)
+	end
+	bulletRayParams.FilterDescendantsInstances = ignore
+	local direction = targetPos - origin
+	if direction.Magnitude <= 0 then
+		return true
+	end
+	return workspace:Raycast(origin, direction, bulletRayParams) == nil
+end
+
+local function getSilentTarget(origin: Vector3, fov: number, gunData: any?): BasePart?
+	local mousePos = UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
+	local maxRange = if gunData and gunData.Range then gunData.Range else 1000
+	local attackCheck = not gunData or gunData.Behavior ~= "Taser"
+	local partName = if Config.SilentAimHead then "Head" else "HumanoidRootPart"
 	local bestPart: BasePart? = nil
 	local bestDist = fov * fov
-	local partName = if Config.SilentAimHead then "Head" else "HumanoidRootPart"
 
 	for _, player in Players:GetPlayers() do
 		if player == LocalPlayer then
@@ -890,11 +924,17 @@ local function getSilentTarget(origin: Vector3, fov: number)
 			continue
 		end
 		local char = getCharacter(player)
-		if not char or not isVulnerable(player, char, true) then
+		if not char or not isVulnerable(player, char, attackCheck) then
 			continue
 		end
 		local part = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
-		if not part then
+		if not part or not part:IsA("BasePart") then
+			continue
+		end
+		if (part.Position - origin).Magnitude > maxRange then
+			continue
+		end
+		if not hasLineOfSight(origin, part.Position, char) then
 			continue
 		end
 		local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
@@ -951,12 +991,18 @@ local function installGunHooks()
 	end
 
 	if Config.SilentAim and gun.Bullet and not hookedBullet then
-		oldBulletFn = hookfunction(gun.Bullet, function(origin, aimPoint, spread, ...)
-			local target = getSilentTarget(origin, Config.SilentAimFOV)
-			if target then
-				aimPoint = target.Position
+		oldBulletFn = hookfunction(gun.Bullet, function(...)
+			local args = table.pack(...)
+			local origin = args[1]
+			if typeof(origin) ~= "Vector3" then
+				return oldBulletFn(table.unpack(args, 1, args.n))
 			end
-			return oldBulletFn(origin, aimPoint, spread, ...)
+			local gunData = getGunData()
+			local target = getSilentTarget(origin, Config.SilentAimFOV, gunData)
+			if target then
+				args[2] = target.Position
+			end
+			return oldBulletFn(table.unpack(args, 1, args.n))
 		end)
 		hookedBullet = true
 	end
@@ -1010,12 +1056,9 @@ local function tryAutoFire()
 		return
 	end
 	local data = getGunData()
-	if data and data.Behavior == "Taser" then
-		return
-	end
 	local head = char:FindFirstChild("Head")
 	local origin = if head and head:IsA("BasePart") then head.Position else char:GetPivot().Position
-	local target = getSilentTarget(origin, Config.SilentAimFOV)
+	local target = getSilentTarget(origin, Config.SilentAimFOV, data)
 	if not target then
 		return
 	end
@@ -1040,7 +1083,6 @@ local function refreshGunFeatures()
 	end
 	if Config.GunMods then
 		modifyGunData()
-		patchAllGunTools()
 	end
 end
 
@@ -1659,6 +1701,7 @@ genv.__PrisonLifeUnload = function()
 	table.clear(armorPickups)
 	table.clear(pickupSeen)
 	table.clear(toolAttrBackup)
+	table.clear(spawnTimes)
 	localC4 = nil
 end
 
@@ -1693,6 +1736,7 @@ UILib.create({
 						{ type = "slider", key = "SilentAimFOV", label = "Aim FOV", min = 20, max = 500, step = 10 },
 						{ type = "toggle", key = "SilentAimHead", label = "Head Priority", hud = "Head Aim" },
 						{ type = "toggle", key = "SilentAimTeamCheck", label = "Team Check", hud = "Team Check" },
+						{ type = "toggle", key = "SilentAimWallCheck", label = "Wall Check", hud = "Wall Check" },
 						{ type = "toggle", key = "GunMods", label = "Gun Mods", hud = "Gun Mods" },
 						{ type = "toggle", key = "GunNoSpread", label = "No Spread", hud = "No Spread" },
 						{ type = "slider", key = "GunFireRate", label = "Fire Rate %", min = 1, max = 100, step = 1 },
@@ -1702,7 +1746,7 @@ UILib.create({
 						{ type = "toggle", key = "AutoFire", label = "Auto Fire", hud = "Auto Fire" },
 						{ type = "slider", key = "AutoFireRate", label = "Auto Fire Hz", min = 1, max = 120, step = 1 },
 						{ type = "toggle", key = "InfiniteAmmo", label = "Infinite Ammo", hud = "Inf Ammo" },
-						{ type = "hint", text = "Gun hooks need hookfunction + getconnections (executor)." },
+						{ type = "hint", text = "Gun hooks need hookfunction + getconnections. Wall Check prevents shots through walls (better hit reg)." },
 					},
 				},
 			},
@@ -1714,16 +1758,17 @@ UILib.create({
 					title = "MOVEMENT",
 					items = {
 						{ type = "toggle", key = "SpeedBoost", label = "Speed Boost", hud = "Speed Boost" },
-						{ type = "slider", key = "WalkSpeed", label = "Walk Speed", min = 16, max = 200, step = 1 },
-						{ type = "slider", key = "JumpPower", label = "Jump Power", min = 50, max = 200, step = 1 },
+						{ type = "slider", key = "WalkSpeed", label = "Walk Speed", min = 16, max = 26, step = 1 },
+						{ type = "slider", key = "JumpPower", label = "Jump Power", min = 50, max = 55, step = 1 },
 						{ type = "toggle", key = "NoJumpCooldown", label = "No Jump Cooldown", hud = "No Jump CD" },
 						{ type = "toggle", key = "Noclip", label = "Noclip", hud = "Noclip" },
 						{ type = "toggle", key = "AlwaysSprint", label = "Hold Sprint Speed", hud = "Sprint" },
-						{ type = "slider", key = "SprintSpeed", label = "Sprint Speed", min = 16, max = 48, step = 1 },
+						{ type = "slider", key = "SprintSpeed", label = "Sprint Speed", min = 16, max = 26, step = 1 },
 						{ type = "toggle", key = "AutoReset", label = "Auto Reset (Criminal)", hud = "Auto Reset" },
 						{ type = "toggle", key = "AntiTaze", label = "Anti Taze", hud = "Anti Taze" },
 						{ type = "toggle", key = "Disabler", label = "Phase Fix", hud = "Phase Fix" },
 						{ type = "toggle", key = "AntiKillPlane", label = "Anti Kill Plane", hud = "Kill Plane" },
+						{ type = "hint", text = "Speed/jump capped near game anti-cheat limits. Noclip can still trigger kicks." },
 					},
 				},
 				{
@@ -1875,12 +1920,28 @@ UILib.create({
 		end
 		if key == "GunFireRate" or key == "GunNoSpread" or key == "GunAutomatic" then
 			modifyGunData()
-			patchAllGunTools()
 		end
 	end,
 })
 
-table.insert(connections, LocalPlayer.CharacterAdded:Connect(function()
+local function trackSpawn(char: Model)
+	spawnTimes[char] = os.clock() + 0.5
+end
+
+local function bindSpawnTracking(player: Player)
+	table.insert(connections, player.CharacterAdded:Connect(trackSpawn))
+	if player.Character then
+		trackSpawn(player.Character)
+	end
+end
+
+for _, player in Players:GetPlayers() do
+	bindSpawnTracking(player)
+end
+table.insert(connections, Players.PlayerAdded:Connect(bindSpawnTracking))
+
+table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(char)
+	trackSpawn(char)
 	task.defer(function()
 		headCollideConn = nil
 		applyMovement()
@@ -1988,9 +2049,6 @@ table.insert(
 	RunService.RenderStepped:Connect(function()
 		applyMovement()
 		applyNoclip()
-		if Config.GunMods then
-			modifyGunData()
-		end
 		applyInfiniteAmmo()
 		runVehicleSpeed()
 		runVehicleWallbang()
