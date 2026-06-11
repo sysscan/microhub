@@ -20,7 +20,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "7-vape-port-fix2"
+local GAME_BUILD = "7-vape-port-fix3"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local MAX_SAFE_WALKSPEED = 24
@@ -227,6 +227,7 @@ originRayParams.CollisionGroup = "ClientBullet"
 originRayParams.FilterType = Enum.RaycastFilterType.Exclude
 OriginScanner.Ray = originRayParams
 
+do
 local function stopLoop(threadRef: thread?)
 	if threadRef then
 		pcall(task.cancel, threadRef)
@@ -3174,3 +3175,5 @@ print(
 	"— Team:",
 	LocalPlayer.Team and LocalPlayer.Team.Name or "?"
 )
+
+end
