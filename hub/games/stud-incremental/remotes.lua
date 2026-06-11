@@ -95,6 +95,12 @@ function M.create(opts)
 		plantUpgrade = function(id)
 			return fire("Area5/PlantsUpgradeWall", id)
 		end,
+		plantTierUp = function()
+			return fire("Area5/TierUp")
+		end,
+		plantReset = function()
+			return fire("Area5/PlantReset")
+		end,
 		starCollect = function(rarity)
 			return fire("World2/Area1/StarCollect", rarity)
 		end,

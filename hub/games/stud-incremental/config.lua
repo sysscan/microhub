@@ -40,6 +40,20 @@ return {
 
 	AutoBuyPlantUpgrades = false,
 	AutoBuyPlantMax = true,
+	AutoCollectPlantShards = false,
+	CollectPlantShardsAnywhere = false,
+	AutoAfkPlantArea = false,
+
+	AutoOpenRunes = false,
+	MinRuneStuds = 5000,
+	AutoBuyRuneUpgrades = false,
+	AutoBuyRuneUpgradesMax = true,
+	RuneUpgradePriority = "RuneSpeed",
+	AutoUnlockSpaceRunes = false,
+	AutoPlantTierUp = false,
+	AutoPlantReset = false,
+	PlantResetRequiresChallenge = true,
+	PlantUpgradePriority = "MoreTokens",
 
 	AutoCollectStars = false,
 	CollectStarsAnywhere = true,

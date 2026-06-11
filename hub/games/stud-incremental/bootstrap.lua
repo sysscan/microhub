@@ -12,6 +12,7 @@ function M.create(opts)
 	table.insert(connections, RunService.Heartbeat:Connect(function()
 		automation.collectStuds()
 		automation.collectStars()
+		automation.collectPlantShards()
 		movement.tickMovement()
 	end))
 

@@ -2,6 +2,7 @@ local M = {}
 
 function M.create(opts)
 	local Config = opts.config
+	local Constants = opts.constants
 	local LocalPlayer = opts.localPlayer
 
 	local function getHumanoid()
@@ -40,6 +41,50 @@ function M.create(opts)
 		return current
 	end
 
+	local function getPlantFarmPot()
+		return getAreaPart("Areas", "area5", "Row1", "Pot1", "Collect")
+			or getAreaPart("Areas", "area5", "Row1", "Pot1")
+	end
+
+	local function getRuneSensor()
+		local runes = workspace:FindFirstChild("Runes")
+		local runesModel = runes and runes:FindFirstChild("RUNES")
+		return runesModel and runesModel:FindFirstChild("sensor")
+	end
+
+	local function findWorld2Part(partName)
+		local candidates = {}
+		local world2 = workspace:FindFirstChild("World2")
+		local world2Area1 = world2 and world2:FindFirstChild("Area1")
+		if world2Area1 then
+			table.insert(candidates, world2Area1)
+		end
+		local map = workspace:FindFirstChild("map")
+		if map then
+			local paths = {
+				{ "World2", "Area1" },
+				{ "Areas2", "area1" },
+				{ "Areas", "area6" },
+			}
+			for _, path in ipairs(paths) do
+				local folder = map
+				for _, segment in ipairs(path) do
+					folder = folder and folder:FindFirstChild(segment)
+				end
+				if folder then
+					table.insert(candidates, folder)
+				end
+			end
+		end
+		for _, folder in ipairs(candidates) do
+			local part = folder:FindFirstChild(partName)
+			if part then
+				return part
+			end
+		end
+		return nil
+	end
+
 	local function getBlockSensor()
 		local map = workspace:FindFirstChild("map")
 		local areas = map and map:FindFirstChild("Areas")
@@ -61,13 +106,56 @@ function M.create(opts)
 
 	local function tickMovement()
 		applySpeed()
-		if Config.AutoAfkStudPlatform then
+
+		if Config.AutoUnlockSpaceRunes then
+			local world2 = LocalPlayer:FindFirstChild("World2Area1Stats")
+			local unlocked = world2 and world2:FindFirstChild("SpaceRunesUnlocked")
+			local stars = world2 and world2:FindFirstChild("Stars")
+			local unlockCost = (Constants and Constants.SPACE_RUNES_UNLOCK_COST) or 500
+			if unlocked and not unlocked.Value and stars and stars.Value >= unlockCost then
+				local button = findWorld2Part("SpaceRunesUnlockButton")
+				local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+				if button and root then
+					local pos = button:IsA("BasePart") and button.Position or button:GetPivot().Position
+					if (root.Position - pos).Magnitude > 12 then
+						teleportTo(button)
+					end
+				end
+			end
+		end
+
+		local onRuneSensor = false
+		if Config.AutoOpenRunes then
+			local statsFolder = LocalPlayer:FindFirstChild("Stats")
+			local studs = statsFolder and statsFolder:FindFirstChild("Studs")
+			local minStuds = tonumber(Config.MinRuneStuds) or 5000
+			local sensor = getRuneSensor()
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if studs and studs.Value >= minStuds and sensor and root then
+				onRuneSensor = true
+				if (root.Position - sensor.Position).Magnitude > 8 then
+					teleportTo(sensor)
+				end
+			end
+		end
+		if not onRuneSensor and Config.AutoAfkStudPlatform then
 			local platform = getStudPlatform()
 			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if platform and root then
 				local flat = Vector3.new(root.Position.X - platform.Position.X, 0, root.Position.Z - platform.Position.Z)
 				if flat.Magnitude > math.max(platform.Size.X, platform.Size.Z) * 0.6 then
 					teleportTo(platform)
+				end
+			end
+		end
+		if Config.AutoAfkPlantArea then
+			local pot = getPlantFarmPot()
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if pot and root then
+				local pos = pot:IsA("BasePart") and pot.Position or pot:GetPivot().Position
+				local flat = Vector3.new(root.Position.X - pos.X, 0, root.Position.Z - pos.Z)
+				if flat.Magnitude > 40 then
+					teleportTo(pot)
 				end
 			end
 		end
@@ -85,6 +173,15 @@ function M.create(opts)
 		end,
 		teleportToBlockButton = function()
 			return teleportTo(getBlockSensor())
+		end,
+		teleportToPlantFarm = function()
+			return teleportTo(getPlantFarmPot())
+		end,
+		teleportToRuneSensor = function()
+			return teleportTo(getRuneSensor())
+		end,
+		teleportToSpaceRunesUnlock = function()
+			return teleportTo(findWorld2Part("SpaceRunesUnlockButton"))
 		end,
 		teleportToWorld2Stars = teleportToWorld2Stars,
 	}

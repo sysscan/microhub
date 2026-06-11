@@ -44,6 +44,7 @@ function M.run()
 
 	local movement = MovementLib.create({
 		config = Config,
+		constants = Constants,
 		localPlayer = LocalPlayer,
 	})
 

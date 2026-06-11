@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "3-exploits",
+	GAME_BUILD = "5-runes",
 	PLACE_ID = 127675063398240,
 
 	STUD_UPGRADES = {
@@ -72,6 +72,34 @@ return {
 		"STRAWBERRY_Z5_GAMMA_44",
 		"BLUEBERRY_Q9_DELTA_12",
 		"BLOSSOM_K3_OMEGA_88",
+	},
+
+	PLANT_TIER_TO_TOKEN_ID = {
+		[1] = "WHEAT_V7_ALPHA_99",
+		[2] = "CARROT_X2_BETA_21",
+		[3] = "STRAWBERRY_Z5_GAMMA_44",
+		[4] = "BLUEBERRY_Q9_DELTA_12",
+		[5] = "BLOSSOM_K3_OMEGA_88",
+	},
+
+	PLANT_TIER_COSTS = {
+		[1] = 100,
+		[2] = 1000,
+		[3] = 5000,
+		[4] = 15000,
+		[5] = 25000,
+	},
+
+	PLANT_MAX_TIER = 5,
+	PLANT_MAX_RESETS = 3,
+
+	RUNE_OPEN_COST = 5000,
+	SPACE_RUNES_UNLOCK_COST = 500,
+
+	RUNE_RESEARCH_UPGRADES = {
+		{ name = "RuneLuck", single = 10, max = 110, currency = "Cores" },
+		{ name = "RuneSpeed", single = 11, max = 111, currency = "Cores" },
+		{ name = "RuneBulk", single = 12, max = 112, currency = "Cores" },
 	},
 
 	STAR_RARITIES = {

@@ -11,6 +11,7 @@ function M.create(opts)
 	local lastRedeemAt = 0
 	local lastGroupClaimAt = 0
 	local studUpgradeOrder = { "MoreStuds", "SpawnSpeed", "MaxStuds" }
+	local plantUpgradeNames = { "MoreTokens", "GrowSpeed", "UnlockChallengeBoard" }
 
 	local function flatDistance(a, b)
 		return math.sqrt((a.X - b.X) ^ 2 + (a.Z - b.Z) ^ 2)
@@ -187,23 +188,257 @@ function M.create(opts)
 		end
 	end
 
+	local function isPlantAreaActive(folders)
+		if not folders.area5 then
+			return false
+		end
+		local cutscene = folders.area4 and folders.area4:FindFirstChild("Cutscene4Played")
+		return not cutscene or cutscene.Value
+	end
+
+	local function getPlantUpgradeDef(name)
+		for _, entry in ipairs(Constants.PLANT_UPGRADES) do
+			if entry.name == name then
+				return entry
+			end
+		end
+		return nil
+	end
+
+	local function getPointUpgradeDef(name)
+		for _, entry in ipairs(Constants.POINT_UPGRADES) do
+			if entry.name == name then
+				return entry
+			end
+		end
+		return nil
+	end
+
+	local function getRuneResearchDef(name)
+		for _, entry in ipairs(Constants.RUNE_RESEARCH_UPGRADES) do
+			if entry.name == name then
+				return entry
+			end
+		end
+		return nil
+	end
+
+	local function tryRuneUpgrades(folders)
+		if not Config.AutoBuyRuneUpgrades then
+			return
+		end
+
+		local info = stats.getUpgradeInfo()
+		if not info then
+			return
+		end
+
+		local points = folders.area2:FindFirstChild("Points")
+		local pointUpgrades = folders.area2:FindFirstChild("PointUpgrades")
+		local tierMulti = folders.area2:FindFirstChild("Tier1_Area1and2CostMulti")
+		if points and pointUpgrades and info.POINT_UPGRADES then
+			local def = getPointUpgradeDef("RuneSpeed")
+			local config = info.POINT_UPGRADES.RuneSpeed
+			local level = pointUpgrades:FindFirstChild("RuneSpeedLevel")
+			local cost = pointUpgrades:FindFirstChild("RuneSpeedCost")
+			if def and config and level and cost and level.Value < stats.getMaxLevel(config, LocalPlayer) then
+				local price = stats.getPointCost(cost.Value, tierMulti and tierMulti.Value or 1)
+				if points.Value >= price then
+					remotes.pointsUpgrade(Config.AutoBuyRuneUpgradesMax and def.max or def.single)
+					return
+				end
+			end
+		end
+
+		local area4 = folders.area4
+		if not area4 or not info.RESEARCH_UPGRADES then
+			return
+		end
+		local researchFolder = area4:FindFirstChild("ResearchUpgrades")
+		local cores = area4:FindFirstChild("Cores")
+		if not (researchFolder and cores) then
+			return
+		end
+
+		local priority = Config.RuneUpgradePriority or "RuneSpeed"
+		local ordered = { priority }
+		for _, entry in ipairs(Constants.RUNE_RESEARCH_UPGRADES) do
+			if entry.name ~= priority then
+				table.insert(ordered, entry.name)
+			end
+		end
+
+		for _, name in ipairs(ordered) do
+			local def = getRuneResearchDef(name)
+			local config = info.RESEARCH_UPGRADES[name]
+			local level = researchFolder:FindFirstChild(name .. "Level")
+			local cost = researchFolder:FindFirstChild(name .. "Cost")
+			if def and config and level and cost and level.Value < stats.getMaxLevel(config, LocalPlayer) then
+				if cores.Value >= cost.Value then
+					remotes.researchUpgrade(Config.AutoBuyRuneUpgradesMax and def.max or def.single)
+					return
+				end
+			end
+		end
+	end
+
 	local function tryPlantUpgrade(folders)
+		local area5 = folders.area5
+		if not area5 or not isPlantAreaActive(folders) then
+			return
+		end
+		local tokens = area5:FindFirstChild("Tokens")
+		local upgradesFolder = area5:FindFirstChild("PlantUpgrades")
+		if not (tokens and upgradesFolder) then
+			return
+		end
+
+		local info = stats.getUpgradeInfo()
+		if not info or not info.PLANT_UPGRADES then
+			return
+		end
+
+		local priority = Config.PlantUpgradePriority or "MoreTokens"
+		local ordered = { "UnlockChallengeBoard" }
+		for _, name in ipairs(plantUpgradeNames) do
+			if name ~= "UnlockChallengeBoard" and name ~= priority then
+				table.insert(ordered, name)
+			end
+		end
+		if priority ~= "UnlockChallengeBoard" then
+			table.insert(ordered, 2, priority)
+		end
+
+		for _, name in ipairs(ordered) do
+			local def = getPlantUpgradeDef(name)
+			local config = info.PLANT_UPGRADES[name]
+			local level = upgradesFolder:FindFirstChild(name .. "Level")
+			local cost = upgradesFolder:FindFirstChild(name .. "Cost")
+			if def and config and level and cost and level.Value < stats.getMaxLevel(config, LocalPlayer) then
+				if tokens.Value >= cost.Value then
+					remotes.plantUpgrade(Config.AutoBuyPlantMax and def.max or def.single)
+					return
+				end
+			end
+		end
+	end
+
+	local function tryPlantTierUp(folders)
+		if not Config.AutoPlantTierUp or not isPlantAreaActive(folders) then
+			return
+		end
+		local area5 = folders.area5
+		if not area5 then
+			return
+		end
+		local plantTier = area5:FindFirstChild("PlantTier")
+		local tokens = area5:FindFirstChild("Tokens")
+		if not (plantTier and tokens) then
+			return
+		end
+		local tier = plantTier.Value
+		if tier >= Constants.PLANT_MAX_TIER then
+			return
+		end
+		local price = Constants.PLANT_TIER_COSTS[tier]
+		if price and tokens.Value >= price then
+			remotes.plantTierUp()
+		end
+	end
+
+	local function tryPlantReset(folders)
+		if not Config.AutoPlantReset or not isPlantAreaActive(folders) then
+			return
+		end
 		local area5 = folders.area5
 		if not area5 then
 			return
 		end
 		local tokens = area5:FindFirstChild("Tokens")
-		if not tokens then
+		local plantResets = area5:FindFirstChild("PlantResets")
+		local resetCost = area5:FindFirstChild("PlantResetCost")
+		if not (tokens and plantResets and resetCost) then
 			return
 		end
-		upgrades.tryNamedUpgrades(
-			Constants.PLANT_UPGRADES,
-			"PLANT_UPGRADES",
-			area5:FindFirstChild("PlantUpgrades"),
-			tokens.Value,
-			remotes.plantUpgrade,
-			Config.AutoBuyPlantMax
-		)
+		if plantResets.Value >= Constants.PLANT_MAX_RESETS then
+			return
+		end
+		if Config.PlantResetRequiresChallenge then
+			local upgradesFolder = area5:FindFirstChild("PlantUpgrades")
+			local challengeLevel = upgradesFolder and upgradesFolder:FindFirstChild("UnlockChallengeBoardLevel")
+			if not challengeLevel or challengeLevel.Value < 1 then
+				return
+			end
+		end
+		if tokens.Value >= resetCost.Value then
+			remotes.plantReset()
+		end
+	end
+
+	local function getPlantTokenId(folders)
+		local area5 = folders and folders.area5
+		local plantTier = area5 and area5:FindFirstChild("PlantTier")
+		local tier = plantTier and plantTier.Value or 1
+		return Constants.PLANT_TIER_TO_TOKEN_ID[tier] or Constants.PLANT_TOKEN_IDS[1]
+	end
+
+	local function getPlantPots()
+		local area5Map = workspace:FindFirstChild("map")
+		area5Map = area5Map and area5Map:FindFirstChild("Areas") and area5Map.Areas:FindFirstChild("area5")
+		if not area5Map then
+			return nil
+		end
+		local pots = {}
+		for rowIndex = 1, 3 do
+			local row = area5Map:FindFirstChild("Row" .. rowIndex)
+			if row then
+				for _, pot in ipairs(row:GetChildren()) do
+					if pot.Name:match("^Pot%d+$") then
+						table.insert(pots, pot)
+					end
+				end
+			end
+		end
+		return pots
+	end
+
+	local function collectPlantShards()
+		if not Config.AutoCollectPlantShards then
+			return
+		end
+
+		local folders = stats.getFolders()
+		if not folders or not isPlantAreaActive(folders) then
+			return
+		end
+
+		local area5 = folders.area5
+		local plantRows = area5 and area5:FindFirstChild("PlantRows")
+		local plantId = getPlantTokenId(folders)
+		local root = getRoot()
+		local radius = tonumber(Config.CollectRadius) or 120
+		local pots = getPlantPots()
+		if not pots then
+			return
+		end
+
+		for _, pot in ipairs(pots) do
+			local rowIndex = tonumber(pot.Parent and pot.Parent.Name:match("%d+"))
+			if not plantRows or not rowIndex or plantRows.Value >= rowIndex then
+				local collectPart = pot:FindFirstChild("Collect")
+				local prompt = collectPart and collectPart:FindFirstChildOfClass("ProximityPrompt")
+				if prompt and prompt.Enabled then
+					if Config.CollectPlantShardsAnywhere then
+						remotes.tokenGain(plantId, pot.Name)
+						return
+					end
+					if root and collectPart and (root.Position - collectPart.Position).Magnitude <= radius then
+						remotes.tokenGain(plantId, pot.Name)
+						return
+					end
+				end
+			end
+		end
 	end
 
 	local function tryWorld2StarUpgrade(folders)
@@ -435,8 +670,17 @@ function M.create(opts)
 		if Config.AutoBuyResearchUpgrades then
 			tryResearchUpgrade(folders)
 		end
+		if Config.AutoBuyRuneUpgrades then
+			tryRuneUpgrades(folders)
+		end
 		if Config.AutoBuyPlantUpgrades then
 			tryPlantUpgrade(folders)
+		end
+		if Config.AutoPlantReset then
+			tryPlantReset(folders)
+		end
+		if Config.AutoPlantTierUp then
+			tryPlantTierUp(folders)
 		end
 		if Config.AutoBuyStarUpgrades then
 			tryWorld2StarUpgrade(folders)
@@ -479,6 +723,7 @@ function M.create(opts)
 	return {
 		collectStuds = collectStuds,
 		collectStars = collectStars,
+		collectPlantShards = collectPlantShards,
 		tickAutomation = tickAutomation,
 	}
 end

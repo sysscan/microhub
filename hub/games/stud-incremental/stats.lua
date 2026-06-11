@@ -117,6 +117,43 @@ function M.create(opts)
 			table.insert(lines, "Ascensions: " .. tostring(ascensions.Value))
 		end
 
+		local runesStats = folders.stats:FindFirstChild("RunesStats")
+		if runesStats then
+			local studsMult = runesStats:FindFirstChild("Runes_StudsMultiplier")
+			if studsMult then
+				table.insert(lines, "Rune Studs Multi: " .. string.format("%.2f", studsMult.Value) .. "x")
+			end
+		end
+		local playerStats = LocalPlayer:FindFirstChild("PlayerStats")
+		if playerStats then
+			local opened = playerStats:FindFirstChild("RunesOpened")
+			if opened then
+				table.insert(lines, "Runes Opened: " .. abbreviate(opened.Value))
+			end
+		end
+		if folders.world2 then
+			local spaceRunes = folders.world2:FindFirstChild("SpaceRunesUnlocked")
+			if spaceRunes then
+				table.insert(lines, "Space Runes: " .. (spaceRunes.Value and "On" or "Off"))
+			end
+		end
+
+		if folders.area5 then
+			local area5 = folders.area5
+			local tokens = area5:FindFirstChild("Tokens")
+			local plantTier = area5:FindFirstChild("PlantTier")
+			local plantResets = area5:FindFirstChild("PlantResets")
+			if tokens then
+				table.insert(lines, "Shards: " .. abbreviate(tokens.Value))
+			end
+			if plantTier then
+				table.insert(lines, "Plant Tier: " .. tostring(plantTier.Value))
+			end
+			if plantResets then
+				table.insert(lines, "Plant Resets: " .. tostring(plantResets.Value))
+			end
+		end
+
 		if folders.world2 then
 			local world2 = folders.world2
 			local stars = world2:FindFirstChild("Stars")

@@ -34,11 +34,47 @@ function M.create(opts)
 						},
 					},
 					{
+						title = "RUNES",
+						items = {
+							{ type = "toggle", key = "AutoOpenRunes", label = "Auto Open Runes", hud = "Auto Runes" },
+							{
+								type = "slider",
+								key = "MinRuneStuds",
+								label = "Min Studs Per Roll",
+								min = 5000,
+								max = 1000000,
+								step = 1000,
+							},
+							{ type = "button", label = "TP Rune Sensor", onClick = movement.teleportToRuneSensor },
+							{ type = "toggle", key = "AutoUnlockSpaceRunes", label = "Auto Unlock Space Runes", hud = "Space Runes" },
+							{ type = "button", label = "TP Space Runes Unlock", onClick = movement.teleportToSpaceRunesUnlock },
+						},
+					},
+					{
 						title = "AREA 2-3",
 						items = {
 							{ type = "toggle", key = "AutoPoints", label = "Auto Points (Tier 6+)", hud = "Auto Points" },
 							{ type = "toggle", key = "AutoBlocks", label = "Auto Blocks Gain", hud = "Auto Blocks" },
 							{ type = "button", label = "TP Block Button", onClick = movement.teleportToBlockButton },
+						},
+					},
+					{
+						title = "AREA 5 PLANTS",
+						items = {
+							{
+								type = "toggle",
+								key = "AutoCollectPlantShards",
+								label = "Auto Collect Shards",
+								hud = "Plant Shards",
+							},
+							{
+								type = "toggle",
+								key = "CollectPlantShardsAnywhere",
+								label = "Collect Shards Off Farm",
+								hud = "Shard Anywhere",
+							},
+							{ type = "toggle", key = "AutoAfkPlantArea", label = "AFK Plant Farm", hud = "AFK Plants" },
+							{ type = "button", label = "TP Plant Farm", onClick = movement.teleportToPlantFarm },
 						},
 					},
 					{
@@ -89,9 +125,31 @@ function M.create(opts)
 							{ type = "toggle", key = "AutoBuyFuserMax", label = "Fuser Buy Max", hud = "Fuse Max" },
 							{ type = "toggle", key = "AutoBuyResearchUpgrades", label = "Research Upgrades", hud = "Research" },
 							{ type = "toggle", key = "AutoBuyResearchMax", label = "Research Buy Max", hud = "Res Max" },
+							{ type = "toggle", key = "AutoBuyRuneUpgrades", label = "Rune Upgrades", hud = "Rune Up" },
+							{ type = "toggle", key = "AutoBuyRuneUpgradesMax", label = "Rune Buy Max", hud = "Rune Max" },
+							{
+								type = "select",
+								key = "RuneUpgradePriority",
+								label = "Rune Research Priority",
+								options = { "RuneSpeed", "RuneLuck", "RuneBulk" },
+							},
 							{ type = "toggle", key = "AutoFuse", label = "Auto Fuse Cores", hud = "Auto Fuse" },
 							{ type = "toggle", key = "AutoBuyPlantUpgrades", label = "Plant Upgrades", hud = "Plant Up" },
 							{ type = "toggle", key = "AutoBuyPlantMax", label = "Plant Buy Max", hud = "Plant Max" },
+							{
+								type = "select",
+								key = "PlantUpgradePriority",
+								label = "Plant Upgrade Priority",
+								options = { "MoreTokens", "GrowSpeed", "UnlockChallengeBoard" },
+							},
+							{ type = "toggle", key = "AutoPlantTierUp", label = "Auto Plant Tier Up", hud = "Plant Tier" },
+							{ type = "toggle", key = "AutoPlantReset", label = "Auto Plant Reset", hud = "Plant Reset" },
+							{
+								type = "toggle",
+								key = "PlantResetRequiresChallenge",
+								label = "Reset Needs Challenge Board",
+								hud = "Reset Gate",
+							},
 						},
 					},
 					{
