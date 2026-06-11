@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "62-sa-mhsonly"
+local GAME_BUILD = "63-sa-final"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -463,36 +463,6 @@ local dbgCounts = { fire = 0, hit = 0, vsync = 0 }
 local saStickyPart: BasePart? = nil
 local saStickyUntil = 0
 local SA_STICKY_SEC = 0.2
-local cachedFlame: BasePart? = nil
-local nextFlame = 0
-
-local function viewFlame(): BasePart?
-	if cachedFlame and cachedFlame.Parent then
-		return cachedFlame
-	end
-	local now = os.clock()
-	if now < nextFlame then
-		return cachedFlame
-	end
-	nextFlame = now + 0.5
-	cachedFlame = nil
-	local vm = workspace:FindFirstChild("ViewModel")
-	if not vm or not vm:IsA("Model") then
-		return nil
-	end
-	for _, d in vm:GetDescendants() do
-		if d.Name == "Flame" and d:IsA("BasePart") then
-			cachedFlame = d
-			return d
-		end
-	end
-	return nil
-end
-
-local function saShotOrigin(fallback: Vector3): Vector3
-	local flame = viewFlame()
-	return if flame then flame.Position else fallback
-end
 
 local function saScanTarget(): BasePart?
 	local origin = aimOrigin()
@@ -530,10 +500,6 @@ local function saFireTarget(): BasePart?
 	return saLockTarget(saScanTarget())
 end
 
-local function saAimCf(cf: CFrame, part: BasePart): CFrame
-	return CFrame.new(saShotOrigin(cf.Position), part.Position)
-end
-
 local function dbgDecode(v: any): any
 	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
 	local mod = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
@@ -558,50 +524,6 @@ local function dbgShort(v: any): string
 	if t == "CFrame" then return dbgShortCf(v) end
 	if t == "Instance" then return v.Name end
 	return t
-end
-
-local function netEncode(net: any, sample: any, value: any): any
-	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then return value end
-	local enc = rawget(net, "EncodeData")
-	if typeof(enc) ~= "function" then return value end
-	local ok, out = pcall(function() return enc(net, value) end)
-	if not ok then ok, out = pcall(enc, value) end
-	return if ok then out else value
-end
-
-local function dbgDumpTable(tbl: any): string
-	if typeof(tbl) ~= "table" then return dbgShort(tbl) end
-	local ok, result = pcall(function()
-		local parts = {}
-		local n = 0
-		for k, v in pairs(tbl) do
-			n += 1
-			if n > 8 then table.insert(parts, "...") break end
-			local ks = tostring(k)
-			local vs = tostring(v)
-			if #vs > 40 then vs = string.sub(vs, 1, 37) .. "..." end
-			table.insert(parts, ks .. "=" .. vs)
-		end
-		return "{" .. table.concat(parts, ", ") .. "}"
-	end)
-	return if ok then result else "{ERR}"
-end
-
-local function saRewriteHitcheck(net: any, payload: { any }, part: BasePart): { any }
-	local model = part.Parent
-	if not model or not model:IsA("Model") then
-		return payload
-	end
-	local extra = dbgDecode(payload[4])
-	if typeof(extra) ~= "table" then
-		extra = {}
-	end
-	return {
-		netEncode(net, payload[1], workspace),
-		netEncode(net, payload[2], model),
-		netEncode(net, payload[3], part),
-		netEncode(net, payload[4], extra),
-	}
 end
 
 local function bindSyncDbg()
@@ -661,22 +583,6 @@ local function installNetworkHook(): boolean
 		local eventName = args[2]
 		local payload = { table.unpack(args, 3) }
 
-		if Config.AimDebugger and Config.SilentAim then
-			local part = saFireTarget()
-			if eventName == "Fire" and part then
-				local tgt = if part.Parent then part.Parent.Name else "?"
-				pcall(function()
-					print("[GFA-DBG] SA-tgt ->", tgt, "| fire passthrough")
-				end)
-			elseif eventName == "Hitcheck" and part then
-				pcall(function()
-					local ob, oc, od = dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-					local tgt = if part.Parent then part.Parent.Name else "?"
-					print("[GFA-DBG] SA-tgt", tgt, "| HC-nat", dbgShort(ob), "|", dbgShort(oc), "|", dbgDumpTable(od))
-				end)
-			end
-		end
-
 		if Config.AimDebugger and eventName == "Fire" then
 			dbgCounts.fire += 1
 			local w, clk, cf = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3])
@@ -695,20 +601,16 @@ local function installNetworkHook(): boolean
 
 	netHooked = true
 	ensureSyncDbg()
-	print(
-		"[GFA] network hooked via filtergc",
-		if Config.SilentAim then "| silent aim (MouseHitSpot)" else "",
-		if Config.AimDebugger then "| debugger" else ""
-	)
+	print("[GFA] network debugger hooked via filtergc")
 	return true
 end
 
 local function ensureNetworkHook()
-	if not (Config.SilentAim or Config.AimDebugger) or netHooked or netInstalling then return end
+	if not Config.AimDebugger or netHooked or netInstalling then return end
 	netInstalling = true
 	task.spawn(function()
 		for _ = 1, 20 do
-			if not (Config.SilentAim or Config.AimDebugger) then break end
+			if not Config.AimDebugger then break end
 			if installNetworkHook() then break end
 			task.wait(1)
 		end
@@ -717,7 +619,7 @@ local function ensureNetworkHook()
 end
 
 local function updateCombatNetwork()
-	if Config.SilentAim or Config.AimDebugger then
+	if Config.AimDebugger then
 		ensureNetworkHook()
 		if netHooked then
 			ensureSyncDbg()
@@ -1007,7 +909,7 @@ UILib.create({
 					title = "Silent Aim",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "hint", text = "Sets MouseHitSpot to redirect aim. Works in 3rd person. Uses FOV + team check." },
+						{ type = "hint", text = "Redirects aim via MouseHitSpot. Use 3rd person for best results. Uses FOV + team check." },
 						{ type = "toggle", key = "AimDebugger", label = "Network Debugger", hud = "Net Debug" },
 						{ type = "hint", text = "Logs Fire / Hitcheck / SA-Fire. Rejoin after toggling hooks." },
 					},
