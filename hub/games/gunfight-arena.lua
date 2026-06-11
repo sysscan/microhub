@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "30-compact"
+local GAME_BUILD = "31-sa-fix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -567,20 +567,62 @@ local function findFireFn(): ((...any) -> ...any)?
 	return nil
 end
 
+local function remoteScore(re: RemoteEvent): number
+	if not isCombatRemote(re) then return 0 end
+	if re:GetFullName():find(LocalPlayer.Name, 1, true) then return 100 end
+	if re:IsDescendantOf(LocalPlayer) then return 100 end
+	local rec = Players:FindFirstChild(LocalPlayer.Name)
+	if rec and re:IsDescendantOf(rec) then return 100 end
+	return 50
+end
+
+local function findCombatRemote(): RemoteEvent?
+	if netRemote and netRemote.Parent then return netRemote end
+	local direct = LocalPlayer:FindFirstChild("RemoteEvent")
+	if direct and direct:IsA("RemoteEvent") and isCombatRemote(direct) then return direct end
+	for _, desc in LocalPlayer:GetDescendants() do
+		if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") and isCombatRemote(desc) then return desc end
+	end
+	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+	if ps then
+		for _, desc in ps:GetDescendants() do
+			if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") and isCombatRemote(desc) then return desc end
+		end
+	end
+	local rec = Players:FindFirstChild(LocalPlayer.Name)
+	if rec then
+		local nested = rec:FindFirstChild("RemoteEvent", true)
+		if nested and nested:IsA("RemoteEvent") and isCombatRemote(nested) then return nested end
+	end
+	return nil
+end
+
+local function bindNetworkApi(self: any)
+	if typeof(self) ~= "table" or typeof(tblGet(self, "EncodeData")) ~= "function" then return end
+	netApi = self
+	local re = tblGet(self, "RE")
+	if typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re) then
+		netRemote = re
+		C.remote = re:GetFullName()
+	end
+end
+
 local function findNetworkApi(): (any, RemoteEvent?)
-	if netApi and (netRemote == nil or netRemote.Parent) then return netApi, netRemote end
+	if netApi and typeof(tblGet(netApi, "EncodeData")) == "function" and (netRemote == nil or netRemote.Parent) then
+		return netApi, netRemote
+	end
 	if netReady() and not sawClock then sawClock, nextGc = true, 0 end
 	local now = os.clock()
 	if now < nextGc then return nil, nil end
 	nextGc = now + GC_INTERVAL
 
-	local bestApi, bestRe = nil, nil
+	local bestApi, bestRe, bestScore = nil, nil, 0
 	local function consider(tbl: any)
 		if not isNetworkApi(tbl) then return end
 		local re = tblGet(tbl, "RE")
-		if typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re) then
-			bestApi, bestRe = tbl, re
-		end
+		if typeof(re) ~= "Instance" or not re:IsA("RemoteEvent") then return end
+		local score = remoteScore(re)
+		if score > bestScore then bestApi, bestRe, bestScore = tbl, re, score end
 	end
 
 	if typeof(filtergc) == "function" then
@@ -594,14 +636,22 @@ local function findNetworkApi(): (any, RemoteEvent?)
 		if ok and typeof(objs) == "table" then for _, o in objs do consider(o) end end
 	end
 
-	if bestApi and bestRe then
+	if bestApi and bestRe and bestScore >= 50 then
 		netApi, netRemote = bestApi, bestRe
+		C.remote = bestRe:GetFullName()
 		findFireFn()
 		return bestApi, bestRe
 	end
 
+	local re = findCombatRemote()
+	if re then netRemote = re end
 	local fn = findFireFn()
-	if fn then netApi = { FireServer = fn }; return netApi, netRemote end
+	if fn then
+		if not netApi or typeof(tblGet(netApi, "EncodeData")) ~= "function" then
+			netApi = { FireServer = fn }
+		end
+		return netApi, netRemote
+	end
 	return nil, nil
 end
 
@@ -625,37 +675,58 @@ local function recordNet(evt: any, payload: { any })
 	end
 end
 
-local function saPart(): BasePart?
+local function viewFlame(): BasePart?
+	if cachedFlame and cachedFlame.Parent then return cachedFlame end
+	local now = os.clock()
+	if now < nextFlame then return cachedFlame end
+	nextFlame = now + FLAME_CACHE
+	local vm = workspace:FindFirstChild("ViewModel")
+	if not vm or not vm:IsA("Model") then cachedFlame = nil; return nil end
+	for _, d in vm:GetDescendants() do
+		if d.Name == "Flame" and d:IsA("BasePart") then cachedFlame = d; return d end
+	end
+	cachedFlame = nil
+	return nil
+end
+
+local function saResolvePart(): BasePart?
 	local p = saShotTarget
-	return if p and p.Parent then p else nil
+	if p and p.Parent then return p end
+	return closestAimPart(aimOrigin())
+end
+
+local function saAimThirdPerson(part: BasePart)
+	if isThirdPerson() then setMouseHit(part.Position) end
 end
 
 local function injectHitables(hitables: any, part: BasePart): any
 	local model = part.Parent
 	if not model or not model:IsA("Model") or typeof(hitables) ~= "table" then return hitables end
 	for _, e in hitables do if e == model then return hitables end end
-	local out = table.create(#hitables + 1)
-	for i, e in hitables do out[i] = e end
-	out[#out + 1] = model
-	return out
+	table.insert(hitables, model)
+	return hitables
 end
 
 local function rewriteFire(payload: { any }): { any }
 	if not Config.SilentAim then return payload end
-	local part = saPart()
+	local part = saResolvePart()
 	if not part then return payload end
+	saAimThirdPerson(part)
 	local raw = payload[3]
 	local cf = decode(raw)
 	if typeof(cf) ~= "CFrame" then return payload end
-	payload[3] = encode(raw, CFrame.new(cf.Position, part.Position))
+	local flame = viewFlame()
+	local origin = if flame then flame.Position else cf.Position
+	payload[3] = encode(raw, CFrame.new(origin, part.Position))
 	C.saFireAt = os.clock()
 	return payload
 end
 
 local function rewriteSync(shotCf: CFrame, hitables: any): (CFrame, any)
 	if not Config.SilentAim then return shotCf, hitables end
-	local part = saPart()
+	local part = saResolvePart()
 	if not part then return shotCf, hitables end
+	saAimThirdPerson(part)
 	local newCf = CFrame.new(shotCf.Position, part.Position)
 	C.saSyncCf, C.saSyncAt = newCf, os.clock()
 	return newCf, injectHitables(hitables, part)
@@ -706,17 +777,12 @@ local function hookNetwork()
 		netOrig = hookfn(target, wrap(function(self, eventName, ...)
 			local args = { ... }
 			if fromGame() then
+				bindNetworkApi(self)
 				if Config.SilentAim and eventName == "Fire" then
 					local okR, na = pcall(rewriteFire, args)
 					if okR and typeof(na) == "table" then args = na end
 				end
-				if Config.AimDebugger then
-					local re = tblGet(self, "RE")
-					if typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re) then
-						C.remote = re:GetFullName()
-					end
-					recordNet(eventName, args)
-				end
+				if Config.AimDebugger then recordNet(eventName, args) end
 			end
 			local o = netOrig
 			return if typeof(o) == "function" then o(self, eventName, table.unpack(args)) else nil
@@ -789,20 +855,6 @@ local function angleTo(origin: Vector3, look: Vector3, target: Vector3): number
 	local dir = target - origin
 	if dir.Magnitude < 0.01 then return 0 end
 	return math.deg(math.acos(math.clamp(look.Unit:Dot(dir.Unit), -1, 1)))
-end
-
-local function viewFlame(): BasePart?
-	if cachedFlame and cachedFlame.Parent then return cachedFlame end
-	local now = os.clock()
-	if now < nextFlame then return cachedFlame end
-	nextFlame = now + FLAME_CACHE
-	local vm = workspace:FindFirstChild("ViewModel")
-	if not vm or not vm:IsA("Model") then cachedFlame = nil; return nil end
-	for _, d in vm:GetDescendants() do
-		if d.Name == "Flame" and d:IsA("BasePart") then cachedFlame = d; return d end
-	end
-	cachedFlame = nil
-	return nil
 end
 
 local function overlayEnsure()
