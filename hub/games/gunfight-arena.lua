@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "47-orderfix"
+local GAME_BUILD = "48-safeframe"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -412,15 +412,7 @@ local function updateCombatAim(dt: number)
 	if Config.Aimbot and combatHoldActive() then
 		combatTargetPart = resolveAimTarget(origin)
 	elseif Config.SilentAim then
-		local bestPart, bestDist = nil, math.huge
-		for char, name in collectTargets() do
-			if not isAimEligible(char, name) then continue end
-			local part = saAimPart(char)
-			if not part then continue end
-			local distSq = screenDistSq(part.Position, origin)
-			if distSq and distSq < bestDist then bestPart, bestDist = part, distSq end
-		end
-		combatTargetPart = bestPart
+		combatTargetPart = closestAimPart(origin)
 	end
 	saShotTarget = if Config.SilentAim and combatTargetPart and combatTargetPart.Parent then combatTargetPart else nil
 	if not combatAimWanted() then
