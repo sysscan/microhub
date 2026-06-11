@@ -162,226 +162,6 @@ local function getSilentAimPartName(character)
 	return "HumanoidRootPart"
 end
 
-;(function()
-local currentTarget = nil
-local killAllRunning = false
-local killAllNoclip = false
-local runKillAll
-local applyBulletTP = function() end
-local bulletRegistryRef = nil
-local nextBulletRegistryScan = 0
-local BULLET_TP_SNAP_DIST = 1.35
-local BULLET_TP_ROCKET_SNAP_DIST = 2.75
-local BULLET_TP_MIN_SPEED = 3500
-local BULLET_TP_ROCKET_MIN_SPEED = 4800
-local applyCombatMods = function() end
-local updateThermalHighlights = function() end
-local updateHitMarkers = function() end
-local weaponStateRef = nil
-
-local TeamsService = nil
-do
-	local gameFolder = ReplicatedStorage:FindFirstChild("Game")
-	local modulesFolder = gameFolder and gameFolder:FindFirstChild("Modules")
-	local teamsModule = modulesFolder and modulesFolder:FindFirstChild("TeamsService")
-	if not teamsModule then
-		for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
-			if descendant.Name == "TeamsService" and descendant:IsA("ModuleScript") then
-				teamsModule = descendant
-				break
-			end
-		end
-	end
-	if teamsModule then
-		local ok, service = pcall(require, teamsModule)
-		if ok and typeof(service) == "table" and typeof(service.GetPlayerTeam) == "function" then
-			TeamsService = service
-		end
-	end
-end
-
-local function getTeamNameFromService(player)
-	if not TeamsService then
-		return nil
-	end
-	local ok, teamInfo = pcall(TeamsService.GetPlayerTeam, TeamsService, player)
-	if ok and typeof(teamInfo) == "table" and teamInfo.Name then
-		return teamInfo.Name
-	end
-	return nil
-end
-
-local function getPlayerTeamName(player)
-	local serviceTeam = getTeamNameFromService(player)
-	if serviceTeam then
-		return serviceTeam
-	end
-
-	local attributeTeam = player:GetAttribute("Team")
-	if attributeTeam ~= nil then
-		return tostring(attributeTeam)
-	end
-
-	local teamValue = player:FindFirstChild("Team") or player:FindFirstChild("TeamColor")
-	if teamValue and teamValue:IsA("ValueBase") then
-		return tostring(teamValue.Value)
-	end
-
-	return nil
-end
-
-local function isSameTeam(player)
-	if player == LocalPlayer then
-		return true
-	end
-
-	local localTeamName = getPlayerTeamName(LocalPlayer)
-	local playerTeamName = getPlayerTeamName(player)
-	if localTeamName and playerTeamName then
-		return localTeamName == playerTeamName
-	end
-
-	return false
-end
-
-local function getTeamRelation(player)
-	if player == LocalPlayer then
-		return "Ally"
-	end
-	if isSameTeam(player) then
-		return "Ally"
-	end
-	if not getPlayerTeamName(LocalPlayer) or not getPlayerTeamName(player) then
-		return "Neutral"
-	end
-	return "Enemy"
-end
-
-local function getInstanceTeamRelation(instance, teamName)
-	local localTeamName = getPlayerTeamName(LocalPlayer)
-	if not localTeamName or not teamName then
-		return "Neutral"
-	end
-	if localTeamName == teamName then
-		return "Ally"
-	end
-	return "Enemy"
-end
-
-local function hasSpawnProtection(character, player)
-	if not character then
-		return true
-	end
-	if character:FindFirstChildOfClass("ForceField") then
-		return true
-	end
-	if player and player:GetAttribute("InMenu") == true then
-		return true
-	end
-	return false
-end
-
-local function isPlayerInCombat(player)
-	if not player or player == LocalPlayer then
-		return false
-	end
-
-	local character = player.Character
-	if not character then
-		return false
-	end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not root or humanoid.Health <= 0 then
-		return false
-	end
-
-	return not hasSpawnProtection(character, player)
-end
-
-local function getDroneAimPart(model)
-	if not model or not model:IsA("Model") then
-		return nil
-	end
-
-	local collision = model:FindFirstChild("CollisionPart", true)
-	if collision and collision:IsA("BasePart") then
-		return collision
-	end
-	if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then
-		return model.PrimaryPart
-	end
-	for _, child in ipairs(model:GetDescendants()) do
-		if child:IsA("BasePart") then
-			return child
-		end
-	end
-	return nil
-end
-
-local function getTargetColor(target)
-	if target.player then
-		return getTeamColor(getTeamRelation(target.player))
-	end
-	if target.drone then
-		local teamName = target.drone:GetAttribute("Team")
-		return getTeamColor(getInstanceTeamRelation(target.drone, teamName and tostring(teamName) or nil))
-	end
-	return Config.ESPEnemyColor
-end
-
-local function setFOV(value)
-	Config.FOV = math.clamp(math.floor(value), 50, 600)
-	FOVSquared = Config.FOV * Config.FOV
-end
-
-local function hasDrawing()
-	return typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
-end
-
-local function createDrawing(kind)
-	if not hasDrawing() then
-		return nil
-	end
-	return Drawing.new(kind)
-end
-
--- Drawing-backed visuals are optional because not every sUNC target exposes Drawing.
-local Tracer = createDrawing("Line")
-if Tracer then
-	Tracer.Visible = false
-	Tracer.Color = Color3.fromRGB(255, 255, 255)
-	Tracer.Thickness = 1.5
-	Tracer.Transparency = 0
-end
-
-local FOVCircle = createDrawing("Circle")
-if FOVCircle then
-	FOVCircle.Visible = false
-	FOVCircle.Thickness = 1
-	FOVCircle.NumSides = 48
-	FOVCircle.Filled = false
-	FOVCircle.Transparency = 0.5
-	FOVCircle.Color = Color3.fromRGB(255, 255, 255)
-end
-
-local flightKeys = {
-	[Enum.KeyCode.W] = false,
-	[Enum.KeyCode.A] = false,
-	[Enum.KeyCode.S] = false,
-	[Enum.KeyCode.D] = false,
-	[Enum.KeyCode.Space] = false,
-	[Enum.KeyCode.LeftControl] = false,
-	[Enum.KeyCode.RightControl] = false,
-}
-
-local function clearFlightKeys()
-	for keyCode in pairs(flightKeys) do
-		flightKeys[keyCode] = false
-	end
-end
-
 -- Anti-cheat / remote debugging
 local LogService = game:GetService("LogService")
 local TeleportService = game:GetService("TeleportService")
@@ -875,6 +655,226 @@ end
 local genv = if typeof(getgenv) == "function" then getgenv() else _G
 genv.__WarfareACLog = acdbgLog
 genv.__WarfareACDump = acdbgPrintLog
+
+;(function()
+local currentTarget = nil
+local killAllRunning = false
+local killAllNoclip = false
+local runKillAll
+local applyBulletTP = function() end
+local bulletRegistryRef = nil
+local nextBulletRegistryScan = 0
+local BULLET_TP_SNAP_DIST = 1.35
+local BULLET_TP_ROCKET_SNAP_DIST = 2.75
+local BULLET_TP_MIN_SPEED = 3500
+local BULLET_TP_ROCKET_MIN_SPEED = 4800
+local applyCombatMods = function() end
+local updateThermalHighlights = function() end
+local updateHitMarkers = function() end
+local weaponStateRef = nil
+
+local TeamsService = nil
+do
+	local gameFolder = ReplicatedStorage:FindFirstChild("Game")
+	local modulesFolder = gameFolder and gameFolder:FindFirstChild("Modules")
+	local teamsModule = modulesFolder and modulesFolder:FindFirstChild("TeamsService")
+	if not teamsModule then
+		for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
+			if descendant.Name == "TeamsService" and descendant:IsA("ModuleScript") then
+				teamsModule = descendant
+				break
+			end
+		end
+	end
+	if teamsModule then
+		local ok, service = pcall(require, teamsModule)
+		if ok and typeof(service) == "table" and typeof(service.GetPlayerTeam) == "function" then
+			TeamsService = service
+		end
+	end
+end
+
+local function getTeamNameFromService(player)
+	if not TeamsService then
+		return nil
+	end
+	local ok, teamInfo = pcall(TeamsService.GetPlayerTeam, TeamsService, player)
+	if ok and typeof(teamInfo) == "table" and teamInfo.Name then
+		return teamInfo.Name
+	end
+	return nil
+end
+
+local function getPlayerTeamName(player)
+	local serviceTeam = getTeamNameFromService(player)
+	if serviceTeam then
+		return serviceTeam
+	end
+
+	local attributeTeam = player:GetAttribute("Team")
+	if attributeTeam ~= nil then
+		return tostring(attributeTeam)
+	end
+
+	local teamValue = player:FindFirstChild("Team") or player:FindFirstChild("TeamColor")
+	if teamValue and teamValue:IsA("ValueBase") then
+		return tostring(teamValue.Value)
+	end
+
+	return nil
+end
+
+local function isSameTeam(player)
+	if player == LocalPlayer then
+		return true
+	end
+
+	local localTeamName = getPlayerTeamName(LocalPlayer)
+	local playerTeamName = getPlayerTeamName(player)
+	if localTeamName and playerTeamName then
+		return localTeamName == playerTeamName
+	end
+
+	return false
+end
+
+local function getTeamRelation(player)
+	if player == LocalPlayer then
+		return "Ally"
+	end
+	if isSameTeam(player) then
+		return "Ally"
+	end
+	if not getPlayerTeamName(LocalPlayer) or not getPlayerTeamName(player) then
+		return "Neutral"
+	end
+	return "Enemy"
+end
+
+local function getInstanceTeamRelation(instance, teamName)
+	local localTeamName = getPlayerTeamName(LocalPlayer)
+	if not localTeamName or not teamName then
+		return "Neutral"
+	end
+	if localTeamName == teamName then
+		return "Ally"
+	end
+	return "Enemy"
+end
+
+local function hasSpawnProtection(character, player)
+	if not character then
+		return true
+	end
+	if character:FindFirstChildOfClass("ForceField") then
+		return true
+	end
+	if player and player:GetAttribute("InMenu") == true then
+		return true
+	end
+	return false
+end
+
+local function isPlayerInCombat(player)
+	if not player or player == LocalPlayer then
+		return false
+	end
+
+	local character = player.Character
+	if not character then
+		return false
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root or humanoid.Health <= 0 then
+		return false
+	end
+
+	return not hasSpawnProtection(character, player)
+end
+
+local function getDroneAimPart(model)
+	if not model or not model:IsA("Model") then
+		return nil
+	end
+
+	local collision = model:FindFirstChild("CollisionPart", true)
+	if collision and collision:IsA("BasePart") then
+		return collision
+	end
+	if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then
+		return model.PrimaryPart
+	end
+	for _, child in ipairs(model:GetDescendants()) do
+		if child:IsA("BasePart") then
+			return child
+		end
+	end
+	return nil
+end
+
+local function getTargetColor(target)
+	if target.player then
+		return getTeamColor(getTeamRelation(target.player))
+	end
+	if target.drone then
+		local teamName = target.drone:GetAttribute("Team")
+		return getTeamColor(getInstanceTeamRelation(target.drone, teamName and tostring(teamName) or nil))
+	end
+	return Config.ESPEnemyColor
+end
+
+local function setFOV(value)
+	Config.FOV = math.clamp(math.floor(value), 50, 600)
+	FOVSquared = Config.FOV * Config.FOV
+end
+
+local function hasDrawing()
+	return typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
+end
+
+local function createDrawing(kind)
+	if not hasDrawing() then
+		return nil
+	end
+	return Drawing.new(kind)
+end
+
+-- Drawing-backed visuals are optional because not every sUNC target exposes Drawing.
+local Tracer = createDrawing("Line")
+if Tracer then
+	Tracer.Visible = false
+	Tracer.Color = Color3.fromRGB(255, 255, 255)
+	Tracer.Thickness = 1.5
+	Tracer.Transparency = 0
+end
+
+local FOVCircle = createDrawing("Circle")
+if FOVCircle then
+	FOVCircle.Visible = false
+	FOVCircle.Thickness = 1
+	FOVCircle.NumSides = 48
+	FOVCircle.Filled = false
+	FOVCircle.Transparency = 0.5
+	FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+end
+
+local flightKeys = {
+	[Enum.KeyCode.W] = false,
+	[Enum.KeyCode.A] = false,
+	[Enum.KeyCode.S] = false,
+	[Enum.KeyCode.D] = false,
+	[Enum.KeyCode.Space] = false,
+	[Enum.KeyCode.LeftControl] = false,
+	[Enum.KeyCode.RightControl] = false,
+}
+
+local function clearFlightKeys()
+	for keyCode in pairs(flightKeys) do
+		flightKeys[keyCode] = false
+	end
+end
 
 local UILib = shared.__MicroHubUILib
 if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
@@ -2196,6 +2196,7 @@ RunService.RenderStepped:Connect(function(dt)
 	end
 end)
 
+;(function()
 local RECOIL_CONTROLLER_NAMES = {
 	"RecoilModule",
 	"RecoilController",
@@ -3751,4 +3752,5 @@ local function warfareUnload()
 end
 
 genv.__WarfareUnload = warfareUnload
+end)()
 end)()
