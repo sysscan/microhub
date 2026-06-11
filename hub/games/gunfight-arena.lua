@@ -550,10 +550,29 @@ local function installNetworkHook(): boolean
 				end
 
 				local thirdP = isThirdPerson()
+				local losTxt = "-"
+				pcall(function()
+					if saTgt and saTgt.Parent and hrLastFireCf then
+						local origin = hrLastFireCf.Position
+						local dir = (saTgt.Position - origin)
+						local params = RaycastParams.new()
+						params.FilterType = Enum.RaycastFilterType.Exclude
+						local char = LocalPlayer.Character
+						local filterList = { char }
+						if saTgt.Parent then table.insert(filterList, saTgt.Parent) end
+						params.FilterDescendantsInstances = filterList
+						local result = workspace:Raycast(origin, dir, params)
+						if result then
+							losTxt = "BLOCKED:" .. result.Instance.Name
+						else
+							losTxt = "CLEAR"
+						end
+					end
+				end)
 				pcall(function()
 					print(string.format(
-						"[HR] Fire #%d | tgt=%s | cam→tgt=%s | cam→mhs=%s | dist=%s | 3p=%s",
-						hrFires, tgtName, angleTxt, mhsAngleTxt, distTxt, tostring(thirdP)
+						"[HR] Fire #%d | tgt=%s | cam→tgt=%s | cam→mhs=%s | dist=%s | 3p=%s | los=%s",
+						hrFires, tgtName, angleTxt, mhsAngleTxt, distTxt, tostring(thirdP), losTxt
 					))
 				end)
 
@@ -562,22 +581,46 @@ local function installNetworkHook(): boolean
 				hrWindow.hits += 1
 				local latency = now - hrLastFireTime
 
-				local hitModel = dbgDecode(payload[2])
-				local hitPart = dbgDecode(payload[3])
+				local rawP2 = payload[2]
+				local rawP3 = payload[3]
+				local hitModel = dbgDecode(rawP2)
+				local hitPart = dbgDecode(rawP3)
 				local hitModelName = "-"
 				local hitPartName = "-"
-				if typeof(hitModel) == "Instance" then hitModelName = hitModel.Name end
-				if typeof(hitPart) == "Instance" then hitPartName = hitPart.Name end
+				if typeof(hitModel) == "Instance" then
+					hitModelName = hitModel.Name
+				elseif typeof(hitModel) == "string" then
+					hitModelName = hitModel
+				else
+					hitModelName = typeof(hitModel) .. ":" .. tostring(hitModel)
+				end
+				if typeof(hitPart) == "Instance" then
+					hitPartName = hitPart.Name
+				elseif typeof(hitPart) == "string" then
+					hitPartName = hitPart
+				else
+					hitPartName = typeof(hitPart) .. ":" .. tostring(hitPart)
+				end
 
-				local matched = (hrLastSaTgt ~= nil and hitModelName == hrLastSaTgt) and "YES" or "NO"
+				local matched = "?"
+				if hrLastSaTgt and hrLastSaTgt ~= "-" then
+					if hitModelName == hrLastSaTgt then
+						matched = "YES"
+					elseif string.find(hitModelName, hrLastSaTgt, 1, true) then
+						matched = "PARTIAL"
+					else
+						matched = "NO"
+					end
+				end
 
 				pcall(function()
 					print(string.format(
-						"[HR] Hitcheck #%d | hit=%s.%s | wanted=%s | match=%s | dt=%.0fms | ratio=%d/%d",
+						"[HR] Hitcheck #%d | hit=%s.%s | wanted=%s | match=%s | dt=%.0fms | ratio=%d/%d | rawT=%s,%s",
 						hrHitchecks, hitModelName, hitPartName,
 						hrLastSaTgt or "-", matched,
 						latency * 1000,
-						hrHitchecks, hrFires
+						hrHitchecks, hrFires,
+						typeof(rawP2), typeof(rawP3)
 					))
 				end)
 			end
