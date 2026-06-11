@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "39-hookfix"
+local GAME_BUILD = "40-apifallback"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -541,6 +541,36 @@ local function findFireFn(): ((...any) -> ...any)?
 	return nil
 end
 
+local function findCombatRemote(): RemoteEvent?
+	if netRemote and netRemote.Parent then return netRemote end
+	for _, root in { LocalPlayer, LocalPlayer:FindFirstChild("PlayerScripts") } do
+		if not root then continue end
+		for _, desc in root:GetDescendants() do
+			if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") and isCombatRemote(desc) then return desc end
+		end
+	end
+	local rec = Players:FindFirstChild(LocalPlayer.Name)
+	if rec then
+		local nested = rec:FindFirstChild("RemoteEvent", true)
+		if nested and nested:IsA("RemoteEvent") and isCombatRemote(nested) then return nested end
+	end
+	return nil
+end
+
+local function findApiByRemote(re: RemoteEvent): any
+	if typeof(getgc) ~= "function" then return nil end
+	local ok, objs = pcall(getgc, true)
+	if not ok or typeof(objs) ~= "table" then return nil end
+	for _, obj in objs do
+		if typeof(obj) ~= "table" then continue end
+		if tget(obj, "RE") ~= re then continue end
+		if typeof(tget(obj, "FireServer")) ~= "function" then continue end
+		if typeof(tget(obj, "EncodeData")) ~= "function" then continue end
+		return obj
+	end
+	return nil
+end
+
 local function findNetworkApi(): (any, RemoteEvent?)
 	if hasFullApi() and (netRemote == nil or netRemote.Parent) then return netApi, netRemote end
 	if LocalPlayer:GetAttribute("ClockOffset") ~= nil and not sawClock then sawClock = true; nextGcScan = 0 end
@@ -572,6 +602,17 @@ local function findNetworkApi(): (any, RemoteEvent?)
 		netApi, netRemote = bestApi, bestRe
 		findFireFn()
 		return bestApi, bestRe
+	end
+
+	local re = findCombatRemote()
+	if re then
+		netRemote = re
+		local apiByRe = findApiByRemote(re)
+		if apiByRe then
+			netApi = apiByRe
+			findFireFn()
+			return apiByRe, re
+		end
 	end
 
 	local fn = findFireFn()
@@ -642,14 +683,22 @@ end
 local function saRewriteFire(payload: { any }): { any }
 	if not Config.SilentAim then return payload end
 	local part = saTarget()
-	if not part then return payload end
+	if not part then
+		if Config.AimDebugger then dlog("SA-skip", "Fire: no target in FOV", 0.5) end
+		return payload
+	end
 	setMouseHit(part.Position)
 	local raw = payload[3]
 	local cf = decode(raw)
-	if typeof(cf) ~= "CFrame" then return payload end
+	if typeof(cf) ~= "CFrame" then
+		if Config.AimDebugger then dlog("SA-skip", "Fire: payload[3] not CFrame (" .. typeof(cf) .. ")", 0.5) end
+		return payload
+	end
+	local tgtName = if part.Parent then part.Parent.Name else "?"
 	local newCf = CFrame.new(saOrigin(cf.Position), part.Position)
 	payload[3] = encode(raw, newCf)
 	sa.fireAt = os.clock()
+	if Config.AimDebugger then dlog("SA-Fire", "-> " .. tgtName .. " " .. shortCf(newCf), 0.3) end
 	return payload
 end
 
