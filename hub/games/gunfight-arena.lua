@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "35-sa-volley"
+local GAME_BUILD = "36-sa-volley2"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -542,14 +542,19 @@ local function saDbgSkip(layer: string, reason: string)
 	dbgLog("SA-skip", layer .. " " .. reason, 0.25)
 end
 
+local SA_VOLLEY_GAP = 0.15
+
 local function saOnVSyncEvent()
 	if not Config.SilentAim then return end
-	C.sa.volley += 1
-	C.sa.lastVolleyAt = os.clock()
+	local now = os.clock()
+	if now - C.sa.lastVolleyAt > SA_VOLLEY_GAP then
+		C.sa.volley += 1
+		C.sa.fire, C.sa.encode = "-", "-"
+	end
+	C.sa.lastVolleyAt = now
 	if C.sa.sync ~= "OK" then
 		C.sa.sync = "event"
 	end
-	C.sa.fire, C.sa.encode = "-", "-"
 end
 
 local function bindSaVolleyTracker()
