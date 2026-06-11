@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "26-sa-stable"
+local GAME_BUILD = "27-sa-vortex"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -451,6 +451,13 @@ local function updateCombatAim(dt: number)
 
 	if Config.SilentAim and combatTargetPart then
 		setMouseHit(combatTargetPart.Position)
+		if
+			not Config.Aimbot
+			and not isThirdPerson()
+			and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+		then
+			Camera.CFrame = CFrame.new(Camera.CFrame.Position, combatTargetPart.Position)
+		end
 	end
 
 	if not Config.Aimbot or not combatHoldActive() or not combatTargetPart then
@@ -518,7 +525,7 @@ local dbg = {
 
 local dbgTexts: { any } = {}
 local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "26-sa-stable"
+local DBG_HOOK_BUILD = "27-sa-vortex"
 local dbgNetworkHooked = false
 local dbgInitPrinted = false
 local dbgCapsPrinted = false
@@ -526,6 +533,16 @@ local dbgHookWorkerActive = false
 local combatHookGiveUp = false
 local combatHookInstallStarted = false
 local combatNetworkFireOriginal: ((...any) -> ...any)? = nil
+local vortexSyncHooked = false
+local vortexSyncOriginal: ((...any) -> ...any)? = nil
+local saHookAnnounced = false
+local saLastSyncCf: CFrame? = nil
+
+local sa = {
+	vortexSync = false,
+	lastFireAt = 0,
+	lastSyncAt = 0,
+}
 
 local function dbgVolt(name: string): any
 	if typeof(getgenv) == "function" then
@@ -973,9 +990,7 @@ local function dbgFindNetworkApi(): (any, RemoteEvent?)
 	end)
 	if foundApi and foundRemote then
 		local tableFn = dbgTblGet(foundApi, "FireServer")
-		if fireFn and typeof(tableFn) == "function" and tableFn ~= fireFn then
-			foundApi, foundRemote = nil, nil
-		else
+		if typeof(tableFn) == "function" then
 			dbgGcCachedApi = foundApi
 			dbgGcCachedRemote = foundRemote
 			if fireFn then
@@ -1061,6 +1076,25 @@ local function saMaybeEncode(sample: any, value: any): any
 	return if ok then encoded else value
 end
 
+local function saTargetModel(part: BasePart): Model?
+	local model = part.Parent
+	return if model and model:IsA("Model") then model else nil
+end
+
+local function saInjectHitables(hitables: any, part: BasePart): any
+	local model = saTargetModel(part)
+	if not model or typeof(hitables) ~= "table" then
+		return hitables
+	end
+	for _, entry in hitables do
+		if entry == model then
+			return hitables
+		end
+	end
+	table.insert(hitables, model)
+	return hitables
+end
+
 local function saRewriteFirePayload(payload: { any }): { any }
 	if not Config.SilentAim or not combatHoldActive() then
 		return payload
@@ -1079,7 +1113,67 @@ local function saRewriteFirePayload(payload: { any }): { any }
 	local origin = if flame then flame.Position else serverCf.Position
 	local newCf = CFrame.new(origin, part.Position)
 	payload[3] = saMaybeEncode(rawCf, newCf)
+	sa.lastFireAt = os.clock()
 	return payload
+end
+
+local function saRewriteSyncShot(shotCf: CFrame, hitables: any): (CFrame, any)
+	local part = resolveAimTarget(aimOrigin())
+	if not part or not Config.SilentAim or not combatHoldActive() then
+		return shotCf, hitables
+	end
+	setMouseHit(part.Position)
+	local newCf = CFrame.new(shotCf.Position, part.Position)
+	saLastSyncCf = newCf
+	sa.lastSyncAt = os.clock()
+	return newCf, saInjectHitables(hitables, part)
+end
+
+local function combatHookVortexSync()
+	if vortexSyncHooked or not Config.SilentAim or typeof(voltHookfunction) ~= "function" then
+		return
+	end
+
+	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+	local vortex = playerScripts and playerScripts:FindFirstChild("Vortex")
+	local sync = vortex and vortex:FindFirstChild("Sync")
+	if not sync or not sync:IsA("BindableEvent") then
+		return
+	end
+
+	local fireMethod = sync.Fire
+	if typeof(fireMethod) ~= "function" then
+		return
+	end
+
+	local ok = pcall(function()
+		vortexSyncOriginal = voltHookfunction(fireMethod, dbgWrapHook(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+			if dbgFromGame() and Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
+				a4, a7 = saRewriteSyncShot(a4, a7)
+			end
+			local original = vortexSyncOriginal
+			if typeof(original) ~= "function" then
+				return
+			end
+			return original(self, a1, a2, a3, a4, a5, a6, a7, a8)
+		end))
+	end)
+	if ok and typeof(vortexSyncOriginal) == "function" then
+		vortexSyncHooked = true
+		sa.vortexSync = true
+	end
+end
+
+local function saAnnounceHooks()
+	if saHookAnnounced or not Config.SilentAim or not dbg.networkHooked then
+		return
+	end
+	saHookAnnounced = true
+	print(
+		"[GFA] silent aim ready",
+		if dbg.remotePath ~= "" then dbg.remotePath else "Network.FireServer",
+		if sa.vortexSync then "| Vortex.Sync" else "| sync:off"
+	)
 end
 
 local function dbgHookNetworkApi()
@@ -1143,6 +1237,8 @@ local function dbgHookNetworkApi()
 	dbg.networkHooked = true
 	dbg.hooksReady = true
 	dbg.status = "Network.FireServer hooked"
+	combatHookVortexSync()
+	saAnnounceHooks()
 	if Config.AimDebugger then
 		dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
 	end
@@ -1273,10 +1369,78 @@ local function dbgHideOverlay()
 	end
 end
 
+local SA_STATUS_LINES = 6
+
+local function saHideStatus()
+	for i = 1, SA_STATUS_LINES do
+		local line = dbgTexts[i]
+		if line then
+			line.Visible = false
+		end
+	end
+end
+
+local function saUpdateStatus()
+	if not Config.SilentAim or Config.AimDebugger or not canDraw then
+		return
+	end
+	dbgEnsureOverlay()
+	local now = os.clock()
+	if now < dbgNextOverlayAt then
+		return
+	end
+	dbgNextOverlayAt = now + DBG_OVERLAY_INTERVAL
+
+	local origin = aimOrigin()
+	local part = combatTargetPart or closestAimPart(origin)
+	local targetNameStr = if part and part.Parent then part.Parent.Name else "—"
+	local syncToTarget = if part and saLastSyncCf
+		then dbgAngleTo(saLastSyncCf.Position, saLastSyncCf.LookVector, part.Position)
+		else nil
+	local fireAge = if sa.lastFireAt > 0 then string.format("%.1fs", now - sa.lastFireAt) else "—"
+	local syncAge = if sa.lastSyncAt > 0 then string.format("%.1fs", now - sa.lastSyncAt) else "—"
+
+	local lines = {
+		"── Silent Aim ──",
+		string.format(
+			"Hooks: net:%s vortex:%s | %s",
+			if dbg.networkHooked then "OK" else "—",
+			if sa.vortexSync then "OK" else "—",
+			dbg.status
+		),
+		string.format("Target: %s | hold RMB + shoot", targetNameStr),
+		string.format("Last redirect  fire:%s  sync:%s", fireAge, syncAge),
+		string.format("Sync angle° to target: %s", if syncToTarget then string.format("%.1f", syncToTarget) else "—"),
+		"Enable Debugger below to compare Fire/Sync/Hitcheck",
+	}
+
+	for i = 1, SA_STATUS_LINES do
+		local line = dbgTexts[i]
+		if line then
+			line.Text = lines[i] or ""
+			line.Visible = lines[i] ~= nil
+		end
+	end
+	for i = SA_STATUS_LINES + 1, #dbgTexts do
+		dbgTexts[i].Visible = false
+	end
+end
+
 local function dbgUpdate()
 	if combatHooksWanted() then
 		combatEnsureHooks()
+		if dbg.networkHooked then
+			combatHookVortexSync()
+			saAnnounceHooks()
+		end
 	end
+
+	if Config.SilentAim and not Config.AimDebugger then
+		saUpdateStatus()
+		return
+	end
+
+	saHideStatus()
 
 	if not Config.AimDebugger then
 		dbgHideOverlay()
@@ -1306,8 +1470,9 @@ local function dbgUpdate()
 	local serverToTarget = if part and dbg.lastFire and dbg.lastFire.serverCf
 		then dbgAngleTo(dbg.lastFire.serverCf.Position, dbg.lastFire.serverCf.LookVector, part.Position)
 		else nil
-	local syncToTarget = if part and dbg.lastSyncCf
-		then dbgAngleTo(dbg.lastSyncCf.Position, dbg.lastSyncCf.LookVector, part.Position)
+	local syncCf = dbg.lastSyncCf or saLastSyncCf
+	local syncToTarget = if part and syncCf
+		then dbgAngleTo(syncCf.Position, syncCf.LookVector, part.Position)
 		else nil
 	local clockOffset = LocalPlayer:GetAttribute("ClockOffset")
 	local networkReady = clockOffset ~= nil
@@ -1315,8 +1480,9 @@ local function dbgUpdate()
 	local lines = {
 		"── Silent Aim Debugger ──",
 		string.format(
-			"Hooks: net:%s sync:%d | %s",
+			"Hooks: net:%s vortex:%s dbg-sync:%d | %s",
 			if dbg.networkHooked then "OK" else "—",
+			if sa.vortexSync then "OK" else "—",
 			dbg.syncBound,
 			dbg.status
 		),
@@ -1364,7 +1530,7 @@ local function dbgUpdate()
 			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.c) else "—",
 			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.d) else "—"
 		),
-		"Hook: Fire arg5 CFrame (cam) + Sync shot CFrame + MouseHitSpot",
+		"Hook: Network Fire CFrame + Vortex Sync shot + MouseHitSpot",
 		if dbg.remotePath ~= "" then dbg.remotePath else "Remote: not found yet",
 	}
 
@@ -1655,7 +1821,7 @@ UILib.create({
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
 						{
 							type = "hint",
-							text = "Redirects server Fire + MouseHitSpot (3rd person). Uses Combat hold RMB, FOV, bone, sticky. Rejoin after updates.",
+							text = "Hold RMB, aim in FOV, shoot. Uses Combat team/FOV/bone/sticky. Enable Debugger to verify angles.",
 						},
 					},
 				},
