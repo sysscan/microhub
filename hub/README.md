@@ -2,6 +2,8 @@
 
 Loads game scripts by `game.PlaceId`.
 
+**AI / contributor reference:** see [AI_GUIDE.md](AI_GUIDE.md) for architecture, per-game exploit internals, module APIs, and conventions.
+
 ## Execute (paste once, never update)
 
 ```lua
