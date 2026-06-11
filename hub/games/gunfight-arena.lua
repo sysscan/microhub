@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "29-sa-hooksafe"
+local GAME_BUILD = "30-compact"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -93,13 +93,9 @@ end
 
 local function findPlayer(name: string): Player?
 	local child = Players:FindFirstChild(name)
-	if child and child:IsA("Player") then
-		return child
-	end
-	for _, player in Players:GetPlayers() do
-		if player.Name == name then
-			return player
-		end
+	if child and child:IsA("Player") then return child end
+	for _, p in Players:GetPlayers() do
+		if p.Name == name then return p end
 	end
 	return nil
 end
@@ -132,38 +128,21 @@ local function teamColor(rel: string): Color3
 end
 
 local function getTeamFor(name: string, char: Model?): any
-	local record = Players:FindFirstChild(name)
-	if record then
-		local id = record:GetAttribute("Team")
-		if id ~= nil then
-			return normTeam(id)
-		end
+	local rec = Players:FindFirstChild(name)
+	local id = rec and rec:GetAttribute("Team")
+	if id == nil then
+		local p = findPlayer(name)
+		id = p and p:GetAttribute("Team")
 	end
-	local player = findPlayer(name)
-	if player then
-		local id = player:GetAttribute("Team")
-		if id ~= nil then
-			return normTeam(id)
-		end
-	end
-	return if char then normTeam(char:GetAttribute("Team")) else nil
+	if id == nil and char then id = char:GetAttribute("Team") end
+	return if id == nil then nil else normTeam(id)
 end
 
 local function relation(name: string, char: Model?): string
-	if name == LocalPlayer.Name then
-		return "Ally"
-	end
-	if name == "Skinwalker" then
-		return "Enemy"
-	end
-	if not hasTeamPlay() then
-		return "Enemy"
-	end
+	if name == LocalPlayer.Name then return "Ally" end
+	if name == "Skinwalker" or not hasTeamPlay() then return "Enemy" end
 	local pt = getTeamFor(name, char)
-	if pt == nil then
-		return "Enemy"
-	end
-	return if teamsEqual(getLocalTeam(), pt) then "Ally" else "Enemy"
+	return if pt ~= nil and teamsEqual(getLocalTeam(), pt) then "Ally" else "Enemy"
 end
 
 local function displayName(name: string): string
@@ -224,39 +203,21 @@ local function getSpawned(): { [string]: Model }
 end
 
 local function collectTargets(): { [Model]: string }
-	local targets: { [Model]: string } = {}
-
+	local t: { [Model]: string } = {}
 	local function add(name: string?, char: Instance?)
-		if not name or name == LocalPlayer.Name or not char or not char:IsA("Model") or targets[char] then
-			return
-		end
-		if name == "Skinwalker" or isKnownCombatant(name) then
-			targets[char] = name
-		end
+		if not name or name == LocalPlayer.Name or not char or not char:IsA("Model") or t[char] then return end
+		if name == "Skinwalker" or isKnownCombatant(name) then t[char] = name end
 	end
-
-	for name, char in getSpawned() do
-		add(name, char)
-	end
-	for _, record in Players:GetChildren() do
-		add(record.Name, workspace:FindFirstChild(record.Name))
-	end
-	for _, player in Players:GetPlayers() do
-		if player ~= LocalPlayer then
-			add(player.Name, workspace:FindFirstChild(player.Name))
-			add(player.Name, player.Character)
-		end
+	for name, char in getSpawned() do add(name, char) end
+	for _, rec in Players:GetChildren() do add(rec.Name, workspace:FindFirstChild(rec.Name)) end
+	for _, p in Players:GetPlayers() do
+		if p ~= LocalPlayer then add(p.Name, workspace:FindFirstChild(p.Name)); add(p.Name, p.Character) end
 	end
 	for _, child in workspace:GetChildren() do
-		if child:IsA("Model") and isKnownCombatant(child.Name) then
-			add(child.Name, child)
-		end
+		if child:IsA("Model") and isKnownCombatant(child.Name) then add(child.Name, child) end
 	end
-	if getGameMode() == "BOSS" then
-		add("Skinwalker", workspace:FindFirstChild("Skinwalker"))
-	end
-
-	return targets
+	if getGameMode() == "BOSS" then add("Skinwalker", workspace:FindFirstChild("Skinwalker")) end
+	return t
 end
 
 local function hpColor(ratio: number): Color3
@@ -397,13 +358,6 @@ local function combatAimWanted(): boolean
 	return Config.Aimbot or Config.SilentAim
 end
 
-local function resolveSilentAimTarget(origin: Vector2): BasePart?
-	if not Config.SilentAim then
-		return nil
-	end
-	return closestAimPart(origin)
-end
-
 local function resolveAimTarget(origin: Vector2): BasePart?
 	if not combatHoldActive() then
 		stickyChar = nil
@@ -454,7 +408,7 @@ local function updateCombatAim(dt: number)
 	if Config.Aimbot and combatHoldActive() then
 		combatTargetPart = resolveAimTarget(origin)
 	elseif Config.SilentAim then
-		combatTargetPart = resolveSilentAimTarget(origin)
+		combatTargetPart = closestAimPart(origin)
 	end
 	saShotTarget = if Config.SilentAim and combatTargetPart and combatTargetPart.Parent then combatTargetPart else nil
 	if not combatAimWanted() then
@@ -482,1084 +436,469 @@ local function updateCombatAim(dt: number)
 	end
 end
 
--- Silent aim debugger (Vortex INVK → Network.FireServer → RemoteEvent)
+-- Combat hooks: silent aim + debugger (Vortex Sync -> Network.FireServer)
 
-local DBG_CONSOLE_INTERVAL = 4
-local DBG_LINE_COUNT = 14
-local DBG_HOOK_RETRY = 3
-local DBG_HOOK_MAX_ATTEMPTS = 12
-local DBG_GC_SCAN_INTERVAL = 6
-local DBG_OVERLAY_INTERVAL = 0.12
-local DBG_SYNC_SCAN_INTERVAL = 1
-local DBG_FLAME_CACHE_INTERVAL = 0.5
+local HOOK_RETRY, HOOK_MAX, GC_INTERVAL = 3, 12, 6
+local OVERLAY_DT, SYNC_SCAN, FLAME_CACHE, LOG_CD = 0.12, 1, 0.5, 4
+local OVERLAY_MAX = 14
 
-type DbgShot = {
-	at: number,
-	weapon: string?,
-	clock: number?,
-	serverCf: CFrame?,
-	suppressed: boolean?,
-	ads: boolean?,
+local C = {
+	net = 0, fire = 0, hit = 0, sync = 0, syncBound = 0,
+	netHooked = false, vortexHooked = false, giveUp = false, installing = false,
+	announced = false, capsDone = false, initDone = false,
+	status = "idle", remote = "", lastEvt = "",
+	lastFire = nil :: any, lastHit = nil :: any, lastSyncCf = nil :: CFrame?, lastSyncWep = "",
+	logCd = {} :: { [string]: number },
+	saFireAt = 0, saSyncAt = 0, saSyncCf = nil :: CFrame?,
 }
+local netOrig: ((...any) -> ...any)?, vortexOrig: ((...any) -> ...any)?
+local netApi: any, netRemote: RemoteEvent?, netFireFn: ((...any) -> ...any)?
+local nextGc, nextOv, nextSync, nextFlame, sawClock = 0, 0, 0, 0, false
+local cachedFlame: BasePart?
+local ovLines: { any } = {}
+local syncConns: { [Instance]: RBXScriptConnection } = {}
 
-type DbgHit = {
-	at: number,
-	a: any,
-	b: any,
-	c: any,
-	d: any,
-}
-
-local dbg = {
-	netCount = 0,
-	fireCount = 0,
-	hitCount = 0,
-	syncCount = 0,
-	lastFire = nil :: DbgShot?,
-	lastHitcheck = nil :: DbgHit?,
-	lastSyncCf = nil :: CFrame?,
-	lastSyncWeapon = nil :: string?,
-	logCooldowns = {} :: { [string]: number },
-	hooksReady = false,
-	networkHooked = false,
-	remotePath = "",
-	syncPath = "",
-	syncBound = 0,
-	lastEvent = "",
-	status = "idle",
-}
-
-local dbgTexts: { any } = {}
-local DBG_SESSION_KEY = "__MicroHubGFA_Dbg"
-local DBG_HOOK_BUILD = "29-sa-hooksafe"
-local dbgNetworkHooked = false
-local dbgInitPrinted = false
-local dbgCapsPrinted = false
-local dbgHookWorkerActive = false
-local combatHookGiveUp = false
-local combatHookInstallStarted = false
-local combatNetworkFireOriginal: ((...any) -> ...any)? = nil
-local vortexSyncHooked = false
-local vortexSyncOriginal: ((...any) -> ...any)? = nil
-local saHookAnnounced = false
-local saLastSyncCf: CFrame? = nil
-
-local sa = {
-	vortexSync = false,
-	lastFireAt = 0,
-	lastSyncAt = 0,
-}
-
-local function dbgVolt(name: string): any
+local function volt(n: string): any
 	if typeof(getgenv) == "function" then
-		local value = getgenv()[name]
-		if value ~= nil then
-			return value
-		end
+		local v = getgenv()[n]
+		if v ~= nil then return v end
 	end
-	return rawget(_G, name)
+	return rawget(_G, n)
 end
 
-local voltHookfunction = dbgVolt("hookfunction")
-local voltNewcclosure = dbgVolt("newcclosure")
-local voltGetgc = dbgVolt("getgc")
-local voltFiltergc = dbgVolt("filtergc")
-local voltCheckcaller = dbgVolt("checkcaller")
-local dbgSyncConns: { [Instance]: RBXScriptConnection } = {}
-local dbgNextOverlayAt = 0
-local dbgNextSyncScan = 0
-local dbgNextFlameScan = 0
-local dbgCachedFlame: BasePart? = nil
-local dbgCachedCombatRemote: RemoteEvent? = nil
-local dbgGcCachedApi: any = nil
-local dbgGcCachedRemote: RemoteEvent? = nil
-local dbgGcCachedFireFn: ((...any) -> ...any)? = nil
-local dbgNextGcScan = 0
-local dbgSeenClockOffset = false
+local hookfn = volt("hookfunction")
+local newcc = volt("newcclosure")
+local filtergc = volt("filtergc")
+local getgc = volt("getgc")
+local chkcaller = volt("checkcaller")
 
-local function dbgShortCf(cf: any): string
-	if typeof(cf) ~= "CFrame" then
-		return "—"
-	end
+local function wrap(fn: (...any) -> ...any): (...any) -> ...any
+	return if typeof(newcc) == "function" then newcc(fn) else fn
+end
+
+local function fromGame(): boolean
+	return typeof(chkcaller) ~= "function" or not chkcaller()
+end
+
+local function tblGet(t: any, k: string): any
+	if typeof(t) ~= "table" then return nil end
+	local v = rawget(t, k)
+	if v ~= nil then return v end
+	local ok, x = pcall(function() return t[k] end)
+	return if ok then x else nil
+end
+
+local function shortCf(cf: any): string
+	if typeof(cf) ~= "CFrame" then return "-" end
 	local p, l = cf.Position, cf.LookVector
-	return string.format(
-		"p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)",
-		p.X,
-		p.Y,
-		p.Z,
-		l.X,
-		l.Y,
-		l.Z
-	)
+	return string.format("p(%.0f,%.0f,%.0f) lv(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z, l.X, l.Y, l.Z)
 end
 
-local function dbgShortVal(value: any): string
-	local t = typeof(value)
-	if t == "string" then
-		if #value > 28 then
-			return string.sub(value, 1, 25) .. "..."
-		end
-		return value
-	end
-	if t == "number" then
-		return string.format("%.3f", value)
-	end
-	if t == "boolean" then
-		return if value then "true" else "false"
-	end
-	if t == "CFrame" then
-		return dbgShortCf(value)
-	end
-	if t == "Instance" then
-		return value.Name
-	end
+local function short(v: any): string
+	local t = typeof(v)
+	if t == "string" then return #v > 28 and string.sub(v, 1, 25) .. "..." or v end
+	if t == "number" then return string.format("%.3f", v) end
+	if t == "boolean" then return if v then "true" else "false" end
+	if t == "CFrame" then return shortCf(v) end
+	if t == "Instance" then return v.Name end
 	return t
 end
 
-local function dbgLog(key: string, message: string, cooldown: number?)
-	if not Config.AimDebugger then
-		return
-	end
-	cooldown = cooldown or DBG_CONSOLE_INTERVAL
+local function dbgLog(key: string, msg: string, cd: number?)
+	if not Config.AimDebugger then return end
+	cd = cd or LOG_CD
 	local now = os.clock()
-	if cooldown > 0 and now - (dbg.logCooldowns[key] or 0) < cooldown then
-		return
-	end
-	dbg.logCooldowns[key] = now
-	print("[GFA-DBG]", key, message)
+	if cd > 0 and now - (C.logCd[key] or 0) < cd then return end
+	C.logCd[key] = now
+	print("[GFA-DBG]", key, msg)
 end
 
-local function dbgMaybeDecode(value: any): any
-	if typeof(value) ~= "string" or string.sub(value, 1, 1) ~= "~" then
-		return value
-	end
-	local codecModule = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
-	if not codecModule then
-		return value
-	end
-	local ok, codec = pcall(require, codecModule)
-	if not ok or typeof(codec) ~= "table" or typeof(codec.AutoDecode) ~= "function" then
-		return value
-	end
-	local okDecode, decoded = pcall(codec.AutoDecode, value)
-	return if okDecode then decoded else value
+local function decode(v: any): any
+	if typeof(v) ~= "string" or string.sub(v, 1, 1) ~= "~" then return v end
+	local mod = game:GetService("ReplicatedStorage"):FindFirstChild("DataCodec")
+	if not mod then return v end
+	local ok, codec = pcall(require, mod)
+	if not ok or typeof(codec) ~= "table" or typeof(codec.AutoDecode) ~= "function" then return v end
+	local ok2, out = pcall(codec.AutoDecode, v)
+	return if ok2 then out else v
 end
 
-local function dbgRecordNetworkEvent(eventName: any, payload: { any })
-	if typeof(eventName) ~= "string" then
-		return
-	end
-	if eventName ~= "Fire" and eventName ~= "Hitcheck" then
-		return
-	end
-	if eventName == "Fire" and dbg.lastFire then
-		if os.clock() - dbg.lastFire.at < 0.02 then
-			return
-		end
-	end
-
-	dbg.netCount += 1
-	dbg.lastEvent = eventName
-
-	if eventName == "Fire" then
-		dbg.fireCount += 1
-		local weapon = dbgMaybeDecode(payload[1])
-		local clock = dbgMaybeDecode(payload[2])
-		local serverCf = dbgMaybeDecode(payload[3])
-		dbg.lastFire = {
-			at = os.clock(),
-			weapon = dbgShortVal(weapon),
-			clock = if typeof(clock) == "number" then clock else nil,
-			serverCf = if typeof(serverCf) == "CFrame" then serverCf else nil,
-			suppressed = if typeof(dbgMaybeDecode(payload[4])) == "boolean" then dbgMaybeDecode(payload[4]) else nil,
-			ads = if typeof(dbgMaybeDecode(payload[5])) == "boolean" then dbgMaybeDecode(payload[5]) else nil,
-		}
-		dbgLog("Fire", string.format("Fire #%d %s %s", dbg.fireCount, dbg.lastFire.weapon, dbgShortCf(dbg.lastFire.serverCf)), 2)
-	elseif eventName == "Hitcheck" then
-		dbg.hitCount += 1
-		dbg.lastHitcheck = {
-			at = os.clock(),
-			a = dbgMaybeDecode(payload[1]),
-			b = dbgMaybeDecode(payload[2]),
-			c = dbgMaybeDecode(payload[3]),
-			d = dbgMaybeDecode(payload[4]),
-		}
-		dbgLog(
-			"Hitcheck",
-			string.format(
-				"#%d %s | %s | %s | %s",
-				dbg.hitCount,
-				dbgShortVal(dbg.lastHitcheck.a),
-				dbgShortVal(dbg.lastHitcheck.b),
-				dbgShortVal(dbg.lastHitcheck.c),
-				dbgShortVal(dbg.lastHitcheck.d)
-			),
-			2
-		)
-	end
+local function encode(sample: any, value: any): any
+	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then return value end
+	local enc = netApi and tblGet(netApi, "EncodeData")
+	if typeof(enc) ~= "function" then return value end
+	local ok, out = pcall(function() return enc(netApi, value) end)
+	if not ok then ok, out = pcall(enc, value) end
+	return if ok then out else value
 end
 
-local function dbgSession(): { [string]: any }?
-	if typeof(getgenv) ~= "function" then
-		return nil
-	end
-	local env = getgenv()
-	local session = env[DBG_SESSION_KEY]
-	if typeof(session) ~= "table" or session.build ~= DBG_HOOK_BUILD then
-		session = { build = DBG_HOOK_BUILD }
-		env[DBG_SESSION_KEY] = session
-	end
-	return session
-end
-
-local function dbgWrapHook(fn: (...any) -> ...any): (...any) -> ...any
-	if typeof(voltNewcclosure) == "function" then
-		return voltNewcclosure(fn)
-	end
-	return fn
-end
-
-local function dbgFromGame(): boolean
-	return typeof(voltCheckcaller) ~= "function" or not voltCheckcaller()
-end
-
-local function dbgHooksActive(): boolean
-	return dbg.networkHooked
-end
-
-local function combatHooksWanted(): boolean
-	return Config.SilentAim or Config.AimDebugger
-end
-
-local function dbgTblGet(tbl: any, key: string): any
-	if typeof(tbl) ~= "table" then
-		return nil
-	end
-	local value = rawget(tbl, key)
-	if value ~= nil then
-		return value
-	end
-	local ok, indexed = pcall(function()
-		return tbl[key]
-	end)
-	if ok then
-		return indexed
-	end
-	return nil
-end
-
-local function dbgNetworkReady(): boolean
+local function netReady(): boolean
 	return LocalPlayer:GetAttribute("ClockOffset") ~= nil
 end
 
-local function dbgIsCombatRemote(remote: RemoteEvent): boolean
-	if remote:GetFullName():find(LocalPlayer.Name, 1, true) then
-		return true
-	end
-	if remote:IsDescendantOf(LocalPlayer) then
-		return true
-	end
-	local record = Players:FindFirstChild(LocalPlayer.Name)
-	if record and remote:IsDescendantOf(record) then
-		return true
-	end
-	return remote:FindFirstAncestorWhichIsA("Player") == LocalPlayer
+local function isCombatRemote(re: RemoteEvent): boolean
+	if re:GetFullName():find(LocalPlayer.Name, 1, true) then return true end
+	if re:IsDescendantOf(LocalPlayer) then return true end
+	local rec = Players:FindFirstChild(LocalPlayer.Name)
+	if rec and re:IsDescendantOf(rec) then return true end
+	return re:FindFirstAncestorWhichIsA("Player") == LocalPlayer
 end
 
-local function dbgIsBadRemote(remote: RemoteEvent): boolean
-	return not dbgIsCombatRemote(remote)
+local function isNetworkApi(tbl: any): boolean
+	if typeof(tbl) ~= "table" then return false end
+	for _, k in { "FireServer", "OnEvent", "EncodeData", "DecodeData" } do
+		if typeof(tblGet(tbl, k)) ~= "function" then return false end
+	end
+	local re = tblGet(tbl, "RE")
+	return typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re)
 end
 
-local function dbgIsNetworkApi(tbl: any): boolean
-	if typeof(tbl) ~= "table" then
-		return false
-	end
-	if typeof(dbgTblGet(tbl, "FireServer")) ~= "function" then
-		return false
-	end
-	if typeof(dbgTblGet(tbl, "OnEvent")) ~= "function" then
-		return false
-	end
-	if typeof(dbgTblGet(tbl, "EncodeData")) ~= "function" then
-		return false
-	end
-	if typeof(dbgTblGet(tbl, "DecodeData")) ~= "function" then
-		return false
-	end
-	local re = dbgTblGet(tbl, "RE")
-	return typeof(re) == "Instance" and re:IsA("RemoteEvent") and dbgIsCombatRemote(re)
-end
-
-local function dbgAcceptCombatRemote(remote: Instance?): RemoteEvent?
-	if remote and remote:IsA("RemoteEvent") and not dbgIsBadRemote(remote) then
-		dbgCachedCombatRemote = remote
-		return remote
-	end
-	return nil
-end
-
-local function dbgCombatRemote(): RemoteEvent?
-	if dbgCachedCombatRemote and dbgCachedCombatRemote.Parent then
-		return dbgCachedCombatRemote
-	end
-
-	local direct = LocalPlayer:FindFirstChild("RemoteEvent")
-	if dbgAcceptCombatRemote(direct) then
-		return direct
-	end
-
-	for _, desc in LocalPlayer:GetDescendants() do
-		if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") then
-			return dbgAcceptCombatRemote(desc)
-		end
-	end
-
-	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
-	if playerScripts then
-		for _, desc in playerScripts:GetDescendants() do
-			if desc.Name == "RemoteEvent" and desc:IsA("RemoteEvent") then
-				return dbgAcceptCombatRemote(desc)
-			end
-		end
-	end
-
-	local record = Players:FindFirstChild(LocalPlayer.Name)
-	if record then
-		local nested = record:FindFirstChild("RemoteEvent", true)
-		if dbgAcceptCombatRemote(nested) then
-			return nested
-		end
-	end
-
-	return dbgCachedCombatRemote
-end
-
-local function dbgPrintCaps()
-	if dbgCapsPrinted or not Config.AimDebugger then
-		return
-	end
-	dbgCapsPrinted = true
-	local remote = dbgCombatRemote()
-	print(
-		"[GFA-DBG] caps",
-		"hookfunction:",
-		typeof(voltHookfunction),
-		"filtergc:",
-		typeof(voltFiltergc),
-		"getgc:",
-		typeof(voltGetgc),
-		"remote:",
-		if remote then remote:GetFullName() else "nil"
-	)
-end
-
-local function dbgRemoteScore(remote: RemoteEvent): number
-	if dbgIsBadRemote(remote) then
-		return 0
-	end
-	if remote:GetFullName():find(LocalPlayer.Name, 1, true) then
-		return 100
-	end
-	if remote:IsDescendantOf(LocalPlayer) then
-		return 100
-	end
-	local playerAncestor = remote:FindFirstAncestorWhichIsA("Player")
-	if playerAncestor == LocalPlayer then
-		return 100
-	end
-	local record = Players:FindFirstChild(LocalPlayer.Name)
-	if record and remote:IsDescendantOf(record) then
-		return 100
-	end
-	return 0
-end
-
-local function dbgScanNetworkTables(callback: (any, RemoteEvent) -> boolean)
-	local bestApi: any = nil
-	local bestRemote: RemoteEvent? = nil
-	local bestScore = 0
-	local candidateCount = 0
-
-	local function consider(tbl: any): boolean
-		if not dbgIsNetworkApi(tbl) then
-			return false
-		end
-		local remote = dbgTblGet(tbl, "RE")
-		if typeof(remote) ~= "Instance" or not remote:IsA("RemoteEvent") then
-			return false
-		end
-		local score = dbgRemoteScore(remote)
-		if score <= 0 then
-			return false
-		end
-		candidateCount += 1
-		if score > bestScore then
-			bestApi, bestRemote, bestScore = tbl, remote, score
-		end
-		return false
-	end
-
-	if typeof(voltFiltergc) == "function" then
-		local ok, tables = pcall(voltFiltergc, "table", {
-			Keys = { "FireServer", "RE" },
-		})
-		if ok and typeof(tables) == "table" then
-			for _, tbl in tables do
-				if consider(tbl) then
-					return
-				end
-			end
-		end
-		ok, tables = pcall(voltFiltergc, "table", {
-			Keys = { "FireServer", "OnEvent", "EncodeData", "DecodeData", "RE" },
-		})
-		if ok and typeof(tables) == "table" then
-			for _, tbl in tables do
-				if consider(tbl) then
-					return
-				end
-			end
-		end
-	end
-
-	if typeof(voltGetgc) == "function" then
-		local ok, objects = pcall(voltGetgc, true)
-		if ok and typeof(objects) == "table" then
-			for _, obj in objects do
-				if consider(obj) then
-					return
-				end
-			end
-		end
-	end
-
-	if bestApi and bestRemote and bestScore >= 90 then
-		if bestRemote then
-			dbgAcceptCombatRemote(bestRemote)
-		end
-		callback(bestApi, bestRemote)
-	end
-end
-
-local function dbgFindFireServerFunction(): ((...any) -> ...any)?
-	if dbgGcCachedFireFn then
-		return dbgGcCachedFireFn
-	end
-	if typeof(voltFiltergc) ~= "function" then
-		return nil
-	end
-	local queries = {
-		{ Constants = { "Client is disconnected from the network" } },
-		{ Constants = { "disconnected from the network" } },
-	}
-	for _, query in queries do
-		local opts: { [string]: any } = { IgnoreExecutor = true }
-		for key, value in query do
-			opts[key] = value
-		end
-		local ok, fns = pcall(voltFiltergc, "function", opts)
+local function findFireFn(): ((...any) -> ...any)?
+	if netFireFn then return netFireFn end
+	if typeof(filtergc) ~= "function" then return nil end
+	for _, q in { { Constants = { "Client is disconnected from the network" } }, { Constants = { "disconnected from the network" } } } do
+		local ok, fns = pcall(filtergc, "function", { IgnoreExecutor = true, Constants = q.Constants })
 		if ok and typeof(fns) == "table" then
 			for _, fn in fns do
-				if typeof(fn) == "function" then
-					dbgGcCachedFireFn = fn
-					return fn
-				end
+				if typeof(fn) == "function" then netFireFn = fn; return fn end
 			end
 		end
 	end
 	return nil
 end
 
-local function dbgFindNetworkApi(): (any, RemoteEvent?)
-	if dbgGcCachedApi and (dbgGcCachedRemote == nil or dbgGcCachedRemote.Parent) then
-		return dbgGcCachedApi, dbgGcCachedRemote
-	end
-
-	if dbgNetworkReady() and not dbgSeenClockOffset then
-		dbgSeenClockOffset = true
-		dbgNextGcScan = 0
-	end
-
+local function findNetworkApi(): (any, RemoteEvent?)
+	if netApi and (netRemote == nil or netRemote.Parent) then return netApi, netRemote end
+	if netReady() and not sawClock then sawClock, nextGc = true, 0 end
 	local now = os.clock()
-	if now < dbgNextGcScan then
-		return nil, nil
-	end
-	dbgNextGcScan = now + DBG_GC_SCAN_INTERVAL
+	if now < nextGc then return nil, nil end
+	nextGc = now + GC_INTERVAL
 
-	local fireFn = dbgFindFireServerFunction()
-
-	local foundApi: any = nil
-	local foundRemote: RemoteEvent? = nil
-	dbgScanNetworkTables(function(api, remote)
-		foundApi, foundRemote = api, remote
-		return true
-	end)
-	if foundApi and foundRemote then
-		local tableFn = dbgTblGet(foundApi, "FireServer")
-		if typeof(tableFn) == "function" then
-			dbgGcCachedApi = foundApi
-			dbgGcCachedRemote = foundRemote
-			if fireFn then
-				dbgGcCachedFireFn = fireFn
-			end
-			return foundApi, foundRemote
+	local bestApi, bestRe = nil, nil
+	local function consider(tbl: any)
+		if not isNetworkApi(tbl) then return end
+		local re = tblGet(tbl, "RE")
+		if typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re) then
+			bestApi, bestRe = tbl, re
 		end
 	end
 
-	if fireFn then
-		dbgGcCachedApi = { FireServer = fireFn }
-		dbgGcCachedFireFn = fireFn
-		return dbgGcCachedApi, dbgGcCachedRemote
+	if typeof(filtergc) == "function" then
+		for _, keys in { { "FireServer", "RE" }, { "FireServer", "OnEvent", "EncodeData", "DecodeData", "RE" } } do
+			local ok, tables = pcall(filtergc, "table", { Keys = keys })
+			if ok and typeof(tables) == "table" then for _, tbl in tables do consider(tbl) end end
+		end
 	end
+	if typeof(getgc) == "function" then
+		local ok, objs = pcall(getgc, true)
+		if ok and typeof(objs) == "table" then for _, o in objs do consider(o) end end
+	end
+
+	if bestApi and bestRe then
+		netApi, netRemote = bestApi, bestRe
+		findFireFn()
+		return bestApi, bestRe
+	end
+
+	local fn = findFireFn()
+	if fn then netApi = { FireServer = fn }; return netApi, netRemote end
 	return nil, nil
 end
 
-local function dbgMaybeBindRemote(self: any)
-	if typeof(self) ~= "table" then
-		return
-	end
-	local re = dbgTblGet(self, "RE")
-	if typeof(re) == "Instance" and re:IsA("RemoteEvent") and dbgIsCombatRemote(re) then
-		dbgAcceptCombatRemote(re)
-		dbg.remotePath = re:GetFullName()
+local function recordNet(evt: any, payload: { any })
+	if typeof(evt) ~= "string" or (evt ~= "Fire" and evt ~= "Hitcheck") then return end
+	if evt == "Fire" and C.lastFire and os.clock() - C.lastFire.at < 0.02 then return end
+	C.net += 1; C.lastEvt = evt
+	if evt == "Fire" then
+		C.fire += 1
+		local w, clk, cf = decode(payload[1]), decode(payload[2]), decode(payload[3])
+		C.lastFire = {
+			at = os.clock(), weapon = short(w),
+			serverCf = if typeof(cf) == "CFrame" then cf else nil,
+			clock = if typeof(clk) == "number" then clk else nil,
+		}
+		dbgLog("Fire", string.format("Fire #%d %s %s", C.fire, C.lastFire.weapon, shortCf(C.lastFire.serverCf)), 2)
+	else
+		C.hit += 1
+		C.lastHit = { at = os.clock(), a = decode(payload[1]), b = decode(payload[2]), c = decode(payload[3]), d = decode(payload[4]) }
+		dbgLog("Hitcheck", string.format("#%d %s | %s | %s | %s", C.hit, short(C.lastHit.a), short(C.lastHit.b), short(C.lastHit.c), short(C.lastHit.d)), 2)
 	end
 end
 
-local function dbgPrintInit(label: string, path: string)
-	if dbgInitPrinted then
-		return
-	end
-	dbgInitPrinted = true
-	print("[GFA-DBG] init", label, "@", path)
+local function saPart(): BasePart?
+	local p = saShotTarget
+	return if p and p.Parent then p else nil
 end
 
-local function dbgViewModelFlame(): BasePart?
-	if dbgCachedFlame and dbgCachedFlame.Parent then
-		return dbgCachedFlame
-	end
-
-	local now = os.clock()
-	if now < dbgNextFlameScan then
-		return dbgCachedFlame
-	end
-	dbgNextFlameScan = now + DBG_FLAME_CACHE_INTERVAL
-
-	local vm = workspace:FindFirstChild("ViewModel")
-	if not vm or not vm:IsA("Model") then
-		dbgCachedFlame = nil
-		return nil
-	end
-
-	for _, desc in vm:GetDescendants() do
-		if desc.Name == "Flame" and desc:IsA("BasePart") then
-			dbgCachedFlame = desc
-			return desc
-		end
-	end
-
-	dbgCachedFlame = nil
-	return nil
-end
-
-local function saMaybeEncode(sample: any, value: any): any
-	if typeof(sample) ~= "string" or string.sub(sample, 1, 1) ~= "~" then
-		return value
-	end
-	local api = dbgGcCachedApi
-	if typeof(api) ~= "table" then
-		return value
-	end
-	local encode = dbgTblGet(api, "EncodeData")
-	if typeof(encode) ~= "function" then
-		return value
-	end
-	local ok, encoded = pcall(function()
-		return encode(api, value)
-	end)
-	if not ok then
-		ok, encoded = pcall(encode, value)
-	end
-	return if ok then encoded else value
-end
-
-local function saTargetModel(part: BasePart): Model?
+local function injectHitables(hitables: any, part: BasePart): any
 	local model = part.Parent
-	return if model and model:IsA("Model") then model else nil
-end
-
-local function saInjectHitables(hitables: any, part: BasePart): any
-	local model = saTargetModel(part)
-	if not model or typeof(hitables) ~= "table" then
-		return hitables
-	end
-	for _, entry in hitables do
-		if entry == model then
-			return hitables
-		end
-	end
+	if not model or not model:IsA("Model") or typeof(hitables) ~= "table" then return hitables end
+	for _, e in hitables do if e == model then return hitables end end
 	local out = table.create(#hitables + 1)
-	for i, entry in hitables do
-		out[i] = entry
-	end
+	for i, e in hitables do out[i] = e end
 	out[#out + 1] = model
 	return out
 end
 
-local function saHookTarget(): BasePart?
-	local part = saShotTarget
-	if part and part.Parent then
-		return part
-	end
-	return nil
-end
-
-local function saRewriteFirePayload(payload: { any }): { any }
-	if not Config.SilentAim then
-		return payload
-	end
-	local part = saHookTarget()
-	if not part then
-		return payload
-	end
-	local rawCf = payload[3]
-	local serverCf = dbgMaybeDecode(rawCf)
-	if typeof(serverCf) ~= "CFrame" then
-		return payload
-	end
-	local newCf = CFrame.new(serverCf.Position, part.Position)
-	payload[3] = saMaybeEncode(rawCf, newCf)
-	sa.lastFireAt = os.clock()
+local function rewriteFire(payload: { any }): { any }
+	if not Config.SilentAim then return payload end
+	local part = saPart()
+	if not part then return payload end
+	local raw = payload[3]
+	local cf = decode(raw)
+	if typeof(cf) ~= "CFrame" then return payload end
+	payload[3] = encode(raw, CFrame.new(cf.Position, part.Position))
+	C.saFireAt = os.clock()
 	return payload
 end
 
-local function saRewriteSyncShot(shotCf: CFrame, hitables: any): (CFrame, any)
-	if not Config.SilentAim then
-		return shotCf, hitables
-	end
-	local part = saHookTarget()
-	if not part then
-		return shotCf, hitables
-	end
+local function rewriteSync(shotCf: CFrame, hitables: any): (CFrame, any)
+	if not Config.SilentAim then return shotCf, hitables end
+	local part = saPart()
+	if not part then return shotCf, hitables end
 	local newCf = CFrame.new(shotCf.Position, part.Position)
-	saLastSyncCf = newCf
-	sa.lastSyncAt = os.clock()
-	return newCf, saInjectHitables(hitables, part)
+	C.saSyncCf, C.saSyncAt = newCf, os.clock()
+	return newCf, injectHitables(hitables, part)
 end
 
-local function combatHookVortexSync()
-	if vortexSyncHooked or not Config.SilentAim or typeof(voltHookfunction) ~= "function" then
-		return
-	end
-
-	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
-	local vortex = playerScripts and playerScripts:FindFirstChild("Vortex")
-	local sync = vortex and vortex:FindFirstChild("Sync")
-	if not sync or not sync:IsA("BindableEvent") then
-		return
-	end
-
-	local fireMethod = sync.Fire
-	if typeof(fireMethod) ~= "function" then
-		return
-	end
-
+local function hookVortex()
+	if C.vortexHooked or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
+	local sync = LocalPlayer:FindFirstChild("PlayerScripts")
+	sync = sync and sync:FindFirstChild("Vortex")
+	sync = sync and sync:FindFirstChild("Sync")
+	if not sync or not sync:IsA("BindableEvent") then return end
+	local fire = sync.Fire
+	if typeof(fire) ~= "function" then return end
 	local ok = pcall(function()
-		vortexSyncOriginal = voltHookfunction(fireMethod, dbgWrapHook(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
-			if dbgFromGame() and Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
-				local okRewrite, newCf, newHit = pcall(saRewriteSyncShot, a4, a7)
-				if okRewrite and typeof(newCf) == "CFrame" then
-					a4, a7 = newCf, newHit
-				end
+		vortexOrig = hookfn(fire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+			if fromGame() and Config.SilentAim and a1 == LocalPlayer and typeof(a4) == "CFrame" then
+				local okR, nc, nh = pcall(rewriteSync, a4, a7)
+				if okR and typeof(nc) == "CFrame" then a4, a7 = nc, nh end
 			end
-			local original = vortexSyncOriginal
-			if typeof(original) ~= "function" then
-				return
-			end
-			return original(self, a1, a2, a3, a4, a5, a6, a7, a8)
+			local o = vortexOrig
+			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
 		end))
 	end)
-	if ok and typeof(vortexSyncOriginal) == "function" then
-		vortexSyncHooked = true
-		sa.vortexSync = true
-	end
+	if ok and typeof(vortexOrig) == "function" then C.vortexHooked = true end
 end
 
-local function saAnnounceHooks()
-	if saHookAnnounced or not Config.SilentAim or not dbg.networkHooked then
-		return
-	end
-	saHookAnnounced = true
-	print(
-		"[GFA] silent aim ready",
-		if dbg.remotePath ~= "" then dbg.remotePath else "Network.FireServer",
-		if sa.vortexSync then "| Vortex.Sync" else "| sync:off"
-	)
+local function announceSA()
+	if C.announced or not Config.SilentAim or not C.netHooked then return end
+	C.announced = true
+	print("[GFA] silent aim ready", if C.remote ~= "" then C.remote else "Network.FireServer", if C.vortexHooked then "| Vortex.Sync" else "| sync:off")
 end
 
-local function dbgHookNetworkApi()
-	if dbgNetworkHooked then
+local function hookNetwork()
+	if C.netHooked or not netReady() then
+		if not netReady() then C.status = "waiting for ClockOffset" end
 		return
 	end
-
-	if not dbgNetworkReady() then
-		dbg.status = "waiting for ClockOffset"
-		return
-	end
-
-	local api, remote = dbgFindNetworkApi()
-	local target = if api then dbgTblGet(api, "FireServer") else nil
-	if not target then
-		return
-	end
+	local api, remote = findNetworkApi()
+	local target = api and tblGet(api, "FireServer")
+	if not target or typeof(hookfn) ~= "function" then return end
 	if remote then
-		if dbgIsBadRemote(remote) then
-			return
-		end
-		dbgAcceptCombatRemote(remote)
-		dbg.remotePath = remote:GetFullName()
-	elseif dbg.remotePath == "" then
-		dbg.remotePath = "Network.FireServer (gc fn)"
+		if not isCombatRemote(remote) then return end
+		C.remote = remote:GetFullName()
+	elseif C.remote == "" then
+		C.remote = "Network.FireServer (gc fn)"
 	end
-	if typeof(voltHookfunction) ~= "function" then
-		return
-	end
-
 	local ok = pcall(function()
-		combatNetworkFireOriginal = voltHookfunction(target, dbgWrapHook(function(self, eventName, ...)
+		netOrig = hookfn(target, wrap(function(self, eventName, ...)
 			local args = { ... }
-			if dbgFromGame() then
+			if fromGame() then
 				if Config.SilentAim and eventName == "Fire" then
-					local okRewrite, newArgs = pcall(saRewriteFirePayload, args)
-					if okRewrite and typeof(newArgs) == "table" then
-						args = newArgs
-					end
+					local okR, na = pcall(rewriteFire, args)
+					if okR and typeof(na) == "table" then args = na end
 				end
 				if Config.AimDebugger then
-					dbgMaybeBindRemote(self)
-					dbgRecordNetworkEvent(eventName, args)
+					local re = tblGet(self, "RE")
+					if typeof(re) == "Instance" and re:IsA("RemoteEvent") and isCombatRemote(re) then
+						C.remote = re:GetFullName()
+					end
+					recordNet(eventName, args)
 				end
 			end
-			local fire = combatNetworkFireOriginal
-			if typeof(fire) ~= "function" then
-				return
-			end
-			return fire(self, eventName, table.unpack(args))
+			local o = netOrig
+			return if typeof(o) == "function" then o(self, eventName, table.unpack(args)) else nil
 		end))
 	end)
-	if not ok or typeof(combatNetworkFireOriginal) ~= "function" then
-		combatNetworkFireOriginal = nil
-		return
-	end
-	local session = dbgSession()
-	if session then
-		session.networkFireFn = target
-		session.hookReady = true
-	end
-
-	dbgNetworkHooked = true
-	dbg.networkHooked = true
-	dbg.hooksReady = true
-	dbg.status = "Network.FireServer hooked"
-	combatHookVortexSync()
-	saAnnounceHooks()
-	if Config.AimDebugger then
-		dbgPrintInit("Network.FireServer hooked", dbg.remotePath)
+	if not ok or typeof(netOrig) ~= "function" then netOrig = nil; return end
+	C.netHooked = true
+	C.status = "Network.FireServer hooked"
+	hookVortex()
+	announceSA()
+	if Config.AimDebugger and not C.initDone then
+		C.initDone = true
+		print("[GFA-DBG] init Network.FireServer hooked @", C.remote)
 	end
 end
 
-local function combatEnsureHooks()
-	if not combatHooksWanted() or dbgHooksActive() or combatHookGiveUp or combatHookInstallStarted then
-		return
+local function ensureHooks()
+	if not (Config.SilentAim or Config.AimDebugger) or C.netHooked or C.giveUp or C.installing then return end
+	C.installing = true
+	if Config.AimDebugger and not C.capsDone then
+		C.capsDone = true
+		print("[GFA-DBG] caps hookfunction:", typeof(hookfn), "filtergc:", typeof(filtergc), "getgc:", typeof(getgc), "remote:", C.remote ~= "" and C.remote or "nil")
 	end
-	combatHookInstallStarted = true
-	if Config.AimDebugger then
-		dbgPrintCaps()
-	end
-	dbgHookWorkerActive = true
 	task.spawn(function()
-		local attempts = 0
-		while combatHooksWanted() and not dbgHooksActive() and attempts < DBG_HOOK_MAX_ATTEMPTS do
-			attempts += 1
-			dbgHookNetworkApi()
-			if dbgHooksActive() then
-				break
-			end
-			if typeof(voltHookfunction) ~= "function" then
-				dbg.status = "hookfunction missing (Volt genv?)"
-			elseif not dbgNetworkReady() then
-				dbg.status = "waiting for ClockOffset"
-			else
-				dbg.status = "waiting for Network API (gc)"
-			end
-			if attempts == 5 and not dbgHooksActive() then
-				dbgLog("init-fail", dbg.status, 0)
-			end
-			task.wait(DBG_HOOK_RETRY)
-		end
-		if not dbgHooksActive() then
-			combatHookGiveUp = true
-			dbg.status = "hook install failed (rejoin)"
-			if Config.SilentAim or Config.AimDebugger then
-				warn("[GFA] combat hook failed after", attempts, "tries:", dbg.status)
+		local n = 0
+		while (Config.SilentAim or Config.AimDebugger) and not C.netHooked and n < HOOK_MAX do
+			n += 1
+			hookNetwork()
+			if not C.netHooked then
+				C.status = if typeof(hookfn) ~= "function" then "hookfunction missing (Volt genv?)"
+					elseif not netReady() then "waiting for ClockOffset"
+					else "waiting for Network API (gc)"
+				if n == 5 then dbgLog("init-fail", C.status, 0) end
+				task.wait(HOOK_RETRY)
 			end
 		end
-		dbgHookWorkerActive = false
-		combatHookInstallStarted = false
+		if not C.netHooked then
+			C.giveUp = true
+			C.status = "hook install failed (rejoin)"
+			if Config.SilentAim or Config.AimDebugger then warn("[GFA] combat hook failed after", n, "tries:", C.status) end
+		end
+		C.installing = false
 	end)
 end
 
-local function dbgOnSyncFire(args: { any })
-	if not Config.AimDebugger then
-		return
-	end
-	local shooter = args[1]
-	if shooter ~= LocalPlayer then
-		return
-	end
-	local shotCf = args[4]
-	if typeof(shotCf) ~= "CFrame" then
-		return
-	end
-	dbg.syncCount += 1
-	dbg.lastSyncCf = shotCf
-	dbg.lastSyncWeapon = dbgShortVal(args[6] or args[3])
-	dbgLog("Sync", string.format("#%d %s %s", dbg.syncCount, dbg.lastSyncWeapon, dbgShortCf(shotCf)), 2)
-end
-
-local function dbgHookSync()
-	if not Config.AimDebugger then
-		return
-	end
-
+local function bindSyncListeners()
+	if not Config.AimDebugger then return end
 	local now = os.clock()
-	if now < dbgNextSyncScan then
-		return
-	end
-	dbgNextSyncScan = now + DBG_SYNC_SCAN_INTERVAL
-
-	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
-	if not playerScripts then
-		return
-	end
-
-	for _, desc in playerScripts:GetDescendants() do
-		if desc.Name == "Sync" and desc:IsA("BindableEvent") and not dbgSyncConns[desc] then
-			dbgSyncConns[desc] = desc.Event:Connect(function(...)
-				dbgOnSyncFire({ ... })
+	if now < nextSync then return end
+	nextSync = now + SYNC_SCAN
+	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+	if not ps then return end
+	for _, desc in ps:GetDescendants() do
+		if desc.Name == "Sync" and desc:IsA("BindableEvent") and not syncConns[desc] then
+			syncConns[desc] = desc.Event:Connect(function(...)
+				if not Config.AimDebugger then return end
+				local args = { ... }
+				if args[1] ~= LocalPlayer or typeof(args[4]) ~= "CFrame" then return end
+				C.sync += 1
+				C.lastSyncCf = args[4]
+				C.lastSyncWep = short(args[6] or args[3])
+				dbgLog("Sync", string.format("#%d %s %s", C.sync, C.lastSyncWep, shortCf(args[4])), 2)
 			end)
-			dbg.syncBound += 1
-			local path = desc:GetFullName()
-			dbg.syncPath = if dbg.syncPath == "" then path else dbg.syncPath .. " | " .. path
+			C.syncBound += 1
 		end
 	end
 end
 
-local function dbgAngleTo(origin: Vector3, look: Vector3, target: Vector3): number
+local function angleTo(origin: Vector3, look: Vector3, target: Vector3): number
 	local dir = target - origin
-	if dir.Magnitude < 0.01 then
-		return 0
-	end
+	if dir.Magnitude < 0.01 then return 0 end
 	return math.deg(math.acos(math.clamp(look.Unit:Dot(dir.Unit), -1, 1)))
 end
 
-local function dbgEnsureOverlay()
-	if not canDraw or #dbgTexts > 0 then
-		return
-	end
-	for i = 1, DBG_LINE_COUNT do
-		local line = Drawing.new("Text")
-		line.Size = 13
-		line.Outline = true
-		line.Center = false
-		line.Visible = false
-		line.Position = Vector2.new(12, 8 + (i - 1) * 15)
-		dbgTexts[i] = line
-	end
-end
-
-local function dbgSetLine(index: number, text: string, visible: boolean)
-	local line = dbgTexts[index]
-	if not line then
-		return
-	end
-	line.Text = text
-	line.Visible = visible and Config.AimDebugger
-end
-
-local function dbgHideOverlay()
-	for _, line in dbgTexts do
-		line.Visible = false
-	end
-end
-
-local SA_STATUS_LINES = 6
-
-local function saHideStatus()
-	for i = 1, SA_STATUS_LINES do
-		local line = dbgTexts[i]
-		if line then
-			line.Visible = false
-		end
-	end
-end
-
-local function saUpdateStatus()
-	if not Config.SilentAim or Config.AimDebugger or not canDraw then
-		return
-	end
-	dbgEnsureOverlay()
+local function viewFlame(): BasePart?
+	if cachedFlame and cachedFlame.Parent then return cachedFlame end
 	local now = os.clock()
-	if now < dbgNextOverlayAt then
-		return
+	if now < nextFlame then return cachedFlame end
+	nextFlame = now + FLAME_CACHE
+	local vm = workspace:FindFirstChild("ViewModel")
+	if not vm or not vm:IsA("Model") then cachedFlame = nil; return nil end
+	for _, d in vm:GetDescendants() do
+		if d.Name == "Flame" and d:IsA("BasePart") then cachedFlame = d; return d end
 	end
-	dbgNextOverlayAt = now + DBG_OVERLAY_INTERVAL
+	cachedFlame = nil
+	return nil
+end
 
-	local origin = aimOrigin()
-	local part = combatTargetPart or closestAimPart(origin)
-	local targetNameStr = if part and part.Parent then part.Parent.Name else "—"
-	local syncToTarget = if part and saLastSyncCf
-		then dbgAngleTo(saLastSyncCf.Position, saLastSyncCf.LookVector, part.Position)
-		else nil
-	local fireAge = if sa.lastFireAt > 0 then string.format("%.1fs", now - sa.lastFireAt) else "—"
-	local syncAge = if sa.lastSyncAt > 0 then string.format("%.1fs", now - sa.lastSyncAt) else "—"
+local function overlayEnsure()
+	if not canDraw or #ovLines > 0 then return end
+	for i = 1, OVERLAY_MAX do
+		local line = Drawing.new("Text")
+		line.Size, line.Outline, line.Center, line.Visible = 13, true, false, false
+		line.Position = Vector2.new(12, 8 + (i - 1) * 15)
+		ovLines[i] = line
+	end
+end
 
-	local lines = {
-		"── Silent Aim ──",
-		string.format(
-			"Hooks: net:%s vortex:%s | %s",
-			if dbg.networkHooked then "OK" else "—",
-			if sa.vortexSync then "OK" else "—",
-			dbg.status
-		),
-		string.format("Target: %s | FOV lock (no camera move)", targetNameStr),
-		string.format("Last redirect  fire:%s  sync:%s", fireAge, syncAge),
-		string.format("Sync angle° to target: %s", if syncToTarget then string.format("%.1f", syncToTarget) else "—"),
-		"Enable Debugger below to compare Fire/Sync/Hitcheck",
-	}
+local function overlayHide()
+	for _, line in ovLines do line.Visible = false end
+end
 
-	for i = 1, SA_STATUS_LINES do
-		local line = dbgTexts[i]
+local function overlayShow(lines: { string }, dbgMode: boolean)
+	overlayEnsure()
+	for i = 1, OVERLAY_MAX do
+		local line = ovLines[i]
 		if line then
 			line.Text = lines[i] or ""
-			line.Visible = lines[i] ~= nil
+			line.Visible = lines[i] ~= nil and (dbgMode and Config.AimDebugger or not dbgMode)
 		end
-	end
-	for i = SA_STATUS_LINES + 1, #dbgTexts do
-		dbgTexts[i].Visible = false
 	end
 end
 
-local function dbgUpdate()
-	if combatHooksWanted() then
-		combatEnsureHooks()
-		if dbg.networkHooked then
-			combatHookVortexSync()
-			saAnnounceHooks()
-		end
-	end
-
-	if Config.SilentAim and not Config.AimDebugger then
-		saUpdateStatus()
-		return
-	end
-
-	saHideStatus()
-
-	if not Config.AimDebugger then
-		dbgHideOverlay()
-		return
-	end
-
-	dbgEnsureOverlay()
-	dbgHookSync()
-
+local function combatOverlayUpdate()
+	if not canDraw then return end
 	local now = os.clock()
-	if now < dbgNextOverlayAt then
-		return
-	end
-	dbgNextOverlayAt = now + DBG_OVERLAY_INTERVAL
+	if now < nextOv then return end
+	nextOv = now + OVERLAY_DT
 
 	local origin = aimOrigin()
 	local part = combatTargetPart or closestAimPart(origin)
-	local targetNameStr = if part and part.Parent then part.Parent.Name else "—"
-	local mouseHit = _G.MouseHitSpot
-	local mouseHitStr = if typeof(mouseHit) == "Vector3"
-		then string.format("%.0f,%.0f,%.0f", mouseHit.X, mouseHit.Y, mouseHit.Z)
-		else "—"
-	local thirdPerson = isThirdPerson()
-	local flame = dbgViewModelFlame()
-	local camLook = Camera.CFrame.LookVector
-	local camToTarget = if part then dbgAngleTo(Camera.CFrame.Position, camLook, part.Position) else nil
-	local serverToTarget = if part and dbg.lastFire and dbg.lastFire.serverCf
-		then dbgAngleTo(dbg.lastFire.serverCf.Position, dbg.lastFire.serverCf.LookVector, part.Position)
-		else nil
-	local syncCf = dbg.lastSyncCf or saLastSyncCf
-	local syncToTarget = if part and syncCf
-		then dbgAngleTo(syncCf.Position, syncCf.LookVector, part.Position)
-		else nil
-	local clockOffset = LocalPlayer:GetAttribute("ClockOffset")
-	local networkReady = clockOffset ~= nil
+	local tName = if part and part.Parent then part.Parent.Name else "—"
 
-	local lines = {
-		"── Silent Aim Debugger ──",
-		string.format(
-			"Hooks: net:%s vortex:%s dbg-sync:%d | %s",
-			if dbg.networkHooked then "OK" else "—",
-			if sa.vortexSync then "OK" else "—",
-			dbg.syncBound,
-			dbg.status
-		),
-		string.format(
-			"Net: %s | ClockOffset: %s | %s",
-			if networkReady then "ready" else "pending",
-			dbgShortVal(clockOffset),
-			if thirdPerson then "3rd person" else "1st person"
-		),
-		string.format(
-			"Counts  net:%d  Fire:%d  Hit:%d  Sync:%d  last:%s",
-			dbg.netCount,
-			dbg.fireCount,
-			dbg.hitCount,
-			dbg.syncCount,
-			if dbg.lastEvent ~= "" then dbg.lastEvent else "—"
-		),
-		string.format("Target: %s | FOV ok: %s", targetNameStr, if part then "yes" else "no"),
-		string.format(
-			"Angles°  cam:%s  server:%s  sync:%s",
-			if camToTarget then string.format("%.1f", camToTarget) else "—",
-			if serverToTarget then string.format("%.1f", serverToTarget) else "—",
-			if syncToTarget then string.format("%.1f", syncToTarget) else "—"
-		),
-		"MouseHitSpot: " .. mouseHitStr,
-		string.format(
-			"Flame: %s",
-			if flame then dbgShortCf(flame.CFrame) else "—"
-		),
-		"Cam look: " .. string.format("%.2f,%.2f,%.2f", camLook.X, camLook.Y, camLook.Z),
-		string.format(
-			"Last Fire [%s]: %s",
-			if dbg.lastFire then dbg.lastFire.weapon else "—",
-			if dbg.lastFire then dbgShortCf(dbg.lastFire.serverCf) else "—"
-		),
-		string.format(
-			"Last Sync [%s]: %s",
-			dbg.lastSyncWeapon or "—",
-			dbgShortCf(dbg.lastSyncCf)
-		),
-		string.format(
-			"Last Hitcheck: %s | %s | %s | %s",
-			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.a) else "—",
-			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.b) else "—",
-			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.c) else "—",
-			if dbg.lastHitcheck then dbgShortVal(dbg.lastHitcheck.d) else "—"
-		),
-		"Hook: Network Fire CFrame + Vortex Sync shot + MouseHitSpot",
-		if dbg.remotePath ~= "" then dbg.remotePath else "Remote: not found yet",
-	}
-
-	for i = 1, DBG_LINE_COUNT do
-		dbgSetLine(i, lines[i] or "", lines[i] ~= nil)
+	if Config.SilentAim and not Config.AimDebugger then
+		local syncAng = if part and C.saSyncCf then angleTo(C.saSyncCf.Position, C.saSyncCf.LookVector, part.Position) else nil
+		overlayShow({
+			"-- Silent Aim --",
+			string.format("Hooks: net:%s vortex:%s | %s", if C.netHooked then "OK" else "-", if C.vortexHooked then "OK" else "-", C.status),
+			string.format("Target: %s | FOV lock (no camera move)", tName),
+			string.format("Last redirect  fire:%s  sync:%s",
+				if C.saFireAt > 0 then string.format("%.1fs", now - C.saFireAt) else "-",
+				if C.saSyncAt > 0 then string.format("%.1fs", now - C.saSyncAt) else "-"),
+			string.format("Sync angle to target: %s", if syncAng then string.format("%.1f deg", syncAng) else "-"),
+			"Enable Debugger below to compare Fire/Sync/Hitcheck",
+		}, false)
+		return
 	end
+
+	if not Config.AimDebugger then overlayHide(); return end
+
+	bindSyncListeners()
+	local mh = _G.MouseHitSpot
+	local mhStr = if typeof(mh) == "Vector3" then string.format("%.0f,%.0f,%.0f", mh.X, mh.Y, mh.Z) else "-"
+	local third = isThirdPerson()
+	local flame = viewFlame()
+	local camLook = Camera.CFrame.LookVector
+	local camAng = if part then angleTo(Camera.CFrame.Position, camLook, part.Position) else nil
+	local srvAng = if part and C.lastFire and C.lastFire.serverCf
+		then angleTo(C.lastFire.serverCf.Position, C.lastFire.serverCf.LookVector, part.Position) else nil
+	local syncCf = C.lastSyncCf or C.saSyncCf
+	local syncAng = if part and syncCf then angleTo(syncCf.Position, syncCf.LookVector, part.Position) else nil
+	local clk = LocalPlayer:GetAttribute("ClockOffset")
+
+	overlayShow({
+		"-- Silent Aim Debugger --",
+		string.format("Hooks: net:%s vortex:%s dbg-sync:%d | %s", if C.netHooked then "OK" else "-", if C.vortexHooked then "OK" else "-", C.syncBound, C.status),
+		string.format("Net: %s | ClockOffset: %s | %s", if clk ~= nil then "ready" else "pending", short(clk), if third then "3rd person" else "1st person"),
+		string.format("Counts  net:%d  Fire:%d  Hit:%d  Sync:%d  last:%s", C.net, C.fire, C.hit, C.sync, if C.lastEvt ~= "" then C.lastEvt else "-"),
+		string.format("Target: %s | FOV ok: %s", tName, if part then "yes" else "no"),
+		string.format("Angles  cam:%s  server:%s  sync:%s",
+			if camAng then string.format("%.1f", camAng) else "-",
+			if srvAng then string.format("%.1f", srvAng) else "-",
+			if syncAng then string.format("%.1f", syncAng) else "-"),
+		"MouseHitSpot: " .. mhStr,
+		string.format("Flame: %s", if flame then shortCf(flame.CFrame) else "-"),
+		"Cam look: " .. string.format("%.2f,%.2f,%.2f", camLook.X, camLook.Y, camLook.Z),
+		string.format("Last Fire [%s]: %s", if C.lastFire then C.lastFire.weapon else "-", if C.lastFire then shortCf(C.lastFire.serverCf) else "-"),
+		string.format("Last Sync [%s]: %s", C.lastSyncWep ~= "" and C.lastSyncWep or "-", shortCf(C.lastSyncCf)),
+		string.format("Last Hitcheck: %s | %s | %s | %s",
+			if C.lastHit then short(C.lastHit.a) else "-", if C.lastHit then short(C.lastHit.b) else "-",
+			if C.lastHit then short(C.lastHit.c) else "-", if C.lastHit then short(C.lastHit.d) else "-"),
+		"Hook: Network Fire CFrame + Vortex Sync shot + MouseHitSpot",
+		if C.remote ~= "" then C.remote else "Remote: not found yet",
+	}, true)
+end
+
+local function combatUpdate()
+	if Config.SilentAim or Config.AimDebugger then
+		ensureHooks()
+		if C.netHooked then hookVortex(); announceSA() end
+	end
+	combatOverlayUpdate()
 end
 
 -- ESP
@@ -1884,7 +1223,7 @@ UILib.create({
 
 RunService.RenderStepped:Connect(function()
 	updateESP()
-	dbgUpdate()
+	combatUpdate()
 end)
 RunService:BindToRenderStep("MicroHubGFA_Aim", Enum.RenderPriority.Camera.Value + 1, updateCombatAim)
 
