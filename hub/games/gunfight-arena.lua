@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "36-sa-volley2"
+local GAME_BUILD = "37-sa-nobefire"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -928,23 +928,10 @@ local function hookVortex()
 	vortexSyncRef = sync
 	bindSaVolleyTracker()
 	local syncFire = sync.Fire
-	local ok = false
-	if typeof(syncFire) == "function" then
-		ok = pcall(function()
-			vortexOrig = hookfn(syncFire, vortexSyncHandler(syncFire))
-		end)
-	end
-	if not ok or typeof(vortexOrig) ~= "function" then
-		vortexOrig = nil
-		local probe = Instance.new("BindableEvent")
-		local beFire = probe.Fire
-		probe:Destroy()
-		if typeof(beFire) == "function" then
-			ok = pcall(function()
-				vortexOrig = hookfn(beFire, vortexSyncHandler(beFire))
-			end)
-		end
-	end
+	if typeof(syncFire) ~= "function" then return end
+	local ok = pcall(function()
+		vortexOrig = hookfn(syncFire, vortexSyncHandler(syncFire))
+	end)
 	if ok and typeof(vortexOrig) == "function" then C.vortexHooked = true end
 end
 
