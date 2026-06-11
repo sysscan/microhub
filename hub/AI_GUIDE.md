@@ -558,21 +558,23 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 
 ### 11.9 Anti-cheat debugging (Warfare)
 
-`games/warfare/ac-debug.lua` — **lazy, passive logger**. Hooks install only when `DebugAC` is enabled (toggle or `acDbg.sync()`).
+`games/warfare/ac-debug.lua` — **game-integrated pipeline logger**. Taps Warfare's BridgeNet combat path at load (`installGameBridges` from `installCombatHooks`).
 
 | API | Purpose |
 |-----|---------|
-| `acDbg.sync()` | Install hooks + overlay when `DebugAC` on |
-| `acDbg.scanRemotes(logEach)` | List remotes only — **no** mass `OnClientEvent` hooks |
-| `acDbg.probeBridges(bridgeNet)` | Existence check only — auto-runs once at combat hook install when `DebugAC` + `DebugBridgeNet`; **no** `hookfunction` on bridges |
-| `acDbg.wrapBridge(name, bridge)` | Registers bridge name (no method hooks) |
-| `acDbg.onHitConfirm` / `onShot` | Hit logging from combat hooks |
-| `acDbg.printLog()` | Dump buffer to F9 (hot path does not `warn` every line) |
-| `acDbg.unload()` | Disconnect + destroy overlay |
+| `acDbg.sync()` | Install namecall/log hooks + overlay when `DebugAC` on |
+| `acDbg.installGameBridges(bridgeNet)` | Wrap `Fire` on combat bridges; `Connect` on `HitConfirm` / `MessageEvent` |
+| `acDbg.onSimulateShot(meta)` | Pre-shot hub metadata (redirect, aim part) — merged with `FireBullet` |
+| `acDbg.scanGameSurfaces()` | Verify `HandleInvalidPlayer`, `GetSecureSettings`, `BulletSimulator`, `WeaponClient` |
+| `acDbg.dumpPipeline()` | FireBullet / HitPlayer / HitConfirm counts + orphan/reject stats |
+| `acDbg.printLog()` | Dump buffer to F9 |
+| `acDbg.unload()` | Restore bridge `Fire`, disconnect listeners |
 
-**Performance rules:** outbound remotes via `__namecall` only (with `checkcaller` skip + 2s cooldown); no `hookfunction` on BridgeNet methods; no `DescendantAdded` remote fan-out; overlay refresh throttled (~0.35s).
+**Log categories:** `FIRE` (FireBullet), `HIT→` (HitPlayer out), `HIT✓` (HitConfirm in), `SECURE` (GetSecureSettings), `ACLOG`/`REJECT` (invalid packet, equip errors), `PIPE` (orphan shots).
 
-Filtered remotes: `PingCheck`, `dataRemoteEvent`, `ReplicatedStorage.Game.*` (unless Verbose).
+**Stats:** `getgenv().__WarfareACStats` — `{ fireBullet, hitPlayer, hitConfirm, orphanHitPlayer, orphanConfirm, rejectedShots, secureSettingsCalls }`.
+
+**Performance rules:** bridge tap replaces `bridge.Fire` on the returned object only (not `hookfunction` on BridgeNet internals); Framework remotes only via `__namecall`; overlay throttled (~0.35s).
 
 ---
 
@@ -629,7 +631,7 @@ Requires executor hook support. Resolves on each character spawn via `bootstrap`
 
 ## 13. Game: Warfare
 
-**Build:** `games/warfare/constants.lua` → `GAME_BUILD` (`4-guide-security`)  
+**Build:** `games/warfare/constants.lua` → `GAME_BUILD` (`5-ac-game-tap`)  
 **Place ID:** `83902709332473`  
 **Framework:** `ReplicatedStorage.Framework.Modules` — `BulletSimulator`, `BridgeNet2`, `MagazineController`, etc.
 
@@ -834,7 +836,7 @@ Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust v
 | Loader | `VERSION = "1.7.0"` in `loader.lua` |
 | UI adapter | `4.0.1` in `lib/ui.lua` |
 | Prison Life build | `11-entry-split` |
-| Warfare build | `4-guide-security` |
+| Warfare build | `5-ac-game-tap` |
 | Gunfight Arena build | `67-modular` |
 
 ---

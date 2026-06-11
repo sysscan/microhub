@@ -393,22 +393,9 @@ local HubUI = UILib.create({
 						{ type = "toggle", key = "DebugOverlay", label = "On-Screen Log", hud = "Dbg Overlay" },
 						{ type = "toggle", key = "DebugVerbose", label = "Verbose", hud = "Dbg Verbose" },
 						{ type = "toggle", key = "DebugFilterOnly", label = "AC Keywords Only", hud = "Dbg Filter" },
-						{ type = "hint", text = "Buffered log: getgenv().__WarfareACLog. Print Log dumps F9. Enable AC Debug before fighting." },
-						{ type = "button", id = "acDumpRemotes", label = "Dump Remotes", onClick = function()
-							acDbg.scanRemotes(true, false)
-						end },
-						{ type = "button", id = "acDumpModules", label = "Scan AC Modules", onClick = function()
-							acDbg.scanSuspiciousModules()
-						end },
-						{ type = "button", id = "acProbeBridges", label = "Probe Bridges", onClick = function()
-							local ok, bridgeNet = pcall(require, Modules:WaitForChild("BridgeNet2"))
-							if ok then
-								acDbg.installBridgeNet(bridgeNet)
-								acDbg.probeBridges(bridgeNet)
-							else
-								acDbg.push("PROBE", "BridgeNet2 require failed: " .. tostring(bridgeNet), true)
-							end
-						end },
+						{ type = "hint", text = "Taps FireBullet/HitPlayer/HitConfirm pipeline. Stats: getgenv().__WarfareACStats. Enable before fighting." },
+						{ type = "button", id = "acScanGame", label = "Scan Game", onClick = acDbg.scanGameSurfaces },
+						{ type = "button", id = "acPipeline", label = "Dump Pipeline", onClick = acDbg.dumpPipeline },
 						{ type = "button", id = "acHitStats", label = "Hit Stats", onClick = acDbg.dumpHitStats },
 						{ type = "button", id = "acPrintLog", label = "Print Log", onClick = acDbg.printLog },
 						{ type = "button", id = "acClearLog", label = "Clear Log", onClick = acDbg.clearLog },
@@ -2256,7 +2243,7 @@ local function applyRapidFire(t2)
 	local boost = math.clamp((Config.RapidFireBoost or 88) / 100, 0.75, 1)
 	local settings = t2.Assets and t2.Assets.SettingsGun
 
-	-- SettingsGun.FireRate is RPM — never write interval seconds into it.
+	-- SettingsGun.FireRate is RPM  never write interval seconds into it.
 	if settings and tonumber(settings.FireRate) and settings.FireRate > 0 then
 		if rapidFireOriginalValue == nil then
 			rapidFireOriginalValue = settings.FireRate
@@ -2642,14 +2629,8 @@ local function installCombatHooks()
 
 	local ok, bridgeNet = pcall(require, Modules:WaitForChild("BridgeNet2"))
 	if ok and bridgeNet and bridgeNet.ReferenceBridge then
-		acDbg.installBridgeNet(bridgeNet)
+		acDbg.installGameBridges(bridgeNet)
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
-		if confirmBridge and confirmBridge.Connect then
-			acDbg.wrapBridge("HitConfirm", confirmBridge)
-		end
-		if Config.DebugAC and Config.DebugBridgeNet then
-			task.defer(acDbg.probeBridges, bridgeNet)
-		end
 		if confirmBridge and confirmBridge.Connect then
 			confirmBridge:Connect(function(payload)
 				if typeof(payload) ~= "table" then
@@ -3137,7 +3118,6 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 			if applyAim and not checkcaller() then
 				hitRate.recordHitRateShot()
 				redirectAim = hitRate.shouldRedirectAimShot()
-				acDbg.onShot(redirectAim)
 				local shotAimPart = nil
 				if redirectAim and (Config.BulletTP or Config.SilentAim or sharedState.killAllForcedTarget) then
 					shotTarget = getActiveAimTarget()
@@ -3149,6 +3129,13 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 				if redirectAim then
 					muzzleCF, initialSpeed = applySilentAim(muzzleCF, initialSpeed, shotAimPart)
 				end
+				acDbg.onSimulateShot({
+					redirected = redirectAim,
+					hubAim = Config.SilentAim or Config.BulletTP or sharedState.killAllForcedTarget ~= nil,
+					aimPart = shotAimPart and shotAimPart.Name,
+					bulletType = bulletType,
+					muzzleCF = muzzleCF,
+				})
 				if redirectAim and Config.BulletTP then
 					discoverBulletRegistry()
 					bulletsBefore = bulletRegistryRef and #bulletRegistryRef or 0

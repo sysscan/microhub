@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "4-guide-security",
+	GAME_BUILD = "5-ac-game-tap",
 	BOOST_WALK_SPEED = 28,
 	BOOST_SPRINT_SPEED = 36,
 	FLIGHT_SPEED = 90,

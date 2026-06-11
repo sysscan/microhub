@@ -1,13 +1,36 @@
 --[[
-	Warfare AC debug — passive logging with lazy hooks.
-	Designed to stay off the hot path unless DebugAC is enabled.
+	Warfare AC debug — game-integrated combat pipeline logger.
+	Taps BridgeNet bridges from WeaponClient / BulletSimulator, correlates
+	FireBullet → HitPlayer → HitConfirm, and watches Framework remotes.
+	Lazy install when DebugAC is enabled; no hookfunction on BridgeNet internals.
 ]]
 
 local LogService = game:GetService("LogService")
+local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local RunService = game:GetService("RunService")
 
 local M = {}
+
+-- Bridges used by WeaponClient + BulletSimulator (decompile-confirmed)
+local COMBAT_OUT = { "FireBullet", "HitPlayer", "WeaponAction", "ReplicateBullet", "Launcher" }
+local COMBAT_IN = { "HitConfirm", "AdvancedDamage", "MessageEvent" }
+local OTHER_OUT = {
+	"SuppressorState", "Supression", "Sound", "MedicineEvent", "HolsterServer",
+	"Grenade", "AmmoBox", "LaserState", "LoadData", "LoadGuns",
+}
+local OTHER_IN = { "FallDamage", "HeadMovement", "DroneEvent", "GlassShatter" }
+
+local GAME_LOG_PATTERNS = {
+	"invalid packet",
+	"invalid firerate",
+	"equip error",
+	"likely exploiter",
+	"handleinvalidplayer",
+	"reject",
+	"violation",
+	"anticheat",
+}
 
 function M.create(opts)
 	local Config = opts.config
@@ -20,101 +43,67 @@ function M.create(opts)
 	local HIT_RATE_WINDOW = hitRate.hitRateWindow
 
 	local TAG = "[WarfareAC]"
-	local LOG_MAX = 250
-	local REMOTE_COOLDOWN = 2
+	local LOG_MAX = 300
+	local REMOTE_COOLDOWN = 1.5
 	local OVERLAY_INTERVAL = 0.35
-	local LOG_PRUNE_INTERVAL = 30
-
-	local KEYWORDS = {
-		"kick", "ban", "cheat", "anticheat", "anti", "invalid", "hit", "rate", "exploit",
-		"detect", "flag", "violation", "sanity", "validate", "reject", "security", "ac_",
-	}
-
-	local BRIDGE_GUESSES = {
-		-- WeaponClient bridges (confirmed in decompile)
-		"HitConfirm", "HitPlayer", "FireBullet", "WeaponAction", "ReplicateBullet",
-		"SuppressorState", "Supression", "Sound", "MedicineEvent", "HolsterServer",
-		"Grenade", "AmmoBox", "LaserState", "MessageEvent", "Launcher", "LoadData",
-		"LoadGuns", "AdvancedDamage", "FallDamage", "HeadMovement", "DroneEvent",
-		"GlassShatter", "SaveData",
-		-- Generic guesses
-		"Damage", "Hit", "Fire", "Bullet", "AntiCheat", "AC", "Validate", "Sanity",
-		"Combat", "Shoot", "Kill", "Death",
-	}
-
-	local IGNORE_REMOTE_NAMES = {
-		PingCheck = true,
-		dataRemoteEvent = true,
-		GetSecureSettings = true,
-	}
-
-	local IGNORE_REMOTE_PREFIXES = {
-		"ReplicatedStorage.Framework.Remotes.Get",
-	}
+	local SHOT_MATCH_WINDOW = 3
+	local SHOT_MAX_PENDING = 40
 
 	local log = {}
 	local seq = 0
 	local conns = {}
 	local remoteLastLog = {}
-	local knownBridges = {}
-	local bridgeNetRef = nil
+	local bridgeTaps = {}
+	local bridgeInboundConns = {}
 	local overlayGui = nil
 	local overlayLabel = nil
 	local hooksReady = false
+	local bridgesInstalled = false
 	local logConn = nil
 	local overlayDirty = false
 	local lastOverlayAt = 0
-	local lastLogPruneAt = 0
 	local lastLogDedupe = {}
-	local LOG_DEDUPE_COOLDOWN = 3
+	local shotSeq = 0
+	local pendingShots = {}
+	local pipelineStats = {
+		fireBullet = 0,
+		hitPlayer = 0,
+		hitConfirm = 0,
+		orphanHitPlayer = 0,
+		orphanConfirm = 0,
+		rejectedShots = 0,
+		secureSettingsCalls = 0,
+	}
 
 	local function kindOf(value)
 		return if typeof then typeof(value) else type(value)
 	end
 
-	local function matchesKeywords(text)
-		local lower = string.lower(text)
-		for _, keyword in KEYWORDS do
-			if lower:find(keyword, 1, true) then
-				return true
-			end
+	local function vec3(v)
+		if kindOf(v) ~= "Vector3" then
+			return "?"
 		end
-		return false
+		return string.format("(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z)
 	end
 
-	local function shouldWatchRemote(remote)
-		if not remote or not remote:IsA("Instance") then
-			return false
+	local function cfPos(cf)
+		if kindOf(cf) ~= "CFrame" then
+			return "?"
 		end
-		if IGNORE_REMOTE_NAMES[remote.Name] then
-			return false
+		return vec3(cf.Position)
+	end
+
+	local function playerLabel(userId)
+		if kindOf(userId) ~= "number" then
+			return tostring(userId)
 		end
-		local fullName = remote:GetFullName()
-		if fullName:find("RobloxReplicatedStorage", 1, true) then
-			return false
-		end
-		if fullName:find("BridgeNet2", 1, true) and remote.Name == "dataRemoteEvent" then
-			return false
-		end
-		if not Config.DebugVerbose and fullName:find("ReplicatedStorage.Game.", 1, true) then
-			return false
-		end
-		if not Config.DebugVerbose then
-			for _, prefix in IGNORE_REMOTE_PREFIXES do
-				if fullName:find(prefix, 1, true) == 1 then
-					return false
-				end
-			end
-		end
-		if Config.DebugFilterOnly then
-			return matchesKeywords(fullName .. " " .. remote.Name)
-		end
-		return true
+		local plr = Players:GetPlayerByUserId(userId)
+		return if plr then plr.Name else ("uid:" .. userId)
 	end
 
 	local function serialize(value, depth)
 		depth = depth or 0
-		if depth > 3 then
+		if depth > 2 then
 			return "<deep>"
 		end
 		local kind = kindOf(value)
@@ -122,8 +111,8 @@ function M.create(opts)
 			return tostring(value)
 		end
 		if kind == "string" then
-			if #value > 96 then
-				return string.format("%q...", value:sub(1, 96))
+			if #value > 64 then
+				return string.format("%q..", value:sub(1, 64))
 			end
 			return string.format("%q", value)
 		end
@@ -131,24 +120,17 @@ function M.create(opts)
 			return value:GetFullName()
 		end
 		if kind == "Vector3" then
-			return string.format("V3(%.1f,%.1f,%.1f)", value.X, value.Y, value.Z)
-		end
-		if kind == "Vector2" then
-			return string.format("V2(%.1f,%.1f)", value.X, value.Y)
+			return vec3(value)
 		end
 		if kind == "CFrame" then
-			local p = value.Position
-			return string.format("CF(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
-		end
-		if kind == "EnumItem" then
-			return tostring(value)
+			return "CF" .. cfPos(value)
 		end
 		if kind == "table" then
 			local parts = {}
 			local count = 0
 			for key, entry in value do
 				count += 1
-				if count > 8 then
+				if count > 6 then
 					table.insert(parts, "...")
 					break
 				end
@@ -159,28 +141,14 @@ function M.create(opts)
 		return "<" .. kind .. ">"
 	end
 
-	local function serializeArgs(args)
-		local parts = {}
-		local limit = math.min(args.n or #args, 8)
-		for index = 1, limit do
-			table.insert(parts, serialize(args[index]))
-		end
-		if (args.n or #args) > limit then
-			table.insert(parts, "...")
-		end
-		return table.concat(parts, ", ")
-	end
-
-	local function pruneRemoteLogCache(now)
-		if now - lastLogPruneAt < LOG_PRUNE_INTERVAL then
-			return
-		end
-		lastLogPruneAt = now
-		for key, when in remoteLastLog do
-			if now - when > 60 then
-				remoteLastLog[key] = nil
+	local function matchesGameLog(text)
+		local lower = string.lower(text)
+		for _, pattern in GAME_LOG_PATTERNS do
+			if lower:find(pattern, 1, true) then
+				return true
 			end
 		end
+		return false
 	end
 
 	local function refreshOverlay()
@@ -193,10 +161,19 @@ function M.create(opts)
 		end
 		overlayDirty = false
 		lastOverlayAt = now
-		local lines = {}
-		for index = math.max(1, #log - 7), #log do
+		local lines = {
+			string.format(
+				"FB:%d HP:%d HC:%d rej:%d ratio:%.2f",
+				pipelineStats.fireBullet,
+				pipelineStats.hitPlayer,
+				pipelineStats.hitConfirm,
+				pipelineStats.rejectedShots,
+				getRecentHitRatio()
+			),
+		}
+		for index = math.max(1, #log - 5), #log do
 			local row = log[index]
-			table.insert(lines, string.format("%d %s: %s", row.seq, row.category, row.message))
+			table.insert(lines, string.format("%s %s", row.category, row.message:sub(1, 72)))
 		end
 		overlayLabel.Text = table.concat(lines, "\n")
 	end
@@ -205,26 +182,19 @@ function M.create(opts)
 		if not Config.DebugAC and not force then
 			return
 		end
-		if Config.DebugFilterOnly and not force and not matchesKeywords(category .. " " .. message) then
-			return
-		end
 
 		seq += 1
-		table.insert(log, {
-			seq = seq,
-			t = tick(),
-			category = category,
-			message = message,
-		})
+		table.insert(log, { seq = seq, t = tick(), category = category, message = message })
 		while #log > LOG_MAX do
 			table.remove(log, 1)
 		end
 
 		local loud = force
 			or category == "KICK"
+			or category == "ACLOG"
+			or category == "REJECT"
 			or category == "BOOT"
-			or category == "PROBE"
-			or category == "DUMP"
+			or category == "PIPE"
 		if loud then
 			warn(TAG, string.format("[%s] %s", category, message))
 		end
@@ -235,78 +205,303 @@ function M.create(opts)
 		end
 	end
 
-	local function remotePath(remote)
-		if remote and remote:IsA("Instance") then
-			return remote:GetFullName()
+	local function formatFireBullet(p)
+		if kindOf(p) ~= "table" then
+			return serialize(p)
 		end
-		return tostring(remote)
+		return string.format(
+			"type=%s seed=%s fireTime=%s speed=%.0f muzzle=%s",
+			tostring(p.BulletType or p.bulletType or "?"),
+			tostring(p.seed or "?"),
+			tostring(p.fireTime or "?"),
+			tonumber(p.bulletSpeed) or 0,
+			cfPos(p.muzzleCF)
+		)
 	end
 
-	local function logRemote(direction, remote, args)
+	local function formatHitPlayer(p)
+		if kindOf(p) ~= "table" then
+			return serialize(p)
+		end
+		return string.format(
+			"target=%s part=%s dist=%.0f speed=%.0f type=%s hit=%s",
+			playerLabel(p.hitUserId),
+			tostring(p.hitPartName or "?"),
+			tonumber(p.distanceTraveled) or 0,
+			tonumber(p.velocityMagnitude or p.bulletSpeed) or 0,
+			tostring(p.bulletType or "?"),
+			vec3(p.hitPosition)
+		)
+	end
+
+	local function formatHitConfirm(p)
+		if kindOf(p) ~= "table" then
+			return serialize(p)
+		end
+		return string.format(
+			"dmg=%s head=%s target=%s pos=%s",
+			tostring(p.damage or "?"),
+			tostring(p.isHeadshot),
+			playerLabel(p.hitUserId or p.userId),
+			vec3(p.hitPosition)
+		)
+	end
+
+	local function registerPendingShot(firePayload, meta)
+		shotSeq += 1
+		local entry = {
+			id = shotSeq,
+			t = tick(),
+			fireTime = firePayload and firePayload.fireTime,
+			bulletType = firePayload and (firePayload.BulletType or firePayload.bulletType),
+			muzzle = firePayload and firePayload.muzzleCF and firePayload.muzzleCF.Position,
+			redirected = meta and meta.redirected,
+			hubAim = meta and meta.hubAim,
+			hitPlayer = false,
+			confirmed = false,
+		}
+		table.insert(pendingShots, entry)
+		while #pendingShots > SHOT_MAX_PENDING do
+			table.remove(pendingShots, 1)
+		end
+		return entry
+	end
+
+	local function mergeFireBullet(firePayload)
+		local now = tick()
+		for index = #pendingShots, 1, -1 do
+			local shot = pendingShots[index]
+			if now - shot.t < 0.2 and not shot.fireTime then
+				shot.fireTime = firePayload.fireTime
+				shot.bulletType = firePayload.BulletType or firePayload.bulletType
+				shot.muzzle = firePayload.muzzleCF and firePayload.muzzleCF.Position
+				return shot
+			end
+		end
+		return registerPendingShot(firePayload, nil)
+	end
+
+	local function findPendingShot(fireTime, bulletType)
+		local now = tick()
+		for index = #pendingShots, 1, -1 do
+			local shot = pendingShots[index]
+			if now - shot.t > SHOT_MATCH_WINDOW then
+				continue
+			end
+			if shot.confirmed then
+				continue
+			end
+			if fireTime and shot.fireTime and shot.fireTime == fireTime then
+				return shot
+			end
+			if bulletType and shot.bulletType and shot.bulletType == bulletType and not shot.hitPlayer then
+				return shot
+			end
+		end
+		return nil
+	end
+
+	local function onBridgeOutbound(name, payload)
+		if not Config.DebugAC or not Config.DebugBridgeNet then
+			return
+		end
+
+		if name == "FireBullet" then
+			pipelineStats.fireBullet += 1
+			mergeFireBullet(payload)
+			push("FIRE", formatFireBullet(payload))
+			return
+		end
+
+		if name == "HitPlayer" then
+			pipelineStats.hitPlayer += 1
+			local shot = findPendingShot(payload and payload.fireTime, payload and payload.bulletType)
+			if shot then
+				shot.hitPlayer = true
+			else
+				pipelineStats.orphanHitPlayer += 1
+				push("PIPE", "HitPlayer without matching FireBullet", true)
+			end
+			push("HIT→", formatHitPlayer(payload))
+			return
+		end
+
+		push("BR→", name .. " " .. serialize(payload))
+	end
+
+	local function onBridgeInbound(name, payload)
+		if not Config.DebugAC or not Config.DebugBridgeNet then
+			return
+		end
+
+		if name == "HitConfirm" then
+			pipelineStats.hitConfirm += 1
+			local shot = findPendingShot(payload and payload.fireTime, nil)
+			if shot then
+				shot.confirmed = true
+				local lag = tick() - shot.t
+				push(
+					"HIT✓",
+					string.format(
+						"%s lag=%.2fs hub=%s ratio=%.2f",
+						formatHitConfirm(payload),
+						lag,
+						tostring(shot.hubAim),
+						getRecentHitRatio()
+					)
+				)
+			else
+				pipelineStats.orphanConfirm += 1
+				push("HIT✓", formatHitConfirm(payload) .. " (unmatched)", true)
+			end
+			return
+		end
+
+		if name == "MessageEvent" and kindOf(payload) == "table" then
+			local text = tostring(payload.Text or payload.text or payload.message or "")
+			if text ~= "" and (matchesGameLog(text) or Config.DebugVerbose) then
+				push("MSG", text, matchesGameLog(text))
+			end
+			return
+		end
+
+		push("BR←", name .. " " .. serialize(payload))
+	end
+
+	local function tapBridgeFire(bridgeName, bridge)
+		if not bridge or bridgeTaps[bridge] or typeof(bridge.Fire) ~= "function" then
+			return
+		end
+		local oldFire = bridge.Fire
+		bridgeTaps[bridge] = { name = bridgeName, oldFire = oldFire }
+		function bridge.Fire(self, payload, ...)
+			onBridgeOutbound(bridgeName, payload)
+			return oldFire(self, payload, ...)
+		end
+	end
+
+	local function listenBridge(bridgeName, bridge)
+		if not bridge or typeof(bridge.Connect) ~= "function" then
+			return
+		end
+		local conn = bridge:Connect(function(payload, ...)
+			onBridgeInbound(bridgeName, payload)
+		end)
+		table.insert(bridgeInboundConns, conn)
+		table.insert(conns, conn)
+	end
+
+	local function installGameBridges(bridgeNet)
+		if bridgesInstalled or not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" then
+			return
+		end
+		bridgesInstalled = true
+
+		local function ref(name)
+			local ok, bridge = pcall(function()
+				return bridgeNet.ReferenceBridge(name)
+			end)
+			if ok and bridge then
+				return bridge
+			end
+			return nil
+		end
+
+		for _, name in COMBAT_OUT do
+			tapBridgeFire(name, ref(name))
+		end
+		for _, name in OTHER_OUT do
+			if Config.DebugVerbose then
+				tapBridgeFire(name, ref(name))
+			end
+		end
+
+		for _, name in COMBAT_IN do
+			listenBridge(name, ref(name))
+		end
+		for _, name in OTHER_IN do
+			if Config.DebugVerbose then
+				listenBridge(name, ref(name))
+			end
+		end
+
+		push(
+			"BOOT",
+			string.format(
+				"Game bridges tapped (out=%d in=%d)",
+				#COMBAT_OUT + (Config.DebugVerbose and #OTHER_OUT or 0),
+				#COMBAT_IN + (Config.DebugVerbose and #OTHER_IN or 0)
+			),
+			true
+		)
+	end
+
+	local function isFrameworkRemote(remote)
+		local path = remote:GetFullName()
+		return path:find("ReplicatedStorage.Framework", 1, true) == 1
+			or path:find("ReplicatedStorage.Game", 1, true) == 1
+	end
+
+	local function logFrameworkRemote(direction, remote, args)
 		if not Config.DebugAC or not Config.DebugRemotes then
 			return
 		end
-		if not shouldWatchRemote(remote) then
+		if not isFrameworkRemote(remote) then
 			return
 		end
 
 		local now = tick()
-		pruneRemoteLogCache(now)
-		local path = remotePath(remote)
-		local logKey = tostring(direction) .. "|" .. path
-		if not Config.DebugVerbose then
-			local last = remoteLastLog[logKey]
-			if last and now - last < REMOTE_COOLDOWN then
-				return
-			end
-			remoteLastLog[logKey] = now
+		local path = remote:GetFullName()
+		local logKey = direction .. "|" .. path
+		local last = remoteLastLog[logKey]
+		if last and now - last < REMOTE_COOLDOWN and not Config.DebugVerbose then
+			return
+		end
+		remoteLastLog[logKey] = now
+
+		if remote.Name == "GetSecureSettings" and direction == "OUT" then
+			pipelineStats.secureSettingsCalls += 1
+			push("SECURE", "InvokeServer gun=" .. serialize(args[1]))
+			return
 		end
 
-		local ok, err = pcall(function()
-			local packed = table.pack(unpack(args))
-			push("REMOTE", string.format("%s %s | %s", direction, path, serializeArgs(packed)))
-		end)
-		if not ok then
-			push("REMOTE", "log error: " .. tostring(err), true)
-		end
+		push("REMOTE", string.format("%s %s | %s", direction, path, serialize(args[1])))
 	end
 
 	local function logKick(source, args)
 		if not Config.DebugAC or not Config.DebugKicks then
 			return
 		end
-		local packed = table.pack(unpack(args))
-		push("KICK", string.format("%s | %s", source, serializeArgs(packed)), true)
+		push("KICK", source .. " | " .. serialize(args[1]), true)
 	end
 
 	local function onHitConfirm(payload)
 		if not Config.DebugAC or not Config.DebugHits then
 			return
 		end
-		push(
-			"HIT",
-			string.format(
-				"HitConfirm %s | hits=%d shots=%d ratio=%.2f",
-				serialize(payload),
-				#hitRateRecentHits,
-				#hitRateRecentShots,
-				getRecentHitRatio()
-			)
-		)
+		-- Inbound detail logged by bridge listener; this hook is for init.lua hit-rate + markers
 	end
 
-	local function onShot(redirectAim)
-		if not Config.DebugAC or not Config.DebugHits or not Config.DebugVerbose then
+	local function onSimulateShot(meta)
+		if not Config.DebugAC or not Config.DebugHits then
 			return
 		end
+		if not Config.DebugVerbose and not meta.redirected then
+			return
+		end
+
+		registerPendingShot(nil, meta)
+
 		push(
 			"SHOT",
 			string.format(
-				"redirect=%s ratio=%.2f hits=%d shots=%d",
-				tostring(redirectAim),
-				getRecentHitRatio(),
-				#hitRateRecentHits,
-				#hitRateRecentShots
+				"redirect=%s aim=%s part=%s type=%s muzzle=%s ratio=%.2f",
+				tostring(meta.redirected),
+				tostring(meta.hubAim),
+				tostring(meta.aimPart or "?"),
+				tostring(meta.bulletType or "?"),
+				cfPos(meta.muzzleCF),
+				getRecentHitRatio()
 			)
 		)
 	end
@@ -336,7 +531,9 @@ function M.create(opts)
 					end
 					if Config.DebugRemotes and (method == "FireServer" or method == "InvokeServer") then
 						if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") or self:IsA("UnreliableRemoteEvent") then
-							logRemote("OUT", self, { ... })
+							if isFrameworkRemote(self) then
+								logFrameworkRemote("OUT", self, { ... })
+							end
 						end
 					elseif Config.DebugKicks then
 						if method == "Kick" and self == LocalPlayer then
@@ -361,20 +558,23 @@ function M.create(opts)
 			end
 			local text = tostring(message)
 			local isError = messageType == Enum.MessageType.MessageError
-			local isKeyword = matchesKeywords(text)
-			if not isError and not isKeyword then
+			if not isError and not matchesGameLog(text) then
 				return
 			end
-			if not Config.DebugVerbose then
-				local dedupeKey = tostring(messageType) .. "|" .. text
-				local now = tick()
-				local last = lastLogDedupe[dedupeKey]
-				if last and now - last < LOG_DEDUPE_COOLDOWN then
-					return
-				end
-				lastLogDedupe[dedupeKey] = now
+			local dedupeKey = tostring(messageType) .. "|" .. text
+			local now = tick()
+			local last = lastLogDedupe[dedupeKey]
+			if last and now - last < 2 then
+				return
 			end
-			push("LOG", tostring(messageType) .. " | " .. text)
+			lastLogDedupe[dedupeKey] = now
+
+			local category = if matchesGameLog(text) then "ACLOG" else "LOG"
+			if text:lower():find("invalid packet", 1, true) then
+				pipelineStats.rejectedShots += 1
+				category = "REJECT"
+			end
+			push(category, text, category == "ACLOG" or category == "REJECT")
 		end)
 		table.insert(conns, logConn)
 	end
@@ -386,7 +586,6 @@ function M.create(opts)
 		hooksReady = true
 		installNamecallHook()
 		installLogHook()
-		push("BOOT", "AC debug hooks installed", true)
 	end
 
 	local function ensureOverlay()
@@ -409,17 +608,16 @@ function M.create(opts)
 		overlayLabel.TextColor3 = Color3.fromRGB(220, 230, 240)
 		overlayLabel.TextStrokeTransparency = 0.5
 		overlayLabel.Font = Enum.Font.Code
-		overlayLabel.TextSize = 13
+		overlayLabel.TextSize = 12
 		overlayLabel.TextXAlignment = Enum.TextXAlignment.Left
 		overlayLabel.TextYAlignment = Enum.TextYAlignment.Top
-		overlayLabel.Size = UDim2.new(0, 520, 0, 150)
+		overlayLabel.Size = UDim2.new(0, 560, 0, 160)
 		overlayLabel.Position = UDim2.fromOffset(8, 8)
 		overlayLabel.TextWrapped = true
 		overlayLabel.Parent = overlayGui
 		overlayGui.Enabled = Config.DebugAC and Config.DebugOverlay
 	end
 
-	local overlayConn = nil
 	local function ensureOverlayLoop()
 		if overlayConn then
 			return
@@ -432,78 +630,41 @@ function M.create(opts)
 		table.insert(conns, overlayConn)
 	end
 
-	local function scanRemotes(logEach, _hookIncoming)
-		local remotes = {}
-		for _, descendant in ipairs(game:GetDescendants()) do
-			if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") or descendant:IsA("UnreliableRemoteEvent") then
-				if shouldWatchRemote(descendant) then
-					table.insert(remotes, descendant)
-				end
-			end
-		end
-		table.sort(remotes, function(a, b)
-			return a:GetFullName() < b:GetFullName()
-		end)
-		if logEach then
-			push("SCAN", "Found " .. #remotes .. " remotes (list only — no incoming hooks)", true)
-			for _, remote in ipairs(remotes) do
-				push("SCAN", remote.ClassName .. " " .. remote:GetFullName(), true)
-			end
-		end
-		return remotes
-	end
+	local overlayConn = nil
 
-	local function scanSuspiciousModules()
-		local hits = {}
-		for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
-			if descendant:IsA("ModuleScript") then
-				local lower = string.lower(descendant.Name)
-				if lower:find("anticheat", 1, true)
-					or (lower:find("anti", 1, true) and lower:find("cheat", 1, true))
-					or lower:find("validate", 1, true)
-					or lower:find("security", 1, true)
-					or lower:find("sanity", 1, true)
-					or lower:find("kick", 1, true)
-					or lower:find("exploit", 1, true)
-				then
-					table.insert(hits, descendant:GetFullName())
-				end
+	local function scanGameSurfaces()
+		push("SCAN", "Warfare security surfaces", true)
+
+		local paths = {
+			"ReplicatedStorage.Framework.Modules.BridgeNet2.src.Server.HandleInvalidPlayer",
+			"ReplicatedStorage.Framework.Modules.BulletSimulator",
+			"ReplicatedStorage.Framework.Modules.MagazineController",
+			"ReplicatedStorage.Framework.Remotes.GetSecureSettings",
+			"ReplicatedStorage.Game.Modules.TeamsService",
+			"ReplicatedStorage.Game.Modules.Packets",
+		}
+		for _, path in paths do
+			local inst = game
+			for part in string.gmatch(path, "[^%.]+") do
+				inst = inst and inst:FindFirstChild(part)
 			end
+			push("SCAN", path .. " → " .. (if inst then inst.ClassName else "MISSING"), true)
 		end
-		table.sort(hits)
-		push("SCAN", "Suspicious modules: " .. #hits, true)
-		for _, path in ipairs(hits) do
-			push("SCAN", path, true)
-		end
-		return hits
-	end
 
-	local function installBridgeNet(bridgeNet)
-		if bridgeNet then
-			bridgeNetRef = bridgeNet
-		end
-	end
-
-	local function wrapBridge(bridgeName, bridge)
-		if bridge and not knownBridges[bridge] then
-			knownBridges[bridge] = bridgeName
-		end
-	end
-
-	local function probeBridges(bridgeNet)
-		if not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" then
-			return
-		end
-		push("PROBE", "Probing BridgeNet bridges (existence only)", true)
-		for _, name in ipairs(BRIDGE_GUESSES) do
-			local ok, bridge = pcall(function()
-				return bridgeNet.ReferenceBridge(name)
-			end)
-			if ok and bridge then
-				knownBridges[bridge] = name
-				push("PROBE", "Bridge exists: " .. name, true)
+		local weaponScript = Players.LocalPlayer:FindFirstChild("PlayerScripts")
+		if weaponScript then
+			weaponScript = weaponScript:FindFirstChild("WeaponClient")
+			if weaponScript then
+				weaponScript = weaponScript:FindFirstChild("WeaponClient")
 			end
+			push(
+				"SCAN",
+				"WeaponClient main → " .. (if weaponScript then weaponScript.ClassName else "MISSING"),
+				true
+			)
 		end
+
+		return paths
 	end
 
 	local function sync()
@@ -526,7 +687,7 @@ function M.create(opts)
 	end
 
 	local function printLog()
-		push("DUMP", "Printing " .. #log .. " buffered entries", true)
+		push("DUMP", "Printing " .. #log .. " entries", true)
 		for _, entry in ipairs(log) do
 			warn(TAG, string.format("%d [%.2f] [%s] %s", entry.seq, entry.t, entry.category, entry.message))
 		end
@@ -546,14 +707,40 @@ function M.create(opts)
 		push(
 			"STAT",
 			string.format(
-				"hits=%d shots=%d ratio=%.2f window=%.1fs",
+				"hub hits=%d shots=%d ratio=%.2f | pipeline FB=%d HP=%d HC=%d orphanHP=%d orphanHC=%d reject=%d secure=%d",
 				#hitRateRecentHits,
 				#hitRateRecentShots,
 				getRecentHitRatio(),
-				HIT_RATE_WINDOW
+				pipelineStats.fireBullet,
+				pipelineStats.hitPlayer,
+				pipelineStats.hitConfirm,
+				pipelineStats.orphanHitPlayer,
+				pipelineStats.orphanConfirm,
+				pipelineStats.rejectedShots,
+				pipelineStats.secureSettingsCalls
 			),
 			true
 		)
+	end
+
+	local function dumpPipeline()
+		dumpHitStats()
+		local open = 0
+		for _, shot in pendingShots do
+			if not shot.confirmed then
+				open += 1
+			end
+		end
+		push("PIPE", string.format("pending unmatched shots=%d / %d", open, #pendingShots), true)
+	end
+
+	local function restoreBridgeTaps()
+		for bridge, tap in bridgeTaps do
+			if tap.oldFire then
+				bridge.Fire = tap.oldFire
+			end
+		end
+		table.clear(bridgeTaps)
 	end
 
 	local function unload()
@@ -563,6 +750,9 @@ function M.create(opts)
 			end)
 		end
 		table.clear(conns)
+		table.clear(bridgeInboundConns)
+		restoreBridgeTaps()
+		bridgesInstalled = false
 		logConn = nil
 		overlayConn = nil
 		hooksReady = false
@@ -573,25 +763,23 @@ function M.create(opts)
 		end
 		table.clear(remoteLastLog)
 		table.clear(lastLogDedupe)
-		table.clear(knownBridges)
-		bridgeNetRef = nil
+		table.clear(pendingShots)
 	end
 
 	local genv = if typeof(getgenv) == "function" then getgenv() else _G
 	genv.__WarfareACLog = log
 	genv.__WarfareACDump = printLog
+	genv.__WarfareACStats = pipelineStats
 
 	return {
 		sync = sync,
 		install = install,
-		installBridgeNet = installBridgeNet,
-		probeBridges = probeBridges,
-		wrapBridge = wrapBridge,
+		installGameBridges = installGameBridges,
 		onHitConfirm = onHitConfirm,
-		onShot = onShot,
+		onSimulateShot = onSimulateShot,
 		push = push,
-		scanRemotes = scanRemotes,
-		scanSuspiciousModules = scanSuspiciousModules,
+		scanGameSurfaces = scanGameSurfaces,
+		dumpPipeline = dumpPipeline,
 		printLog = printLog,
 		clearLog = clearLog,
 		dumpHitStats = dumpHitStats,
