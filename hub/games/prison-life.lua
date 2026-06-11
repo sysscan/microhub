@@ -16,7 +16,7 @@ local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "3-decompiled-fix1"
+local GAME_BUILD = "4-guns-noclip"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local TeamGuards = Teams:FindFirstChild("Guards")
@@ -73,6 +73,7 @@ local Config = {
 	AlwaysSprint = false,
 	SprintSpeed = 24,
 	Disabler = false,
+	Noclip = false,
 	FullBright = false,
 	KillNotify = false,
 	C4ESP = true,
@@ -137,6 +138,8 @@ local hookedEquip: any = nil
 local oldShootFn: any = nil
 local oldBulletFn: any = nil
 local oldEquipFn: any = nil
+local toolAttrBackup: { [Instance]: { [string]: any } } = {}
+local pickupSeen: { [Instance]: boolean } = {}
 
 local function stopLoop(threadRef: thread?)
 	if threadRef then
@@ -195,7 +198,6 @@ local function requestTeamChange(teamName: string)
 		end)
 		return
 	end
-	local legacyColor = TEAM_COLOR[teamName] or TEAM_COLOR[teamName:gsub("s$", "")]
 	if teamName == "Guards" then
 		switchTeamLegacy(TEAM_COLOR.Guard)
 	elseif teamName == "Inmates" then
@@ -297,7 +299,7 @@ local function statusSuffix(char: Model): string
 	return ""
 end
 
-local function getEntitiesInRange(range: number, attackCheck: boolean): { { player: Player, char: Model, root: BasePart } }
+local function getEntitiesInRange(range: number, mode: string): { { player: Player, char: Model, root: BasePart } }
 	local localChar = LocalPlayer.Character
 	local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
 	if not localRoot then
@@ -314,11 +316,29 @@ local function getEntitiesInRange(range: number, attackCheck: boolean): { { play
 			continue
 		end
 		local alive, _, root = isAlive(char)
-		if alive and root and isVulnerable(player, char, attackCheck) then
-			if (root.Position - localRoot.Position).Magnitude <= range then
-				table.insert(list, { player = player, char = char, root = root })
-			end
+		if not alive or not root then
+			continue
 		end
+		if (root.Position - localRoot.Position).Magnitude > range then
+			continue
+		end
+
+		if mode == "arrest" then
+			if sameTeam(player, LocalPlayer) then
+				continue
+			end
+			if char:GetAttribute("Arrested") then
+				continue
+			end
+		elseif mode == "combat" then
+			if not isVulnerable(player, char, true) then
+				continue
+			end
+		elseif not isVulnerable(player, char, false) then
+			continue
+		end
+
+		table.insert(list, { player = player, char = char, root = root })
 	end
 
 	table.sort(list, function(a, b)
@@ -327,31 +347,90 @@ local function getEntitiesInRange(range: number, attackCheck: boolean): { { play
 	return list
 end
 
-local function giveGiverWeapon(weaponName: string)
+local function getGiverPosition(giver: Instance): Vector3?
+	if giver:IsA("BasePart") then
+		return giver.Position
+	end
+	if giver:IsA("Model") then
+		return giver:GetPivot().Position
+	end
+	local part = giver:FindFirstChildWhichIsA("BasePart", true)
+	return part and part.Position
+end
+
+local function revealGiver(giver: Instance)
+	for _, part in giver:GetDescendants() do
+		if part:IsA("BasePart") then
+			local original = part:GetAttribute("OriginalTransparency")
+			if original ~= nil then
+				part.Transparency = original
+			elseif part.Transparency >= 1 then
+				part.Transparency = 0
+			end
+		end
+	end
+end
+
+local function findWeaponGiver(weaponName: string): Instance?
 	local items = workspace:FindFirstChild("Prison_ITEMS")
-	local giver = items and items:FindFirstChild("giver")
-	local weapon = giver and giver:FindFirstChild(weaponName)
-	local pickup = weapon and weapon:FindFirstChild("ITEMPICKUP")
-	if not pickup then
-		return
+	local giverFolder = items and items:FindFirstChild("giver")
+	local named = giverFolder and giverFolder:FindFirstChild(weaponName)
+	if named then
+		return named
 	end
-
-	local remote = workspace:FindFirstChild("Remote")
-	local handler = remote and remote:FindFirstChild("ItemHandler")
-	if handler then
-		pcall(function()
-			handler:InvokeServer(pickup)
-		end)
-		return
+	for _, tag in { "Giver", "TouchGiver" } do
+		for _, giver in CollectionService:GetTagged(tag) do
+			if giver.Name == weaponName or giver:GetAttribute("ToolName") == weaponName then
+				return giver
+			end
+		end
 	end
+	return nil
+end
 
+local function teleportNearGiver(giver: Instance)
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local pos = getGiverPosition(giver)
+	if root and pos then
+		root.CFrame = CFrame.new(pos + Vector3.new(0, 2.5, 0))
+	end
+end
+
+local function requestGiverWeapon(giver: Instance): boolean
 	local remotes = getRemotes()
 	local giverPressed = remotes and remotes:FindFirstChild("GiverPressed")
-	if giverPressed and weapon then
-		pcall(function()
-			giverPressed:FireServer(weapon)
+	if giverPressed then
+		local ok = pcall(function()
+			giverPressed:FireServer(giver)
+		end)
+		return ok
+	end
+	local pickup = giver:FindFirstChild("ITEMPICKUP", true)
+	local remote = workspace:FindFirstChild("Remote")
+	local handler = remote and remote:FindFirstChild("ItemHandler")
+	if pickup and handler then
+		return pcall(function()
+			handler:InvokeServer(pickup)
 		end)
 	end
+	return false
+end
+
+local function giveGiverWeapon(weaponName: string)
+	task.spawn(function()
+		local giver = findWeaponGiver(weaponName)
+		if not giver then
+			warn("[PrisonLife] giver not found:", weaponName)
+			return
+		end
+		revealGiver(giver)
+		teleportNearGiver(giver)
+		task.wait(0.05)
+		if not requestGiverWeapon(giver) then
+			warn("[PrisonLife] failed to request weapon:", weaponName)
+		end
+	end)
 end
 
 local function isSprinting(): boolean
@@ -375,6 +454,21 @@ local function applyMovement()
 	else
 		hum.WalkSpeed = 16
 		hum.JumpPower = 50
+	end
+end
+
+local function applyNoclip()
+	if not Config.Noclip then
+		return
+	end
+	local char = LocalPlayer.Character
+	if not char then
+		return
+	end
+	for _, part in char:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.CanCollide = false
+		end
 	end
 end
 
@@ -632,9 +726,56 @@ local function modifyGunData()
 		return
 	end
 
-	data.SpreadRadius = Config.GunNoSpread and 0 or gunDataBackup.SpreadRadius
-	data.FireRate = (gunDataBackup.FireRate or 0) * (Config.GunFireRate / 100)
-	data.AutoFire = Config.GunAutomatic or gunDataBackup.AutoFire
+	if gunDataBackup.SpreadRadius ~= nil then
+		data.SpreadRadius = Config.GunNoSpread and 0 or gunDataBackup.SpreadRadius
+	end
+	if gunDataBackup.FireRate ~= nil then
+		data.FireRate = gunDataBackup.FireRate * (Config.GunFireRate / 100)
+	end
+	if gunDataBackup.AutoFire ~= nil then
+		data.AutoFire = Config.GunAutomatic or gunDataBackup.AutoFire
+	end
+end
+
+local function patchToolGunAttributes(tool: Instance)
+	if not Config.GunMods or not tool:IsA("Tool") or not tool:GetAttribute("FireRate") then
+		return
+	end
+	if not toolAttrBackup[tool] then
+		toolAttrBackup[tool] = {
+			SpreadRadius = tool:GetAttribute("SpreadRadius"),
+			FireRate = tool:GetAttribute("FireRate"),
+			AutoFire = tool:GetAttribute("AutoFire"),
+		}
+	end
+	local backup = toolAttrBackup[tool]
+	if Config.GunNoSpread and backup.SpreadRadius ~= nil then
+		tool:SetAttribute("SpreadRadius", 0)
+	end
+	if backup.FireRate then
+		tool:SetAttribute("FireRate", backup.FireRate * (Config.GunFireRate / 100))
+	end
+	if Config.GunAutomatic then
+		tool:SetAttribute("AutoFire", true)
+	end
+end
+
+local function patchAllGunTools()
+	if not Config.GunMods then
+		return
+	end
+	local char = LocalPlayer.Character
+	if char then
+		for _, child in char:GetChildren() do
+			patchToolGunAttributes(child)
+		end
+	end
+	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+	if backpack then
+		for _, child in backpack:GetChildren() do
+			patchToolGunAttributes(child)
+		end
+	end
 end
 
 local function restoreGunData()
@@ -683,7 +824,7 @@ local function getSilentTarget(origin: Vector3, fov: number)
 end
 
 local function installGunHooks()
-	if not canHook or hookedBullet then
+	if not canHook then
 		return
 	end
 	if not resolveGunController() then
@@ -720,12 +861,12 @@ local function installGunHooks()
 
 	if Config.SilentAim and gun.Bullet and not hookedBullet then
 		oldBulletFn = gun.Bullet
-		hookedBullet = hookfunction(gun.Bullet, function(origin, direction, ...)
+		hookedBullet = hookfunction(gun.Bullet, function(origin, aimPoint, spread, ...)
 			local target = getSilentTarget(origin, Config.SilentAimFOV)
 			if target then
-				direction = target.Position
+				aimPoint = target.Position
 			end
-			return oldBulletFn(origin, direction, ...)
+			return oldBulletFn(origin, aimPoint, spread, ...)
 		end)
 	end
 end
@@ -808,6 +949,7 @@ local function refreshGunFeatures()
 	end
 	if Config.GunMods then
 		modifyGunData()
+		patchAllGunTools()
 	end
 end
 
@@ -819,7 +961,7 @@ local function runKillaura()
 	if not melee then
 		return
 	end
-	for _, ent in getEntitiesInRange(Config.KillauraRange, true) do
+	for _, ent in getEntitiesInRange(Config.KillauraRange, "combat") do
 		pcall(function()
 			melee:FireServer(ent.player, 1, 1)
 		end)
@@ -843,7 +985,7 @@ local function runAutoArrest()
 		end
 	end
 
-	for _, ent in getEntitiesInRange(Config.AutoArrestRange, false) do
+	for _, ent in getEntitiesInRange(Config.AutoArrestRange, "arrest") do
 		local player = ent.player
 		local char = ent.char
 		if char:GetAttribute("Arrested") then
@@ -912,9 +1054,37 @@ end
 
 local pickupItems: { { any } } = {}
 
-local function trackPickup(obj: Instance)
-	if obj:IsA("Model") and obj.Name ~= "Model" and obj:GetAttribute("ToolName") then
-		table.insert(pickupItems, { obj, obj.Name == "TouchGiver" })
+local function registerPickup(obj: Instance, touchGiver: boolean)
+	if pickupSeen[obj] then
+		return
+	end
+	pickupSeen[obj] = true
+	table.insert(pickupItems, { obj, touchGiver })
+end
+
+local function unregisterPickup(obj: Instance)
+	if not pickupSeen[obj] then
+		return
+	end
+	pickupSeen[obj] = nil
+	for i, entry in pickupItems do
+		if entry[1] == obj then
+			table.remove(pickupItems, i)
+			break
+		end
+	end
+end
+
+local function refreshPickupIndex()
+	for _, tag in { "Giver", "TouchGiver" } do
+		for _, giver in CollectionService:GetTagged(tag) do
+			registerPickup(giver, tag == "TouchGiver")
+		end
+	end
+	for _, obj in workspace:GetChildren() do
+		if obj:IsA("Model") and obj:GetAttribute("ToolName") then
+			registerPickup(obj, obj.Name == "TouchGiver")
+		end
 	end
 end
 
@@ -966,7 +1136,7 @@ local function runAutoDetonate()
 	end
 
 	local targetRoot: BasePart? = nil
-	for _, ent in getEntitiesInRange(25, true) do
+	for _, ent in getEntitiesInRange(25, "combat") do
 		targetRoot = ent.root
 		break
 	end
@@ -1040,15 +1210,17 @@ local function runAutoPickup()
 	end
 
 	for _, entry in pickupItems do
-		local model, _touchGiver = entry[1], entry[2]
-		if not model.Parent or not model.PrimaryPart then
+		local model = entry[1]
+		if not model.Parent then
 			continue
 		end
-		if (model.PrimaryPart.Position - root.Position).Magnitude > 12 then
+		local pos = getGiverPosition(model)
+		if not pos or (pos - root.Position).Magnitude > 12 then
 			continue
 		end
-		local toolName = model:GetAttribute("ToolName")
+		local toolName = model:GetAttribute("ToolName") or model.Name
 		if typeof(toolName) == "string" and not backpack:FindFirstChild(toolName) then
+			revealGiver(model)
 			pcall(function()
 				giverPressed:FireServer(model)
 			end)
@@ -1378,6 +1550,8 @@ genv.__PrisonLifeUnload = function()
 		c4Folder:Destroy()
 	end
 	table.clear(armorPickups)
+	table.clear(pickupSeen)
+	table.clear(toolAttrBackup)
 	localC4 = nil
 end
 
@@ -1436,6 +1610,7 @@ UILib.create({
 						{ type = "slider", key = "WalkSpeed", label = "Walk Speed", min = 16, max = 200, step = 1 },
 						{ type = "slider", key = "JumpPower", label = "Jump Power", min = 50, max = 200, step = 1 },
 						{ type = "toggle", key = "NoJumpCooldown", label = "No Jump Cooldown", hud = "No Jump CD" },
+						{ type = "toggle", key = "Noclip", label = "Noclip", hud = "Noclip" },
 						{ type = "toggle", key = "AlwaysSprint", label = "Hold Sprint Speed", hud = "Sprint" },
 						{ type = "slider", key = "SprintSpeed", label = "Sprint Speed", min = 16, max = 48, step = 1 },
 						{ type = "toggle", key = "AutoReset", label = "Auto Reset (Criminal)", hud = "Auto Reset" },
@@ -1584,8 +1759,9 @@ UILib.create({
 		if key == "WalkSpeed" or key == "JumpPower" then
 			applyMovement()
 		end
-		if key == "GunFireRate" then
+		if key == "GunFireRate" or key == "GunNoSpread" or key == "GunAutomatic" then
 			modifyGunData()
+			patchAllGunTools()
 		end
 	end,
 })
@@ -1609,15 +1785,19 @@ table.insert(connections, LocalPlayer:GetPropertyChangedSignal("Team"):Connect(f
 	end
 end))
 
-table.insert(connections, workspace.ChildAdded:Connect(trackPickup))
-table.insert(connections, workspace.ChildRemoved:Connect(function(obj)
-	for i, entry in pickupItems do
-		if entry[1] == obj then
-			table.remove(pickupItems, i)
-			break
-		end
+for _, tag in { "Giver", "TouchGiver" } do
+	table.insert(connections, CollectionService:GetInstanceAddedSignal(tag):Connect(function(obj)
+		registerPickup(obj, tag == "TouchGiver")
+	end))
+	table.insert(connections, CollectionService:GetInstanceRemovedSignal(tag):Connect(unregisterPickup))
+end
+table.insert(connections, workspace.ChildAdded:Connect(function(obj)
+	if obj:IsA("Model") and obj:GetAttribute("ToolName") then
+		registerPickup(obj, obj.Name == "TouchGiver")
 	end
 end))
+table.insert(connections, workspace.ChildRemoved:Connect(unregisterPickup))
+refreshPickupIndex()
 
 table.insert(connections, CollectionService:GetInstanceAddedSignal("C4"):Connect(function(obj)
 	if Config.C4ESP then
@@ -1676,14 +1856,6 @@ if carContainer then
 	end))
 end
 
-for _, obj in workspace:GetChildren() do
-	trackPickup(obj)
-end
-for _, obj in workspace:GetDescendants() do
-	if obj:IsA("Model") and obj:FindFirstChild("TouchGiver") then
-		trackPickup(obj)
-	end
-end
 syncC4ESP()
 
 startLoop(function()
@@ -1700,7 +1872,9 @@ table.insert(
 	connections,
 	RunService.RenderStepped:Connect(function()
 		applyMovement()
+		applyNoclip()
 		modifyGunData()
+		patchAllGunTools()
 		applyInfiniteAmmo()
 		runVehicleSpeed()
 		runVehicleWallbang()
