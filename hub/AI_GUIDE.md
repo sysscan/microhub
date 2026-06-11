@@ -72,9 +72,11 @@ User executor
 **In game modules:**
 
 ```lua
-local require = shared.__MicroHubRequire
-local Config = require("games/warfare/config.lua")
+local hubRequire = shared.__MicroHubRequire
+local Config = hubRequire("games/warfare/config.lua")
 ```
+
+**Do not** assign `local require = shared.__MicroHubRequire` in files that also call Roblox `require(ModuleScript)` — shadowing breaks game module loads (`attempt to concatenate string with Instance` in the loader).
 
 ### Registered games (`loader.lua` → `GAMES`)
 
@@ -126,12 +128,12 @@ return M
 
 ```lua
 -- games/my-game/init.lua
-local require = shared.__MicroHubRequire
+local hubRequire = shared.__MicroHubRequire
 local M = {}
 
 function M.run()
-  local Config = require("games/my-game/config.lua")
-  local Foo = require("games/my-game/foo.lua")
+  local Config = hubRequire("games/my-game/config.lua")
+  local Foo = hubRequire("games/my-game/foo.lua")
   local foo = Foo.create({ config = Config, ... })
   -- wire UI, loops, unload
 end
@@ -771,7 +773,7 @@ Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust v
 | Loader | `VERSION = "1.7.0"` in `loader.lua` |
 | UI adapter | `4.0.1` in `lib/ui.lua` |
 | Prison Life build | `11-entry-split` |
-| Warfare build | `2-acdbg-lite` |
+| Warfare build | `2-acdbg-lite-fix` |
 | Gunfight Arena build | `67-modular` |
 
 ---

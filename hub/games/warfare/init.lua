@@ -8,12 +8,12 @@ local ContextActionService = game:GetService("ContextActionService")
 local Lighting = game:GetService("Lighting")
 local SoundService = game:GetService("SoundService")
 
-local require = shared.__MicroHubRequire
+local hubRequire = shared.__MicroHubRequire
 
-local Config = require("games/warfare/config.lua")
-local Constants = require("games/warfare/constants.lua")
-local HitRateLib = require("games/warfare/hit-rate.lua")
-local AcDebugLib = require("games/warfare/ac-debug.lua")
+local Config = hubRequire("games/warfare/config.lua")
+local Constants = hubRequire("games/warfare/constants.lua")
+local HitRateLib = hubRequire("games/warfare/hit-rate.lua")
+local AcDebugLib = hubRequire("games/warfare/ac-debug.lua")
 
 local Framework = ReplicatedStorage:WaitForChild("Framework")
 local Modules = Framework:WaitForChild("Modules")
