@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "38-rewrite"
+local GAME_BUILD = "39-hookfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -682,83 +682,7 @@ local function bindVolleyTracker()
 	vSyncConn = sync.Event:Connect(function(shooter) if shooter == LocalPlayer then saBeginVolley() end end)
 end
 
--- Hook install
-
-local function hookVortexSync()
-	if sa.vortex or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
-	if not vortexSyncRef then
-		local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-		local vortex = ps and ps:FindFirstChild("Vortex")
-		vortexSyncRef = vortex and vortex:FindFirstChild("Sync")
-	end
-	if not vortexSyncRef or not vortexSyncRef:IsA("BindableEvent") then return end
-	bindVolleyTracker()
-	local fire = vortexSyncRef.Fire
-	if typeof(fire) ~= "function" then return end
-	local ok = pcall(function()
-		vortexOrig = hookfn(fire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
-			if Config.SilentAim and self == vortexSyncRef and a1 == LocalPlayer and typeof(a4) == "CFrame" and fromGame() then
-				local ok2, nc, nh = pcall(saRewriteSync, a4, a7)
-				if ok2 and typeof(nc) == "CFrame" then a4, a7 = nc, nh end
-			end
-			local o = vortexOrig
-			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
-		end))
-	end)
-	if ok and typeof(vortexOrig) == "function" then sa.vortex = true end
-end
-
-local function hookNetworkFire()
-	if sa.hooked or LocalPlayer:GetAttribute("ClockOffset") == nil then return end
-	local api, remote = findNetworkApi()
-	local target = api and tget(api, "FireServer")
-	if not target or typeof(hookfn) ~= "function" then return end
-	if remote then sa.remote = remote:GetFullName()
-	elseif sa.remote == "" then sa.remote = "Network.FireServer (gc fn)" end
-	local ok = pcall(function()
-		netOrig = hookfn(target, wrap(function(self, eventName, ...)
-			local args = { ... }
-			if fromGame() then
-				bindNetworkApi(self)
-				if Config.SilentAim and eventName == "Fire" then
-					local ok2, na = pcall(saRewriteFire, args)
-					if ok2 and typeof(na) == "table" then args = na end
-				end
-			end
-			local o = netOrig
-			return if typeof(o) == "function" then o(self, eventName, table.unpack(args)) else nil
-		end))
-	end)
-	if not ok or typeof(netOrig) ~= "function" then netOrig = nil; return end
-	sa.hooked = true
-	sa.status = "hooked"
-	hookVortexSync()
-	if not sa.announced then
-		sa.announced = true
-		print("[GFA] silent aim ready", sa.remote, if sa.vortex then "| Vortex.Sync" else "")
-	end
-end
-
-local function ensureHooks()
-	if not (Config.SilentAim or Config.AimDebugger) or sa.hooked or sa.giveUp or sa.installing then return end
-	sa.installing = true
-	task.spawn(function()
-		local n = 0
-		while (Config.SilentAim or Config.AimDebugger) and not sa.hooked and n < 12 do
-			n += 1; hookNetworkFire()
-			if not sa.hooked then
-				sa.status = if typeof(hookfn) ~= "function" then "no hookfunction"
-					elseif LocalPlayer:GetAttribute("ClockOffset") == nil then "waiting ClockOffset"
-					else "scanning gc"
-				task.wait(3)
-			end
-		end
-		if not sa.hooked then sa.giveUp = true; sa.status = "failed (rejoin)"; warn("[GFA] hook install failed") end
-		sa.installing = false
-	end)
-end
-
--- Debugger
+-- Debugger state + logging (must be above hooks so dbgRecordEvent is visible)
 
 local dbg = {
 	fire = 0, hit = 0, sync = 0, syncBound = 0,
@@ -798,6 +722,86 @@ end
 local function dbgRecordEvent(evt: any, payload: { any })
 	if typeof(evt) ~= "string" then return end
 	if evt == "Fire" then dbgRecordFire(payload) elseif evt == "Hitcheck" then dbgRecordHitcheck(payload) end
+end
+
+-- Hook install
+
+local function hookVortexSync()
+	if sa.vortex or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
+	if not vortexSyncRef then
+		local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+		local vortex = ps and ps:FindFirstChild("Vortex")
+		vortexSyncRef = vortex and vortex:FindFirstChild("Sync")
+	end
+	if not vortexSyncRef or not vortexSyncRef:IsA("BindableEvent") then return end
+	bindVolleyTracker()
+	local fire = vortexSyncRef.Fire
+	if typeof(fire) ~= "function" then return end
+	local ok = pcall(function()
+		vortexOrig = hookfn(fire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+			if Config.SilentAim and self == vortexSyncRef and a1 == LocalPlayer and typeof(a4) == "CFrame" and fromGame() then
+				local ok2, nc, nh = pcall(saRewriteSync, a4, a7)
+				if ok2 and typeof(nc) == "CFrame" then a4, a7 = nc, nh end
+			end
+			local o = vortexOrig
+			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
+		end))
+	end)
+	if ok and typeof(vortexOrig) == "function" then sa.vortex = true end
+end
+
+local function installNetworkHook()
+	if sa.hooked or LocalPlayer:GetAttribute("ClockOffset") == nil then return end
+	local api, remote = findNetworkApi()
+	local target = api and tget(api, "FireServer")
+	if not target or typeof(hookfn) ~= "function" then return end
+	if remote then sa.remote = remote:GetFullName()
+	elseif sa.remote == "" then sa.remote = "Network.FireServer (gc fn)" end
+	local ok = pcall(function()
+		netOrig = hookfn(target, wrap(function(self, eventName, ...)
+			local args = { ... }
+			if fromGame() then
+				bindNetworkApi(self)
+				if Config.SilentAim and eventName == "Fire" then
+					local ok2, na = pcall(saRewriteFire, args)
+					if ok2 and typeof(na) == "table" then args = na end
+				end
+				if Config.AimDebugger then dbgRecordEvent(eventName, args) end
+			end
+			local o = netOrig
+			return if typeof(o) == "function" then o(self, eventName, table.unpack(args)) else nil
+		end))
+	end)
+	if not ok or typeof(netOrig) ~= "function" then netOrig = nil; return end
+	sa.hooked = true
+	sa.status = "hooked"
+	hookVortexSync()
+	if not sa.announced then
+		sa.announced = true
+		print("[GFA] silent aim ready", sa.remote, if sa.vortex then "| Vortex.Sync" else "")
+	end
+	if Config.AimDebugger then
+		print("[GFA-DBG] init @", sa.remote, "api:", if hasFullApi() then "full" else "gc-fn", "vortex:", sa.vortex)
+	end
+end
+
+local function ensureHooks()
+	if not (Config.SilentAim or Config.AimDebugger) or sa.hooked or sa.giveUp or sa.installing then return end
+	sa.installing = true
+	task.spawn(function()
+		local n = 0
+		while (Config.SilentAim or Config.AimDebugger) and not sa.hooked and n < 12 do
+			n += 1; installNetworkHook()
+			if not sa.hooked then
+				sa.status = if typeof(hookfn) ~= "function" then "no hookfunction"
+					elseif LocalPlayer:GetAttribute("ClockOffset") == nil then "waiting ClockOffset"
+					else "scanning gc"
+				task.wait(3)
+			end
+		end
+		if not sa.hooked then sa.giveUp = true; sa.status = "failed (rejoin)"; warn("[GFA] hook install failed") end
+		sa.installing = false
+	end)
 end
 
 local function dbgBindSyncListeners()
@@ -901,66 +905,11 @@ local function combatOverlayUpdate()
 	overlayHide()
 end
 
--- Network hook with debugger recording
-
-local function hookNetworkFireWithDebugger()
-	if sa.hooked or LocalPlayer:GetAttribute("ClockOffset") == nil then return end
-	local api, remote = findNetworkApi()
-	local target = api and tget(api, "FireServer")
-	if not target or typeof(hookfn) ~= "function" then return end
-	if remote then sa.remote = remote:GetFullName()
-	elseif sa.remote == "" then sa.remote = "Network.FireServer (gc fn)" end
-	local ok = pcall(function()
-		netOrig = hookfn(target, wrap(function(self, eventName, ...)
-			local args = { ... }
-			if fromGame() then
-				bindNetworkApi(self)
-				if Config.SilentAim and eventName == "Fire" then
-					local ok2, na = pcall(saRewriteFire, args)
-					if ok2 and typeof(na) == "table" then args = na end
-				end
-				if Config.AimDebugger then dbgRecordEvent(eventName, args) end
-			end
-			local o = netOrig
-			return if typeof(o) == "function" then o(self, eventName, table.unpack(args)) else nil
-		end))
-	end)
-	if not ok or typeof(netOrig) ~= "function" then netOrig = nil; return end
-	sa.hooked = true; sa.status = "hooked"
-	hookVortexSync()
-	if not sa.announced then
-		sa.announced = true
-		print("[GFA] silent aim ready", sa.remote, if sa.vortex then "| Vortex.Sync" else "")
-	end
-	if Config.AimDebugger then
-		print("[GFA-DBG] init @", sa.remote, "api:", if hasFullApi() then "full" else "gc-fn", "vortex:", sa.vortex)
-	end
-end
-
-local function ensureHooksWithDebugger()
-	if not (Config.SilentAim or Config.AimDebugger) or sa.hooked or sa.giveUp or sa.installing then return end
-	sa.installing = true
-	task.spawn(function()
-		local n = 0
-		while (Config.SilentAim or Config.AimDebugger) and not sa.hooked and n < 12 do
-			n += 1; hookNetworkFireWithDebugger()
-			if not sa.hooked then
-				sa.status = if typeof(hookfn) ~= "function" then "no hookfunction"
-					elseif LocalPlayer:GetAttribute("ClockOffset") == nil then "waiting ClockOffset"
-					else "scanning gc"
-				task.wait(3)
-			end
-		end
-		if not sa.hooked then sa.giveUp = true; sa.status = "failed (rejoin)"; warn("[GFA] hook install failed") end
-		sa.installing = false
-	end)
-end
-
 -- Per-frame entry point
 
 local function combatUpdate()
 	if Config.SilentAim or Config.AimDebugger then
-		if Config.AimDebugger then ensureHooksWithDebugger() else ensureHooks() end
+		ensureHooks()
 		if sa.hooked then hookVortexSync(); bindVolleyTracker() end
 	end
 	combatOverlayUpdate()
