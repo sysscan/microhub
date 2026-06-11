@@ -288,11 +288,197 @@ Smaller per-module `create()` scopes keep registers low. Prefer **new modules** 
 
 ---
 
-## 10. Cross-Game Exploitation Patterns
+## 10. Anti-Cheat Theory, Detection & Evasion
+
+This section summarizes how anti-cheat systems work (platform + game level) and how MicroHub features interact with them. Use it when adding combat/movement features or diagnosing kicks.
+
+**Primary references:**
+
+- [Roblox security tactics](https://create.roblox.com/docs/scripting/security/security-tactics) — never trust the client; server is source of truth
+- [Securing the client-server boundary](https://create.roblox.com/docs/scripting/security/client-server-boundary) — remote validation, combat checks, rate limits
+- [Server-side detection](https://create.roblox.com/docs/scripting/security/server-side-detection) — heuristics, suspicion scores, honeypots
+- [Exploiting Explained (DevForum)](https://devforum.roblox.com/t/exploiting-explained/170977) — client authority pitfalls, physics replication
+
+---
+
+### 10.1 Two Layers: Platform vs Game
+
+| Layer | What it protects | Examples | MicroHub scope |
+|-------|------------------|----------|----------------|
+| **Platform anti-tamper** | Roblox client process integrity | **Hyperion** (Byfron) — blocks DLL injection, unsigned memory writers, VM execution, “badware” touching the client | Out of scope for hub Lua; users need a working **executor** that already bypasses Hyperion |
+| **Game anti-cheat** | Individual experience logic | Server raycast validation, hit-rate heuristics, remote middleware, BridgeNet logging, client module tamper checks | **In scope** — all hub features must assume hostile server validation |
+
+**Hyperion (platform)** is anti-**tamper**, not traditional behavioral AC. Roblox staff describe it as detecting software that **directly interacts with the client** (cheat injectors, some drivers, debuggers) — not scanning the whole PC. See [Welcoming Byfron to Roblox](https://devforum.roblox.com/t/welcoming-byfron-to-roblox/2018233).
+
+**Game AC** assumes every `FireServer` / `InvokeServer` payload is forged. The server validates type, range, permissions, distance, cooldowns, and statistical plausibility before mutating state.
+
+---
+
+### 10.2 How Game Anti-Cheat Works (Server Model)
+
+Roblox’s documented defense model has four stacked layers (see [client-server boundary](https://create.roblox.com/docs/scripting/security/client-server-boundary)):
+
+```
+Client intent  →  Remote  →  [1] Type/shape validation
+                           →  [2] Permission / context (alive, in range, has item)
+                           →  [3] Value sanity (numeric bounds, valid IDs)
+                           →  [4] Rate limiting (per-player token bucket)
+                           →  Handler  →  State mutation  →  Replicate
+```
+
+**Parallel background layer:** heuristics increment a **suspicion score**; kicks/bans only after multiple signals ([server-side detection](https://create.roblox.com/docs/scripting/security/server-side-detection)).
+
+#### Combat / hit validation (FPS games)
+
+When the client reports a hit, a well-designed server checks ([boundary docs — combat](https://create.roblox.com/docs/scripting/security/client-server-boundary)):
+
+1. **Shot origin** is near the shooter’s character on the server (with latency tolerance).
+2. **Hit position** is near the target part’s server position.
+3. **Line of sight** — no static geometry between origin and hit (dynamic players excluded to avoid false rejects).
+4. **Fire rate** — weapon cooldown respected server-side.
+5. **Optional lag compensation** — server rewinds target positions to the shooter’s view time, clamped to a max window (~200–500 ms) so clients cannot claim ancient ticks ([industry pattern](https://accelbyte.io/blog/server-authoritative-logic-to-prevent-cheating)).
+
+**Implication for cheats:** pure client visual changes (ESP, tracers, Drawing overlays) never cross the boundary. **Aim assistance** only matters when the client sends fire/hit intent that the server accepts.
+
+#### Heuristic signals (post-validation)
+
+| Signal | What it catches | Server treatment |
+|--------|-----------------|------------------|
+| Impossible hit ratio | Silent aim / rage | Kick, “invalid hit rate”, flag |
+| Perfect action cadence | Macros / auto-fire bots | Suspicion score |
+| Remote spam | Killaura, grenade spam | Rate limit → reject or kick |
+| Honeypot remote fired | Script hub probing remotes | High-confidence kick |
+| Movement outliers | Speed, teleport, fly | Correct position or flag |
+| Statistical bursts | Too many headshots in window | Throttle or kick |
+
+Treat each signal as **one vote**, not instant proof — unless it is a honeypot.
+
+#### Honeypots
+
+Decoy `RemoteEvent` / `RemoteFunction` that **legitimate client scripts never call**. Any traffic = exploiter probing ([server-side detection](https://create.roblox.com/docs/scripting/security/server-side-detection)). MicroHub must not fire unknown remotes during scans without user intent.
+
+#### Client-side “AC” scripts
+
+Games sometimes run LocalScripts that detect hooks or foreign `require()` callers. These are **bypassable** (exploiters control the client) but can still **kick instantly** when tripped — e.g. Gunfight Arena’s Network module anti-tamper. Prefer **reimplementing** game logic locally over calling protected modules.
+
+---
+
+### 10.3 Exploit Categories & Server Trust
+
+| Category | Client-only? | Server can detect? | MicroHub examples |
+|----------|--------------|--------------------|-------------------|
+| Visual ESP / overlays | Yes | No (Drawing not replicated) | All games’ ESP |
+| Fullbright, viewmodel, sounds | Yes | No | Prison Life visuals |
+| Silent aim (redirect before sim) | No | Yes — hit validation, ratios | PL `gun.Bullet`, Warfare `BulletSimulator.Simulate`, GFA `MouseHitSpot` |
+| Bullet TP / muzzle rewrite | No | Yes — origin distance, LOS | Warfare BulletTP |
+| Speed / fly / noclip | No | Yes — position checks | Warfare flight, PL movement |
+| Remote automation | No | Yes — rate + permission | PL killaura, arrest, pickup |
+| Infinite ammo / no cooldown | No | Yes — server magazine state | Warfare `MagazineController` hook (client predict only) |
+
+**Rule:** ask the server “can I?” with plausible parameters; never assume client-only hooks grant server authority ([DevForum — Exploiting Explained](https://devforum.roblox.com/t/exploiting-explained/170977)).
+
+---
+
+### 10.4 Bypass & Evasion Strategies (Hub-Relevant)
+
+These are **not** Hyperion bypasses. They reduce **game-level** detection while staying functional.
+
+#### A. Stay inside server tolerance windows
+
+| Technique | Rationale | MicroHub implementation |
+|-----------|-----------|-------------------------|
+| **Hit-rate throttling** | Server tracks hits ÷ shots; 100% redirect = kick | Warfare `hit-rate.lua` — `shouldRedirectAimShot()` probabilistic skip, burst cap, ratio cap |
+| **Minimum spread** | Zero spread every shot is inhuman | Warfare `HIT_RATE_SAFE_MIN_SPREAD` in recoil `GetSpreadDegrees` hook |
+| **Hit chance < 100%** | Mimics miss rate | `SilentAimHitChance`, headshot mix, mode-specific caps |
+| **Capped walk speed** | Server rejects absurd Humanoid speeds | PL `MAX_SAFE_WALKSPEED` / `MAX_SAFE_JUMP` in `constants.lua` |
+| **Wall check** | Server LOS rejects through walls | PL `SilentAimWallCheck`; wallbang only with origin rewrite (`OriginScanner`) |
+
+#### B. Humanize timing and cadence
+
+- Add **random skip** on aim redirects (Warfare hit-rate already does).
+- Avoid **fixed-interval** automation loops; use jittered `task.wait` (PL `loops.lua` pattern).
+- Auto-fire rates should stay below weapon’s legitimate ROF (`AutoFireRate` config).
+
+#### C. Remote discipline
+
+- **`pcall` all remotes**; never spam per frame.
+- Discover remotes at runtime; do not brute-force unknown names (honeypot risk).
+- Warfare AC debug **filters** `PingCheck`, `dataRemoteEvent`, rate-limits `ReplicatedStorage.Game.*` logs.
+- PL automation spaces arrest/melee/eat calls with cooldowns.
+
+#### D. Hook hygiene (avoid client AC crashes / stack overflow)
+
+| Rule | Why |
+|------|-----|
+| Use `checkcaller()` in simulate hooks | Skip executor’s own calls; pass game-internal invocations through |
+| Never recursively hook `hookfunction` | Warfare AC debug — caused stack overflow |
+| `newcclosure` on BulletSimulator hook | Hides executor from some stack walks |
+| Defer AC install (`task.defer`) | Avoid init-time probe kicks |
+| Restore hooks on unload | `restorefunction` / `combat.removeGunHooks()` |
+
+#### E. Choose the weakest validation path per game
+
+| Game | Favorable approach | Risky approach |
+|------|-------------------|----------------|
+| **Warfare** | Probabilistic silent aim + min spread; debug AC to learn kick remotes | 100% BulletTP + Kill All every shot |
+| **Prison Life** | `gun.Bullet` redirect with wall check; melee range limits | Remote spam killaura at max rate |
+| **Gunfight Arena** | Third-person `MouseHitSpot` + Vortex spread zero | `require()` game Network module |
+
+#### F. Information advantage without server lies
+
+- **ESP / thermal / tracers** — read replicated state only; no remotes.
+- **AC debug** (`warfare/ac-debug.lua`) — map kick traffic before adding features.
+- **Reimplement** APIs locally (GFA `getSpawned`) instead of calling tamper-protected modules.
+
+#### G. Features that are usually safe (client-only)
+
+- Drawing ESP, FOV circles, snaplines
+- Menu / HUD (MicroHub UI)
+- Local camera / viewmodel / crosshair
+- Local fullbright (Lighting)
+- Hit markers driven by **confirmed** server events (Warfare HitConfirm bridge)
+
+---
+
+### 10.5 Detection ↔ Mitigation Matrix (MicroHub)
+
+| Kick / flag symptom | Likely AC mechanism | Hub module | Mitigation |
+|---------------------|---------------------|------------|------------|
+| “Invalid hit rate” / combat kick | Hit ratio heuristic | `warfare/hit-rate.lua` | Enable `HitRateSafe`; lower hit chance; avoid Kill All + 100% redirect |
+| Instant kick on inject | Client tamper / foreign caller | `gunfight-arena/teams.lua` | Do not `require()` protected Network |
+| Kick after remote scan | Honeypot or admin remote | `warfare/ac-debug.lua` | Probe only on button; filter remotes |
+| Stack overflow on load | Bad hook recursion | `warfare/ac-debug.lua` | No `hookfunction` on hookfunction; defer install |
+| Teleport / fly snap-back | Server position authority | movement modules | Prefer client visual fly knowing server may correct |
+| Ban after melee spam | Remote rate limit | `prison-life/automation.lua` | Range check + cooldown between `meleeEvent` fires |
+| Perfect headshot streak | Statistical heuristic | all silent aim | Headshot chance < 100%; torso mix (`SilentAimHeadshotChance`) |
+
+---
+
+### 10.6 Adding AC-Safe Features (Checklist)
+
+1. **Classify** — client-only vs server-visible.
+2. **Trace the remote** — what does the server validate? (distance, LOS, rate, type)
+3. **Add probabilistic or capped behavior** for combat — never 100% unless user opts out of safe mode.
+4. **Rate-limit** remotes and log honeypot candidates via AC debug before shipping automation.
+5. **Test with AC debug on** — Warfare: enable `DebugAC`, `DebugRemotes`, watch `__WarfareACLog` / F9.
+6. **Document** new Config keys that affect detection risk in this section.
+
+---
+
+### 10.7 What MicroHub Cannot Do
+
+- Bypass **Hyperion** or guarantee executor compatibility — platform layer is upstream.
+- Guarantee undetectability — server heuristics evolve; safe mode reduces risk, not eliminate it.
+- Validate server-side damage for hooks that only change **client prediction** — hits may still register as misses.
+- Rely on **client-side** anti-cheat scripts in the game — those are for the game’s benefit, not the exploiter’s.
+
+---
+
+## 11. Cross-Game Exploitation Patterns
 
 Reference catalog of techniques MicroHub already uses. Reuse these patterns when extending games.
 
-### 10.1 Silent aim — redirect shot origin/target
+### 11.1 Silent aim — redirect shot origin/target
 
 | Game | Mechanism |
 |------|-----------|
@@ -300,14 +486,14 @@ Reference catalog of techniques MicroHub already uses. Reuse these patterns when
 | **Warfare** | `hookfunction(BulletSimulator.Simulate, ...)` — modify `muzzleCF` + `initialSpeed` before sim; optional bullet registry pin (BulletTP) |
 | **Gunfight Arena** | Write `_G.MouseHitSpot` / `getgenv().MouseHitSpot`; patch Vortex `Steadiness`/`Impulse` for no spread |
 
-### 10.2 Recoil / spread suppression
+### 11.2 Recoil / spread suppression
 
 | Game | Mechanism |
 |------|-----------|
 | **Warfare** | `hookModuleMethod` on recoil modules: `Kick`, `GetSpreadDegrees`, `GetCameraRecoil`, etc.; `HitRateSafe` enforces minimum spread |
 | **Gunfight Arena** | Vortex modifier values (spread/steadiness) |
 
-### 10.3 Module method hooking (Warfare)
+### 11.3 Module method hooking (Warfare)
 
 ```lua
 hookModuleMethod(moduleTable, "MethodName", function(old, self, ...)
@@ -318,13 +504,13 @@ end)
 
 Hooks are deduped via `hookedRecoilFunctions` weak table. Used on: recoil, `MagazineController.Fire`, `MovementModule.UpdateSpeed`, `CameraFeedback`, `Spring`, etc.
 
-### 10.4 BridgeNet2 (Warfare)
+### 11.4 BridgeNet2 (Warfare)
 
 - `require(ReplicatedStorage.Framework.Modules.BridgeNet2)`
 - `bridgeNet.ReferenceBridge("HitConfirm"):Connect(...)` for hit markers + hit-rate tracking
 - AC debug wraps bridges when `Config.DebugAC` + `Config.DebugBridgeNet`
 
-### 10.5 Remote firing (Prison Life)
+### 11.5 Remote firing (Prison Life)
 
 Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Remote`:
 
@@ -339,7 +525,7 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 
 **Always `pcall` remote calls.** Game updates break hardcoded paths — follow `remotes.lua` discovery style.
 
-### 10.6 Movement exploits
+### 11.6 Movement exploits
 
 | Game | Technique |
 |------|-----------|
@@ -347,7 +533,7 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 | **Warfare** | `LinearVelocity` flight constraint on HRP; speed boost via movement module hook + Humanoid.WalkSpeed |
 | **Gunfight Arena** | Camera lerp aimbot (first person) or MouseHitSpot lerp (third person) |
 
-### 10.7 ESP target discovery
+### 11.7 ESP target discovery
 
 | Game | Target source |
 |------|---------------|
@@ -355,7 +541,7 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 | **Warfare** | Players + drones; `TeamsService.GetPlayerTeam` when available |
 | **Gunfight Arena** | `workspace[PlayerName]` models; `Players` children with `Team` attribute; BOSS mode `Skinwalker`; **does not** `require()` game Network module (anti-tamper) — mirrors `GetSpawned` locally |
 
-### 10.8 Hit-rate safe mode (Warfare anti-kick)
+### 11.8 Hit-rate safe mode (Warfare anti-kick)
 
 `games/warfare/hit-rate.lua` tracks shots/hits in a sliding window (`HIT_RATE_WINDOW` = 2.5s). `shouldRedirectAimShot()` probabilistically **skips** silent aim redirects when ratio too high or burst too large. Tunables in `constants.lua`:
 
@@ -365,7 +551,7 @@ Discovered at runtime under `ReplicatedStorage.Remotes` and legacy `workspace.Re
 
 `recordHitRateShot()` on simulate hook; `recordHitRateHit()` on HitConfirm bridge.
 
-### 10.9 Anti-cheat debugging (Warfare)
+### 11.9 Anti-cheat debugging (Warfare)
 
 `games/warfare/ac-debug.lua` — enable via Config `DebugAC`, `DebugRemotes`, etc.
 
@@ -385,7 +571,7 @@ Filtered remotes: `PingCheck`, `dataRemoteEvent`, `ReplicatedStorage.Game.*` (ra
 
 ---
 
-## 11. Game: Prison Life
+## 12. Game: Prison Life
 
 **Build:** `games/prison-life/constants.lua` → `GAME_BUILD`  
 **Place IDs:** `155615604`, `4669040`  
@@ -436,7 +622,7 @@ Requires executor hook support. Resolves on each character spawn via `bootstrap`
 
 ---
 
-## 12. Game: Warfare
+## 13. Game: Warfare
 
 **Build:** `games/warfare/constants.lua` → `GAME_BUILD` (`1-modular`)  
 **Place ID:** `83902709332473`  
@@ -492,7 +678,7 @@ PlayerScripts → MovementModule, weapon state tables
 
 ---
 
-## 13. Game: Gunfight Arena
+## 14. Game: Gunfight Arena
 
 **Build:** `games/gunfight-arena/constants.lua` → `GAME_BUILD` (`67-modular`)  
 **Place IDs:** `15514727567`, `14518422161`
@@ -535,7 +721,7 @@ Do **not** `require()` the game's Network module for spawned list — kicks fore
 
 ---
 
-## 14. Adding or Modifying Features — Checklist
+## 15. Adding or Modifying Features — Checklist
 
 1. **Config** — add default key to `games/<game>/config.lua`.
 2. **UI** — add item to `ui.lua` (or warfare's inline UILib block in `init.lua`).
@@ -553,16 +739,17 @@ Do **not** `require()` the game's Network module for spawned list — kicks fore
 
 ---
 
-## 15. HTTP & Caching
+## 16. HTTP & Caching
 
 Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust via `?t=timestamp_random` on every request. Same commit SHA used for entire session after `resolveLatestSha()`.
 
 ---
 
-## 16. Quick File Index
+## 17. Quick File Index
 
 | Need to… | Look at |
 |----------|---------|
+| Anti-cheat theory / evasion | This file §10 |
 | Register new game | `loader.lua` GAMES |
 | Change menu schema | `lib/ui.lua` |
 | Shared ESP | `lib/esp/player-v2.lua` |
@@ -577,7 +764,7 @@ Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust v
 
 ---
 
-## 17. Version Reference
+## 18. Version Reference
 
 | Component | Version / tag |
 |-----------|---------------|
@@ -589,4 +776,4 @@ Loader fetches all sources from GitHub raw + jsdelivr CDN fallback. Cache bust v
 
 ---
 
-*Last aligned with repo commit modularizing all three games. When in doubt, read `init.lua` for the target game and trace `Config` keys from `ui.lua`.*
+*When in doubt: read §10 for AC constraints, then `init.lua` for the target game and trace `Config` keys from `ui.lua`.*
