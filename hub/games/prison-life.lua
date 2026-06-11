@@ -16,7 +16,7 @@ local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "3-decompiled"
+local GAME_BUILD = "3-decompiled-fix1"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local TeamGuards = Teams:FindFirstChild("Guards")
@@ -910,7 +910,7 @@ local function runAutoHeal()
 	end
 end
 
-local pickupItems: { { Instance, boolean } } = {}
+local pickupItems: { { any } } = {}
 
 local function trackPickup(obj: Instance)
 	if obj:IsA("Model") and obj.Name ~= "Model" and obj:GetAttribute("ToolName") then
