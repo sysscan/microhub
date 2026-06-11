@@ -1,0 +1,18 @@
+return {
+	Aimbot = false,
+	AimTeamCheck = true,
+	AimHold = true,
+	AimSticky = false,
+	AimFOV = 120,
+	AimSmooth = 35,
+	AimPart = "Head",
+	AimFOVCircle = false,
+	SilentAim = false,
+	ESP = true,
+	ESPAllies = true,
+	ESPSnaplines = true,
+	ShowHUD = true,
+	ESPEnemyColor = Color3.fromRGB(255, 72, 88),
+	ESPAllyColor = Color3.fromRGB(72, 168, 255),
+	ESPNeutralColor = Color3.fromRGB(255, 210, 96),
+}

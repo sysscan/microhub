@@ -205,6 +205,25 @@ local function fetch(path)
 	error("fetch failed: " .. path .. " @ " .. sha .. " — " .. table.concat(failures, " | "), 0)
 end
 
+local moduleCache = {}
+
+local function hubRequire(path)
+	if moduleCache[path] ~= nil then
+		return moduleCache[path]
+	end
+	local source = fetch(path)
+	local fn, compileErr = loadstring(source, path)
+	if not fn then
+		error("compile module " .. path .. ": " .. tostring(compileErr), 0)
+	end
+	local ok, result = pcall(fn)
+	if not ok then
+		error("run module " .. path .. ": " .. tostring(result), 0)
+	end
+	moduleCache[path] = result
+	return result
+end
+
 local function runSource(path)
 	local source = fetch(path)
 	local fn, compileErr = loadstring(source, path)
@@ -251,6 +270,8 @@ local function unloadOld()
 	genv.Library = nil
 	shared.__JuanitaLibrary = nil
 	shared[UI_KEY] = nil
+	shared.__MicroHubRequire = nil
+	moduleCache = {}
 end
 
 local ok, err = pcall(function()
@@ -276,6 +297,7 @@ local ok, err = pcall(function()
 	end
 	local uiVersion = tostring(ui.version or "?")
 	shared[UI_KEY] = ui
+	shared.__MicroHubRequire = hubRequire
 
 	runSource(entry.path)
 
