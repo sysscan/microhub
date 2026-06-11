@@ -162,6 +162,7 @@ local function getSilentAimPartName(character)
 	return "HumanoidRootPart"
 end
 
+;(function()
 local currentTarget = nil
 local killAllRunning = false
 local killAllNoclip = false
@@ -3750,3 +3751,4 @@ local function warfareUnload()
 end
 
 genv.__WarfareUnload = warfareUnload
+end)()
