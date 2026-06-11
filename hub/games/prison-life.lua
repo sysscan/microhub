@@ -1298,25 +1298,32 @@ local function syncC4ESP()
 	end
 end
 
--- ESP drawing (gunfight-arena style)
+-- ESP v2 — optimized, visually improved
 
 local espNeedsHide = false
+local ESP_MAX_DIST = 2000
 
-local function hpColor(ratio: number): Color3
-	if ratio > 0.55 then
-		return Color3.fromRGB(72, 214, 128)
-	end
-	if ratio > 0.25 then
-		return Color3.fromRGB(255, 196, 72)
-	end
-	return Color3.fromRGB(255, 86, 92)
+local function lerpColor(a: Color3, b: Color3, t: number): Color3
+	return Color3.new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t)
 end
 
-local function formatDistance(studs: number): string
-	if studs >= 1000 then
-		return string.format("%.1fkm", studs / 1000)
+local function hpColor(ratio: number): Color3
+	if ratio > 0.5 then
+		return lerpColor(Color3.fromRGB(255, 220, 60), Color3.fromRGB(60, 230, 120), (ratio - 0.5) * 2)
 	end
-	return string.format("%dm", math.floor(studs))
+	return lerpColor(Color3.fromRGB(255, 50, 50), Color3.fromRGB(255, 220, 60), ratio * 2)
+end
+
+local function formatDist(studs: number): string
+	if studs >= 1000 then
+		return string.format("%.1fk", studs / 1000)
+	end
+	return string.format("%d", math.floor(studs))
+end
+
+local function getWeaponName(char: Model): string?
+	local tool = char:FindFirstChildWhichIsA("Tool")
+	return tool and tool.Name or nil
 end
 
 local function box2d(char: Model, root: BasePart): (number?, number?, number?, number?)
@@ -1325,24 +1332,24 @@ local function box2d(char: Model, root: BasePart): (number?, number?, number?, n
 	end
 	local head = char:FindFirstChild("Head")
 	if head and head:IsA("BasePart") then
-		local top, topOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.35, 0))
-		local bot, botOn = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 2.6, 0))
+		local topPos = head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.4, 0)
+		local botPos = root.Position - Vector3.new(0, 2.8, 0)
+		local top, topOn = Camera:WorldToViewportPoint(topPos)
+		local bot, botOn = Camera:WorldToViewportPoint(botPos)
 		if top.Z > 0 and bot.Z > 0 and (topOn or botOn) then
-			local height = math.max(12, bot.Y - top.Y)
-			local width = height * 0.52
-			return top.X - width * 0.5, top.Y, width, height
+			local h = math.max(14, bot.Y - top.Y)
+			local w = h * 0.55
+			return top.X - w * 0.5, top.Y, w, h
 		end
 	end
 	local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
 	if onScreen and pos.Z > 0 then
-		local height = 56
-		local width = height * 0.52
-		return pos.X - width * 0.5, pos.Y - height * 0.5, width, height
+		return pos.X - 16, pos.Y - 30, 32, 60
 	end
 	return nil
 end
 
-local function mk(kind: string, props: { [string]: any })
+local function mkDraw(kind: string, props: { [string]: any })
 	local d = Drawing.new(kind)
 	for k, v in props do
 		d[k] = v
@@ -1351,70 +1358,44 @@ local function mk(kind: string, props: { [string]: any })
 	return d
 end
 
-local ESP_DRAWABLES = { "backdrop", "name", "hpOutline", "hpFill", "dist", "line" }
-
-local function setVisible(entry: any, visible: boolean)
-	for _, key in ESP_DRAWABLES do
-		entry[key].Visible = visible and (key ~= "line" or Config.ESPSnaplines)
-	end
-	for _, corner in entry.corners do
-		corner.Visible = visible
+local function hideEntry(entry: any)
+	for _, obj in entry do
+		if typeof(obj) == "table" then
+			if obj.Remove then
+				obj.Visible = false
+			end
+		end
 	end
 end
 
 local function hideAllESP()
 	for _, entry in esp do
-		setVisible(entry, false)
+		hideEntry(entry)
 	end
 end
 
 local function destroyEntry(entry: any)
-	for _, key in ESP_DRAWABLES do
-		entry[key]:Remove()
-	end
-	for _, corner in entry.corners do
-		corner:Remove()
-	end
-end
-
-local function drawCorners(corners: { any }, x: number, y: number, w: number, h: number, color: Color3)
-	local len = math.clamp(math.min(w, h) * 0.24, 7, 16)
-	local right, bottom = x + w, y + h
-	local segments = {
-		{ Vector2.new(x, y), Vector2.new(x + len, y) },
-		{ Vector2.new(x, y), Vector2.new(x, y + len) },
-		{ Vector2.new(right, y), Vector2.new(right - len, y) },
-		{ Vector2.new(right, y), Vector2.new(right, y + len) },
-		{ Vector2.new(x, bottom), Vector2.new(x + len, bottom) },
-		{ Vector2.new(x, bottom), Vector2.new(x, bottom - len) },
-		{ Vector2.new(right, bottom), Vector2.new(right - len, bottom) },
-		{ Vector2.new(right, bottom), Vector2.new(right, bottom - len) },
-	}
-	for i, pair in ipairs(segments) do
-		corners[i].From = pair[1]
-		corners[i].To = pair[2]
-		corners[i].Color = color
-		corners[i].Visible = true
+	for _, obj in entry do
+		if typeof(obj) == "table" and typeof(obj.Remove) == "function" then
+			pcall(obj.Remove, obj)
+		end
 	end
 end
 
-local function ensure(char: Model)
-	local entry = esp[char]
-	if entry then
-		return entry
+local function ensureESP(char: Model)
+	if esp[char] then
+		return esp[char]
 	end
-	local corners = table.create(8)
-	for _ = 1, 8 do
-		table.insert(corners, mk("Line", { Thickness = 1.2, Transparency = 0.06 }))
-	end
-	entry = {
-		backdrop = mk("Square", { Filled = true, Thickness = 0, Transparency = 0.84 }),
-		corners = corners,
-		name = mk("Text", { Size = 13, Center = true, Outline = true }),
-		hpOutline = mk("Square", { Filled = true, Thickness = 0, Color = BAR_BG }),
-		hpFill = mk("Square", { Filled = true, Thickness = 0 }),
-		dist = mk("Text", { Size = 10, Center = true, Outline = true, Transparency = 0.12 }),
-		line = mk("Line", { Thickness = 1, Transparency = 0.5 }),
+
+	local entry = {
+		boxOutline = mkDraw("Square", { Filled = false, Thickness = 3, Color = Color3.new(0, 0, 0), Transparency = 0.6 }),
+		box = mkDraw("Square", { Filled = false, Thickness = 1.4 }),
+		hpBarBg = mkDraw("Square", { Filled = true, Thickness = 0, Color = Color3.fromRGB(20, 20, 20), Transparency = 0.3 }),
+		hpBar = mkDraw("Square", { Filled = true, Thickness = 0 }),
+		name = mkDraw("Text", { Size = 14, Center = true, Outline = true, Font = 2 }),
+		weapon = mkDraw("Text", { Size = 11, Center = true, Outline = true, Font = 2, Color = Color3.fromRGB(200, 200, 200) }),
+		dist = mkDraw("Text", { Size = 11, Center = true, Outline = true, Font = 2 }),
+		snapline = mkDraw("Line", { Thickness = 1, Transparency = 0.4 }),
 	}
 	esp[char] = entry
 	return entry
@@ -1423,60 +1404,93 @@ end
 local function drawTarget(player: Player, char: Model, hum: Humanoid, root: BasePart, camPos: Vector3, snapFrom: Vector2?)
 	local rel = getRelation(player, char)
 	if rel == "Ally" and not Config.ESPAllies then
-		local entry = esp[char]
-		if entry then
-			setVisible(entry, false)
+		if esp[char] then
+			hideEntry(esp[char])
+		end
+		return
+	end
+
+	local dist = (root.Position - camPos).Magnitude
+	if dist > ESP_MAX_DIST then
+		if esp[char] then
+			hideEntry(esp[char])
 		end
 		return
 	end
 
 	local x, y, w, h = box2d(char, root)
 	if not x then
-		local entry = esp[char]
-		if entry then
-			setVisible(entry, false)
+		if esp[char] then
+			hideEntry(esp[char])
 		end
 		return
 	end
 
-	local entry = ensure(char)
+	local entry = ensureESP(char)
 	local accent = relationColor(rel)
 	local cx = x + w * 0.5
 	local bottom = y + h
 	local ratio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-	local barW = math.max(38, w + 4)
-	local barY = bottom + 6
 
-	entry.backdrop.Position = Vector2.new(x - 2, y - 2)
-	entry.backdrop.Size = Vector2.new(w + 4, h + 4)
-	entry.backdrop.Color = BACKDROP
-	entry.backdrop.Visible = true
-	drawCorners(entry.corners, x, y, w, h, accent)
+	local fadeAlpha = 1 - math.clamp((dist - 800) / 1200, 0, 0.6)
 
-	entry.name.Position = Vector2.new(cx, y - 17)
-	entry.name.Text = string.format("%s  %d%s", player.DisplayName, math.floor(hum.Health), statusSuffix(char))
-	entry.name.Color = WHITE
+	entry.boxOutline.Position = Vector2.new(x - 1, y - 1)
+	entry.boxOutline.Size = Vector2.new(w + 2, h + 2)
+	entry.boxOutline.Transparency = 0.55 * fadeAlpha
+	entry.boxOutline.Visible = true
+
+	entry.box.Position = Vector2.new(x, y)
+	entry.box.Size = Vector2.new(w, h)
+	entry.box.Color = accent
+	entry.box.Transparency = (1 - fadeAlpha) * 0.3
+	entry.box.Visible = true
+
+	local barH = math.clamp(h, 8, 200)
+	local barW = 3
+	local barX = x - 6
+	local barY = y
+
+	entry.hpBarBg.Position = Vector2.new(barX - 1, barY - 1)
+	entry.hpBarBg.Size = Vector2.new(barW + 2, barH + 2)
+	entry.hpBarBg.Visible = true
+
+	local fillH = math.max(1, barH * ratio)
+	entry.hpBar.Position = Vector2.new(barX, barY + (barH - fillH))
+	entry.hpBar.Size = Vector2.new(barW, fillH)
+	entry.hpBar.Color = hpColor(ratio)
+	entry.hpBar.Visible = true
+
+	local suffix = statusSuffix(char)
+	local nameStr = player.DisplayName
+	if suffix ~= "" then
+		nameStr = nameStr .. " " .. suffix
+	end
+	entry.name.Position = Vector2.new(cx, y - 16)
+	entry.name.Text = nameStr
+	entry.name.Color = accent
 	entry.name.Visible = true
 
-	entry.hpOutline.Position = Vector2.new(cx - barW * 0.5, barY)
-	entry.hpOutline.Size = Vector2.new(barW, 3)
-	entry.hpOutline.Visible = true
-	entry.hpFill.Position = Vector2.new(cx - barW * 0.5, barY)
-	entry.hpFill.Size = Vector2.new(math.max(1, barW * ratio), 3)
-	entry.hpFill.Color = hpColor(ratio)
-	entry.hpFill.Visible = true
+	local wepName = getWeaponName(char)
+	entry.weapon.Position = Vector2.new(cx, bottom + 2)
+	entry.weapon.Text = wepName or ""
+	entry.weapon.Visible = wepName ~= nil
 
-	entry.dist.Position = Vector2.new(cx, barY + 7)
-	entry.dist.Text = formatDistance((root.Position - camPos).Magnitude)
+	local distStr = formatDist(dist) .. "m"
+	if ratio < 1 then
+		distStr = distStr .. " | " .. math.floor(hum.Health) .. "hp"
+	end
+	entry.dist.Position = Vector2.new(cx, bottom + (if wepName then 14 else 2))
+	entry.dist.Text = distStr
 	entry.dist.Color = DIM
 	entry.dist.Visible = true
 
 	if snapFrom then
-		entry.line.From = snapFrom
-		entry.line.To = Vector2.new(cx, bottom + 1)
-		entry.line.Color = accent
+		entry.snapline.From = snapFrom
+		entry.snapline.To = Vector2.new(cx, bottom + 1)
+		entry.snapline.Color = accent
+		entry.snapline.Transparency = 0.5 * fadeAlpha
 	end
-	entry.line.Visible = Config.ESPSnaplines and snapFrom ~= nil
+	entry.snapline.Visible = Config.ESPSnaplines and snapFrom ~= nil
 end
 
 local function updateESP()
@@ -1493,8 +1507,9 @@ local function updateESP()
 	espNeedsHide = true
 
 	local camPos = Camera.CFrame.Position
+	local vpSize = Camera.ViewportSize
 	local snapFrom = if Config.ESPSnaplines
-		then Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y)
+		then Vector2.new(vpSize.X * 0.5, vpSize.Y)
 		else nil
 	local seen: { [Model]: boolean } = {}
 
