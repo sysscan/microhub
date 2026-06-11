@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "55-sa-namecall"
+local GAME_BUILD = "56-esp-boxfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -841,6 +841,10 @@ end
 -- ESP
 
 local function box2d(char: Model, root: BasePart): (number?, number?, number?, number?)
+	if not char.Parent or not root.Parent then
+		return nil
+	end
+
 	local head = char:FindFirstChild("Head")
 	if head and head:IsA("BasePart") then
 		local top, topOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.35, 0))
@@ -859,7 +863,10 @@ local function box2d(char: Model, root: BasePart): (number?, number?, number?, n
 		return pos.X - width * 0.5, pos.Y - height * 0.5, width, height
 	end
 
-	local cf, size = char:GetBoundingBox()
+	local okBb, cf, size = pcall(char.GetBoundingBox, char)
+	if not okBb or typeof(cf) ~= "CFrame" or typeof(size) ~= "Vector3" then
+		return nil
+	end
 	local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
 	local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
 	local ok = false
