@@ -177,6 +177,7 @@ local function switchTeamLegacy(colorName: string)
 			teamEvent:FireServer(colorName)
 		end)
 	end
+	task.wait(0.2)
 	local loadchar = remote:FindFirstChild("loadchar")
 	if loadchar then
 		pcall(function()
@@ -190,21 +191,44 @@ local function requestTeamChange(teamName: string)
 	if not team then
 		return
 	end
+
 	local remotes = getRemotes()
-	local req = remotes and remotes:FindFirstChild("RequestTeamChange")
-	if req then
-		pcall(function()
-			req:InvokeServer(team, 1)
-		end)
-		return
+	if remotes then
+		local req = remotes:FindFirstChild("RequestTeamChange")
+		if req then
+			pcall(function()
+				if req:IsA("RemoteFunction") then
+					req:InvokeServer(team)
+				else
+					req:FireServer(team)
+				end
+			end)
+			task.wait(0.3)
+			if LocalPlayer.Team == team then
+				return
+			end
+		end
+
+		local teamSelect = remotes:FindFirstChild("TeamSelect")
+		if teamSelect then
+			pcall(function()
+				if teamSelect:IsA("RemoteFunction") then
+					teamSelect:InvokeServer(teamName)
+				else
+					teamSelect:FireServer(teamName)
+				end
+			end)
+			task.wait(0.3)
+			if LocalPlayer.Team == team then
+				return
+			end
+		end
 	end
-	if teamName == "Guards" then
-		switchTeamLegacy(TEAM_COLOR.Guard)
-	elseif teamName == "Inmates" then
-		switchTeamLegacy(TEAM_COLOR.Inmate)
-	elseif teamName == "Neutral" then
-		switchTeamLegacy(TEAM_COLOR.Neutral)
-	end
+
+	local colorName = if teamName == "Guards" then TEAM_COLOR.Guard
+		elseif teamName == "Inmates" then TEAM_COLOR.Inmate
+		else TEAM_COLOR.Neutral
+	switchTeamLegacy(colorName)
 end
 
 local function getCharacter(player: Player?): Model?
@@ -445,6 +469,7 @@ local function applyMovement()
 	if not hum then
 		return
 	end
+	hum.UseJumpPower = true
 	if Config.SpeedBoost then
 		hum.WalkSpeed = Config.WalkSpeed
 		hum.JumpPower = Config.JumpPower
@@ -466,7 +491,7 @@ local function applyNoclip()
 		return
 	end
 	for _, part in char:GetDescendants() do
-		if part:IsA("BasePart") then
+		if part:IsA("BasePart") and part.CanCollide then
 			part.CanCollide = false
 		end
 	end
@@ -1774,6 +1799,16 @@ UILib.create({
 		if key == "SpeedBoost" or key == "NoJumpCooldown" or key == "AlwaysSprint" then
 			applyMovement()
 			setNoJumpCooldown(Config.NoJumpCooldown)
+		end
+		if key == "Noclip" and value then
+			if not headCollideConn then
+				setDisabler(true)
+			end
+		end
+		if key == "Noclip" and not value then
+			if not Config.Disabler then
+				setDisabler(false)
+			end
 		end
 		if
 			key == "SilentAim"
