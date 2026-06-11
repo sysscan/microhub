@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "34-sa-vsync"
+local GAME_BUILD = "35-sa-volley"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -459,6 +459,7 @@ local C = {
 }
 local netOrig: ((...any) -> ...any)?, vortexOrig: ((...any) -> ...any)?
 local vortexSyncRef: BindableEvent? = nil
+local saVSyncConn: RBXScriptConnection? = nil
 local netApi: any, netRemote: RemoteEvent?, netFireFn: ((...any) -> ...any)?
 local nextGc, nextOv, nextSync, nextFlame, sawClock = 0, 0, 0, 0, false
 local cachedFlame: BasePart?
@@ -541,15 +542,31 @@ local function saDbgSkip(layer: string, reason: string)
 	dbgLog("SA-skip", layer .. " " .. reason, 0.25)
 end
 
-local function saBeginVolley(): number
-	local now = os.clock()
-	if now - C.sa.lastVolleyAt < 0.08 then
-		return C.sa.volley
-	end
+local function saOnVSyncEvent()
+	if not Config.SilentAim then return end
 	C.sa.volley += 1
-	C.sa.lastVolleyAt = now
-	C.sa.sync, C.sa.fire, C.sa.encode = "-", "-", "-"
-	return C.sa.volley
+	C.sa.lastVolleyAt = os.clock()
+	if C.sa.sync ~= "OK" then
+		C.sa.sync = "event"
+	end
+	C.sa.fire, C.sa.encode = "-", "-"
+end
+
+local function bindSaVolleyTracker()
+	if saVSyncConn then return end
+	local sync = vortexSyncRef
+	if not sync then
+		local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+		local vortex = ps and ps:FindFirstChild("Vortex")
+		sync = vortex and vortex:FindFirstChild("Sync")
+	end
+	if not sync or not sync:IsA("BindableEvent") then return end
+	vortexSyncRef = sync
+	saVSyncConn = sync.Event:Connect(function(a1: any)
+		if a1 == LocalPlayer then
+			saOnVSyncEvent()
+		end
+	end)
 end
 
 local function saDiagShotSummary()
@@ -765,6 +782,9 @@ local function recordNet(evt: any, payload: { any })
 			clock = if typeof(clk) == "number" then clk else nil,
 		}
 		dbgLog("Fire", string.format("Fire #%d %s %s", C.fire, C.lastFire.weapon, shortCf(C.lastFire.serverCf)), 2)
+		if Config.SilentAim then
+			saDiagShotSummary()
+		end
 	else
 		C.hit += 1
 		C.lastHit = { at = os.clock(), a = decode(payload[1]), b = decode(payload[2]), c = decode(payload[3]), d = decode(payload[4]) }
@@ -797,8 +817,8 @@ local function saResolvePart(): (BasePart?, string)
 	return if p then p else nil, if p then "fov" else "none"
 end
 
-local function saAimThirdPerson(part: BasePart)
-	if isThirdPerson() then setMouseHit(part.Position) end
+local function saAimMouseHit(part: BasePart)
+	setMouseHit(part.Position)
 end
 
 local function saShotOrigin(fallback: Vector3): Vector3
@@ -823,7 +843,6 @@ end
 
 local function rewriteFire(payload: { any }): { any }
 	if not Config.SilentAim then return payload end
-	saBeginVolley()
 	local part, src = saResolvePart()
 	if not part then
 		C.sa.fire = "skip:no-target"
@@ -832,7 +851,7 @@ local function rewriteFire(payload: { any }): { any }
 	end
 	C.sa.tgt = part.Parent and part.Parent.Name or "?"
 	C.sa.tgtSrc = src
-	saAimThirdPerson(part)
+	saAimMouseHit(part)
 	local raw = payload[3]
 	local cf = decode(raw)
 	if typeof(cf) ~= "CFrame" then
@@ -850,13 +869,11 @@ local function rewriteFire(payload: { any }): { any }
 	C.sa.fire = "OK"
 	C.saFireAt = os.clock()
 	saDbgRedirect("Fire", part, newCf, "enc=" .. C.sa.encode)
-	saDiagShotSummary()
 	return payload
 end
 
 local function rewriteSync(shotCf: CFrame, hitables: any): (CFrame, any)
 	if not Config.SilentAim then return shotCf, hitables end
-	saBeginVolley()
 	local part, src = saResolvePart()
 	if not part then
 		C.sa.sync = "skip:no-target"
@@ -865,7 +882,7 @@ local function rewriteSync(shotCf: CFrame, hitables: any): (CFrame, any)
 	end
 	C.sa.tgt = part.Parent and part.Parent.Name or "?"
 	C.sa.tgtSrc = src
-	saAimThirdPerson(part)
+	saAimMouseHit(part)
 	local newCf = CFrame.new(saShotOrigin(shotCf.Position), part.Position)
 	C.saSyncCf, C.saSyncAt = newCf, os.clock()
 	C.sa.sync = "OK"
@@ -882,6 +899,21 @@ local function isVortexSync(self: any): boolean
 	return vortex and vortex.Name == "Vortex" and vortex:IsDescendantOf(LocalPlayer)
 end
 
+local function vortexSyncHandler(orig: (...any) -> ...any)
+	return wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
+		if Config.SilentAim and isVortexSync(self) and a1 == LocalPlayer and typeof(a4) == "CFrame" then
+			if fromGame() then
+				local okR, nc, nh = pcall(rewriteSync, a4, a7)
+				if okR and typeof(nc) == "CFrame" then a4, a7 = nc, nh end
+			elseif Config.AimDebugger then
+				C.sa.sync = "skip:caller"
+				saDbgSkip("Sync", "executor caller (checkcaller)")
+			end
+		end
+		return orig(self, a1, a2, a3, a4, a5, a6, a7, a8)
+	end)
+end
+
 local function hookVortex()
 	if C.vortexHooked or not Config.SilentAim or typeof(hookfn) ~= "function" then return end
 	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
@@ -889,25 +921,25 @@ local function hookVortex()
 	local sync = vortex and vortex:FindFirstChild("Sync")
 	if not sync or not sync:IsA("BindableEvent") then return end
 	vortexSyncRef = sync
-	local probe = Instance.new("BindableEvent")
-	local beFire = probe.Fire
-	probe:Destroy()
-	if typeof(beFire) ~= "function" then return end
-	local ok = pcall(function()
-		vortexOrig = hookfn(beFire, wrap(function(self, a1, a2, a3, a4, a5, a6, a7, a8)
-			if Config.SilentAim and isVortexSync(self) and a1 == LocalPlayer and typeof(a4) == "CFrame" then
-				if fromGame() then
-					local okR, nc, nh = pcall(rewriteSync, a4, a7)
-					if okR and typeof(nc) == "CFrame" then a4, a7 = nc, nh end
-				elseif Config.AimDebugger then
-					C.sa.sync = "skip:caller"
-					saDbgSkip("Sync", "executor caller (checkcaller)")
-				end
-			end
-			local o = vortexOrig
-			return if typeof(o) == "function" then o(self, a1, a2, a3, a4, a5, a6, a7, a8) else nil
-		end))
-	end)
+	bindSaVolleyTracker()
+	local syncFire = sync.Fire
+	local ok = false
+	if typeof(syncFire) == "function" then
+		ok = pcall(function()
+			vortexOrig = hookfn(syncFire, vortexSyncHandler(syncFire))
+		end)
+	end
+	if not ok or typeof(vortexOrig) ~= "function" then
+		vortexOrig = nil
+		local probe = Instance.new("BindableEvent")
+		local beFire = probe.Fire
+		probe:Destroy()
+		if typeof(beFire) == "function" then
+			ok = pcall(function()
+				vortexOrig = hookfn(beFire, vortexSyncHandler(beFire))
+			end)
+		end
+	end
 	if ok and typeof(vortexOrig) == "function" then C.vortexHooked = true end
 end
 
@@ -977,7 +1009,7 @@ local function ensureHooks()
 		local n = 0
 		while (Config.SilentAim or Config.AimDebugger) and not C.netHooked and n < HOOK_MAX do
 			n += 1
-			hookNetwork(n >= 6)
+			hookNetwork(n >= 3)
 			if not C.netHooked then
 				C.status = if typeof(hookfn) ~= "function" then "hookfunction missing (Volt genv?)"
 					elseif not netReady() then "waiting for ClockOffset"
@@ -1121,7 +1153,7 @@ local function combatOverlayUpdate()
 		string.format("Last Hitcheck: %s | %s | %s | %s",
 			if C.lastHit then short(C.lastHit.a) else "-", if C.lastHit then short(C.lastHit.b) else "-",
 			if C.lastHit then short(C.lastHit.c) else "-", if C.lastHit then short(C.lastHit.d) else "-"),
-		"Read console: SA-shot / SA-hit / SA-miss / SA-skip",
+		"sync: OK=hooked | event=VSync only | SA-shot/hit/miss per volley",
 		if C.remote ~= "" then C.remote else "Remote: not found yet",
 		nil,
 		nil,
@@ -1131,7 +1163,11 @@ end
 local function combatUpdate()
 	if Config.SilentAim or Config.AimDebugger then
 		ensureHooks()
-		if C.netHooked then hookVortex(); announceSA() end
+		if C.netHooked then
+			hookVortex()
+			bindSaVolleyTracker()
+			announceSA()
+		end
 	end
 	combatOverlayUpdate()
 end
