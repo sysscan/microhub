@@ -1360,11 +1360,9 @@ end
 
 local function hideEntry(entry: any)
 	for _, obj in entry do
-		if typeof(obj) == "table" then
-			if obj.Remove then
-				obj.Visible = false
-			end
-		end
+		pcall(function()
+			obj.Visible = false
+		end)
 	end
 end
 
@@ -1376,9 +1374,9 @@ end
 
 local function destroyEntry(entry: any)
 	for _, obj in entry do
-		if typeof(obj) == "table" and typeof(obj.Remove) == "function" then
-			pcall(obj.Remove, obj)
-		end
+		pcall(function()
+			obj:Remove()
+		end)
 	end
 end
 
@@ -1499,7 +1497,10 @@ local function updateESP()
 	end
 	if not Config.ESP then
 		if espNeedsHide then
-			hideAllESP()
+			for char, entry in esp do
+				destroyEntry(entry)
+				esp[char] = nil
+			end
 			espNeedsHide = false
 		end
 		return
