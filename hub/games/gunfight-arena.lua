@@ -455,8 +455,99 @@ local function voltApi(name: string): any
 end
 
 local filtergc = voltApi("filtergc")
+local getgc = voltApi("getgc")
 local netHooked = false
 local netInstalling = false
+local weaponScanDone = false
+
+local SPREAD_KEYS = {
+	"Spread", "SpreadX", "SpreadY", "MinSpread", "MaxSpread",
+	"HipSpread", "AimSpread", "BaseSpread", "MovingSpread",
+	"Inaccuracy", "Accuracy", "Recoil", "RecoilX", "RecoilY",
+	"CameraRecoilX", "CameraRecoilY", "Kick", "KickX", "KickY",
+}
+local WEAPON_HINT_KEYS = {
+	"Damage", "FireRate", "Range", "MagSize", "ReloadTime", "BulletSpeed",
+	"HeadshotMultiplier", "Auto", "RPM", "Firerate",
+}
+
+local function scanWeaponTables()
+	if weaponScanDone or typeof(getgc) ~= "function" then return end
+	weaponScanDone = true
+
+	local ok, gcList = pcall(getgc, true)
+	if not ok or typeof(gcList) ~= "table" then
+		print("[HR-SCAN] getgc failed")
+		return
+	end
+
+	local found = 0
+	for _, obj in gcList do
+		if typeof(obj) ~= "table" then continue end
+		local hasHint = false
+		local hasSpread = false
+		for _, k in WEAPON_HINT_KEYS do
+			if rawget(obj, k) ~= nil then hasHint = true break end
+		end
+		if not hasHint then continue end
+		for _, k in SPREAD_KEYS do
+			if rawget(obj, k) ~= nil then hasSpread = true break end
+		end
+		if not hasSpread then continue end
+
+		found += 1
+		local parts = {}
+		for _, k in SPREAD_KEYS do
+			local v = rawget(obj, k)
+			if v ~= nil then
+				table.insert(parts, k .. "=" .. tostring(v))
+			end
+		end
+		for _, k in WEAPON_HINT_KEYS do
+			local v = rawget(obj, k)
+			if v ~= nil then
+				table.insert(parts, k .. "=" .. tostring(v))
+			end
+		end
+		pcall(function()
+			print("[HR-SCAN] weapon #" .. found .. ": " .. table.concat(parts, " | "))
+		end)
+		if found >= 10 then break end
+	end
+
+	if found == 0 then
+		print("[HR-SCAN] no weapon tables found via getgc. Trying ReplicatedStorage modules...")
+		pcall(function()
+			local rs = game:GetService("ReplicatedStorage")
+			for _, child in rs:GetDescendants() do
+				if not child:IsA("ModuleScript") then continue end
+				local ok2, mod = pcall(require, child)
+				if not ok2 or typeof(mod) ~= "table" then continue end
+				for _, k in SPREAD_KEYS do
+					if rawget(mod, k) ~= nil then
+						found += 1
+						local parts2 = { "module=" .. child:GetFullName() }
+						for _, k2 in SPREAD_KEYS do
+							local v = rawget(mod, k2)
+							if v ~= nil then table.insert(parts2, k2 .. "=" .. tostring(v)) end
+						end
+						pcall(function()
+							print("[HR-SCAN] RS #" .. found .. ": " .. table.concat(parts2, " | "))
+						end)
+						break
+					end
+				end
+				if found >= 5 then break end
+			end
+		end)
+	end
+
+	if found == 0 then
+		print("[HR-SCAN] no spread keys found anywhere")
+	else
+		print("[HR-SCAN] done, found " .. found .. " weapon table(s)")
+	end
+end
 
 local hrFires = 0
 local hrHitchecks = 0
@@ -615,6 +706,7 @@ local function installNetworkHook(): boolean
 
 	netHooked = true
 	print("[GFA] hit-reg debugger hooked via filtergc")
+	task.spawn(scanWeaponTables)
 	return true
 end
 
