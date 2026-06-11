@@ -596,6 +596,19 @@ local function setDisabler(enabled: boolean)
 	end
 end
 
+local function movementDisablerNeeded(): boolean
+	return Config.Disabler
+		or Config.SpeedBoost
+		or Config.NoJumpCooldown
+		or Config.Noclip
+		or Config.AlwaysSprint
+		or Config.VehicleSpeed
+end
+
+local function syncMovementDisabler()
+	setDisabler(movementDisablerNeeded())
+end
+
 local function setAntiTaze(enabled: boolean)
 	if not canHook then
 		return
@@ -1820,15 +1833,15 @@ UILib.create({
 			applyMovement()
 			setNoJumpCooldown(Config.NoJumpCooldown)
 		end
-		if key == "Noclip" and value then
-			if not headCollideConn then
-				setDisabler(true)
-			end
-		end
-		if key == "Noclip" and not value then
-			if not Config.Disabler then
-				setDisabler(false)
-			end
+		if
+			key == "SpeedBoost"
+			or key == "NoJumpCooldown"
+			or key == "Noclip"
+			or key == "AlwaysSprint"
+			or key == "VehicleSpeed"
+			or key == "Disabler"
+		then
+			syncMovementDisabler()
 		end
 		if
 			key == "SilentAim"
@@ -1848,9 +1861,6 @@ UILib.create({
 		end
 		if key == "AntiKillPlane" then
 			syncKillPlane()
-		end
-		if key == "Disabler" then
-			setDisabler(value)
 		end
 		if key == "AntiTaze" then
 			setAntiTaze(value)
@@ -1872,9 +1882,10 @@ UILib.create({
 
 table.insert(connections, LocalPlayer.CharacterAdded:Connect(function()
 	task.defer(function()
+		headCollideConn = nil
 		applyMovement()
 		setNoJumpCooldown(Config.NoJumpCooldown)
-		setDisabler(Config.Disabler)
+		syncMovementDisabler()
 		resolveGunController()
 		refreshGunFeatures()
 	end)
@@ -2002,7 +2013,7 @@ task.defer(function()
 	end
 	warn("[PrisonLife] Gun resolved — Shoot:", gun.Shoot ~= nil, "Bullet:", gun.Bullet ~= nil, "Equip:", gun.Equip ~= nil, "Reload:", gun.Reload ~= nil)
 	refreshGunFeatures()
-	setDisabler(Config.Disabler)
+	syncMovementDisabler()
 	setAntiTaze(Config.AntiTaze)
 	applyFullBright()
 	syncKillPlane()
