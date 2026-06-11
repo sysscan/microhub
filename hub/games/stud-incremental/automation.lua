@@ -5,9 +5,11 @@ function M.create(opts)
 	local Constants = opts.constants
 	local remotes = opts.remotes
 	local stats = opts.stats
+	local upgrades = opts.upgrades
 	local LocalPlayer = opts.localPlayer
 
 	local lastRedeemAt = 0
+	local lastGroupClaimAt = 0
 	local studUpgradeOrder = { "MoreStuds", "SpawnSpeed", "MaxStuds" }
 
 	local function flatDistance(a, b)
@@ -29,10 +31,10 @@ function M.create(opts)
 	end
 
 	local function tryStudUpgrade(folders)
-		local upgrades = folders.area1:FindFirstChild("StudUpgrades")
+		local upgradesFolder = folders.area1:FindFirstChild("StudUpgrades")
 		local studs = folders.stats:FindFirstChild("Studs")
 		local tier = folders.area2:FindFirstChild("Tier")
-		if not (upgrades and studs and tier) then
+		if not (upgradesFolder and studs and tier) then
 			return
 		end
 
@@ -52,8 +54,8 @@ function M.create(opts)
 
 		for _, name in ipairs(ordered) do
 			local config = info.STUD_UPGRADES[name]
-			local level = upgrades:FindFirstChild(name .. "Level")
-			local cost = upgrades:FindFirstChild(name .. "Cost")
+			local level = upgradesFolder:FindFirstChild(name .. "Level")
+			local cost = upgradesFolder:FindFirstChild(name .. "Cost")
 			local def = getStudUpgradeDef(name)
 			if config and level and cost and level.Value < stats.getMaxLevel(config) then
 				if free or studs.Value >= cost.Value then
@@ -65,35 +67,21 @@ function M.create(opts)
 	end
 
 	local function tryRebirthUpgrade(folders)
-		local rebirths = folders.stats:FindFirstChild("Rebirths")
-		local upgrades = folders.area1:FindFirstChild("RebirthUpgrades")
-		if not (rebirths and upgrades) then
-			return
-		end
-
-		local info = stats.getUpgradeInfo()
-		if not info or not info.REBIRTH_UPGRADES then
-			return
-		end
-
-		for _, def in ipairs(Constants.REBIRTH_UPGRADES) do
-			local config = info.REBIRTH_UPGRADES[def.name]
-			local level = upgrades:FindFirstChild(def.name .. "Level")
-			local cost = upgrades:FindFirstChild(def.name .. "Cost")
-			if config and level and cost and level.Value < stats.getMaxLevel(config) then
-				if rebirths.Value >= cost.Value then
-					remotes.rebirthUpgrade(Config.AutoBuyRebirthMax and def.max or def.single)
-					return
-				end
-			end
-		end
+		upgrades.tryNamedUpgrades(
+			Constants.REBIRTH_UPGRADES,
+			"REBIRTH_UPGRADES",
+			folders.area1:FindFirstChild("RebirthUpgrades"),
+			(folders.stats:FindFirstChild("Rebirths") or { Value = 0 }).Value,
+			remotes.rebirthUpgrade,
+			Config.AutoBuyRebirthMax
+		)
 	end
 
 	local function tryPointUpgrade(folders)
 		local points = folders.area2:FindFirstChild("Points")
-		local upgrades = folders.area2:FindFirstChild("PointUpgrades")
+		local upgradesFolder = folders.area2:FindFirstChild("PointUpgrades")
 		local tierMulti = folders.area2:FindFirstChild("Tier1_Area1and2CostMulti")
-		if not (points and upgrades) then
+		if not (points and upgradesFolder) then
 			return
 		end
 
@@ -104,8 +92,8 @@ function M.create(opts)
 
 		for _, def in ipairs(Constants.POINT_UPGRADES) do
 			local config = info.POINT_UPGRADES[def.name]
-			local level = upgrades:FindFirstChild(def.name .. "Level")
-			local cost = upgrades:FindFirstChild(def.name .. "Cost")
+			local level = upgradesFolder:FindFirstChild(def.name .. "Level")
+			local cost = upgradesFolder:FindFirstChild(def.name .. "Cost")
 			if config and level and cost and level.Value < stats.getMaxLevel(config, LocalPlayer) then
 				local price = stats.getPointCost(cost.Value, tierMulti and tierMulti.Value or 1)
 				if points.Value >= price then
@@ -116,13 +104,159 @@ function M.create(opts)
 		end
 	end
 
+	local function tryBlockUpgrade(folders)
+		local blocks = folders.area3:FindFirstChild("Blocks")
+		if not blocks then
+			return
+		end
+		upgrades.tryNamedUpgrades(
+			Constants.BLOCK_UPGRADES,
+			"BLOCK_UPGRADES",
+			folders.area3:FindFirstChild("BlockUpgrades"),
+			blocks.Value,
+			remotes.blocksUpgrade,
+			Config.AutoBuyBlockMax
+		)
+	end
+
+	local function tryDropperUpgrade(folders)
+		local area4 = folders.area4
+		if not area4 then
+			return
+		end
+		local cores = area4:FindFirstChild("Cores")
+		if not cores then
+			return
+		end
+		upgrades.tryNamedUpgrades(
+			Constants.DROPPER_UPGRADES,
+			"DROPPER_UPGRADES",
+			area4:FindFirstChild("DropperUpgrades"),
+			cores.Value,
+			remotes.dropperUpgrade,
+			Config.AutoBuyDropperMax
+		)
+	end
+
+	local function tryFuserUpgrade(folders)
+		local area4 = folders.area4
+		if not area4 then
+			return
+		end
+		local cores = area4:FindFirstChild("Cores")
+		if not cores then
+			return
+		end
+		upgrades.tryNamedUpgrades(
+			Constants.FUSER_UPGRADES,
+			"FUSER_UPGRADES",
+			area4:FindFirstChild("FuserUpgrades"),
+			cores.Value,
+			remotes.fuserUpgrade,
+			Config.AutoBuyFuserMax
+		)
+	end
+
+	local function tryResearchUpgrade(folders)
+		local area4 = folders.area4
+		if not area4 then
+			return
+		end
+		local researchFolder = area4:FindFirstChild("ResearchUpgrades")
+		local info = stats.getUpgradeInfo()
+		if not researchFolder or not info or not info.RESEARCH_UPGRADES then
+			return
+		end
+
+		for _, entry in ipairs(Constants.RESEARCH_UPGRADES) do
+			local config = info.RESEARCH_UPGRADES[entry.name]
+			local level = researchFolder:FindFirstChild(entry.name .. "Level")
+			local cost = researchFolder:FindFirstChild(entry.name .. "Cost")
+			if config and level and cost and level.Value < stats.getMaxLevel(config, LocalPlayer) then
+				local currency
+				if entry.currency == "Tokens" then
+					currency = folders.area5 and folders.area5:FindFirstChild("Tokens")
+				else
+					currency = area4:FindFirstChild("Cores")
+				end
+				if currency and currency.Value >= cost.Value then
+					remotes.researchUpgrade(Config.AutoBuyResearchMax and entry.max or entry.single)
+					return
+				end
+			end
+		end
+	end
+
+	local function tryPlantUpgrade(folders)
+		local area5 = folders.area5
+		if not area5 then
+			return
+		end
+		local tokens = area5:FindFirstChild("Tokens")
+		if not tokens then
+			return
+		end
+		upgrades.tryNamedUpgrades(
+			Constants.PLANT_UPGRADES,
+			"PLANT_UPGRADES",
+			area5:FindFirstChild("PlantUpgrades"),
+			tokens.Value,
+			remotes.plantUpgrade,
+			Config.AutoBuyPlantMax
+		)
+	end
+
+	local function tryWorld2StarUpgrade(folders)
+		local world2 = folders.world2
+		if not world2 then
+			return
+		end
+		local stars = world2:FindFirstChild("Stars")
+		local upgradesFolder = world2:FindFirstChild("StarUpgrades")
+		if not stars or not upgradesFolder then
+			return
+		end
+		upgrades.tryWorld2Upgrades(
+			Constants.WORLD2_STAR_UPGRADES,
+			"StarUpgradeConfig",
+			upgradesFolder,
+			stars.Value,
+			true,
+			remotes.starUpgrade,
+			Config.AutoBuyStarMax
+		)
+	end
+
+	local function tryWorld2StardustUpgrade(folders)
+		local world2 = folders.world2
+		if not world2 then
+			return
+		end
+		local stardust = world2:FindFirstChild("Stardust")
+		local unlocked = world2:FindFirstChild("StardustUnlocked")
+		local upgradesFolder = world2:FindFirstChild("StardustUpgrades")
+		if not stardust or not upgradesFolder then
+			return
+		end
+		upgrades.tryWorld2Upgrades(
+			Constants.WORLD2_STARDUST_UPGRADES,
+			"StardustUpgradeConfig",
+			upgradesFolder,
+			stardust.Value,
+			unlocked and unlocked.Value or false,
+			remotes.stardustUpgrade,
+			Config.AutoBuyStardustMax
+		)
+	end
+
 	local function tryRebirth(folders)
 		local studs = folders.stats:FindFirstChild("Studs")
 		local tier = folders.area2:FindFirstChild("Tier")
+		local minStuds = tonumber(Config.MinRebirthStuds) or 1000
 		if not studs then
 			return
 		end
-		if studs.Value >= 1000 then
+		if studs.Value >= minStuds then
 			remotes.rebirth(1)
 		elseif tier and tier.Value >= 5 then
 			remotes.rebirth(2)
@@ -153,6 +287,20 @@ function M.create(opts)
 		end
 	end
 
+	local function tryAutoFuse(folders)
+		if not Config.AutoFuse then
+			return
+		end
+		local area4 = folders.area4
+		if not area4 then
+			return
+		end
+		local particles = area4:FindFirstChild("Particles")
+		if particles and particles.Value >= 10 then
+			remotes.spawnCore()
+		end
+	end
+
 	local function collectStuds()
 		if not Config.AutoCollectStuds then
 			return
@@ -164,17 +312,13 @@ function M.create(opts)
 		end
 
 		local radius = tonumber(Config.CollectRadius) or 120
-		local onPlatform = false
 		if not Config.CollectAnywhere then
 			local detection = workspace:FindFirstChild("map")
 			detection = detection
 				and detection:FindFirstChild("Areas")
 				and detection.Areas:FindFirstChild("area1")
 				and detection.Areas.area1:FindFirstChild("platform_detection")
-			if detection then
-				onPlatform = flatDistance(root.Position, detection.Position) <= math.max(detection.Size.X, detection.Size.Z)
-			end
-			if not onPlatform then
+			if not detection or flatDistance(root.Position, detection.Position) > math.max(detection.Size.X, detection.Size.Z) then
 				return
 			end
 		end
@@ -187,6 +331,9 @@ function M.create(opts)
 						child:Destroy()
 					end)
 					remotes.currencyGain(studType)
+					if Config.AutoAddXP then
+						remotes.addXp()
+					end
 				end
 			end
 		end
@@ -203,16 +350,14 @@ function M.create(opts)
 		end
 
 		local root = getRoot()
-		if not root then
-			return
-		end
-
 		local radius = tonumber(Config.CollectRadius) or 120
 		for _, star in ipairs(folder:GetChildren()) do
 			local rarity = star.Name:match("^Star_(.+)$")
 			if rarity then
 				local pos = star:IsA("BasePart") and star.Position or star:GetPivot().Position
-				if (pos - root.Position).Magnitude <= radius then
+				local inRange = Config.CollectStarsAnywhere
+					or (root and (pos - root.Position).Magnitude <= radius)
+				if inRange then
 					pcall(function()
 						star:Destroy()
 					end)
@@ -248,6 +393,18 @@ function M.create(opts)
 		remotes.redeemCode(code)
 	end
 
+	local function claimGroupReward()
+		if not Config.AutoClaimGroupReward then
+			return
+		end
+		local now = tick()
+		if now - lastGroupClaimAt < 10 then
+			return
+		end
+		lastGroupClaimAt = now
+		remotes.claimGroupReward()
+	end
+
 	local function tickAutomation()
 		local folders = stats.getFolders()
 		if not folders then
@@ -263,6 +420,31 @@ function M.create(opts)
 		if Config.AutoBuyPointUpgrades then
 			tryPointUpgrade(folders)
 		end
+		if Config.AutoBuyBlockUpgrades then
+			tryBlockUpgrade(folders)
+		end
+		if Config.AutoBuyUpgradeTree then
+			upgrades.tryUpgradeTree(folders, Constants.UPGRADE_TREE_ORDER, remotes.upgradeTree)
+		end
+		if Config.AutoBuyDropperUpgrades then
+			tryDropperUpgrade(folders)
+		end
+		if Config.AutoBuyFuserUpgrades then
+			tryFuserUpgrade(folders)
+		end
+		if Config.AutoBuyResearchUpgrades then
+			tryResearchUpgrade(folders)
+		end
+		if Config.AutoBuyPlantUpgrades then
+			tryPlantUpgrade(folders)
+		end
+		if Config.AutoBuyStarUpgrades then
+			tryWorld2StarUpgrade(folders)
+		end
+		if Config.AutoBuyStardustUpgrades then
+			tryWorld2StardustUpgrade(folders)
+		end
+
 		if Config.AutoRebirth then
 			tryRebirth(folders)
 		end
@@ -284,6 +466,13 @@ function M.create(opts)
 			remotes.blocksGain()
 		end
 
+		tryAutoFuse(folders)
+
+		if Config.AutoRocketBuild then
+			remotes.buildRocket()
+		end
+
+		claimGroupReward()
 		redeemCode()
 	end
 

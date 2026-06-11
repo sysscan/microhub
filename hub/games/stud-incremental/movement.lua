@@ -29,6 +29,17 @@ function M.create(opts)
 		return area1 and area1:FindFirstChild("platform_detection")
 	end
 
+	local function getAreaPart(...)
+		local current = workspace:FindFirstChild("map")
+		for _, name in ipairs({ ... }) do
+			if not current then
+				return nil
+			end
+			current = current:FindFirstChild(name)
+		end
+		return current
+	end
+
 	local function getBlockSensor()
 		local map = workspace:FindFirstChild("map")
 		local areas = map and map:FindFirstChild("Areas")
@@ -50,6 +61,20 @@ function M.create(opts)
 
 	local function tickMovement()
 		applySpeed()
+		if Config.AutoAfkStudPlatform then
+			local platform = getStudPlatform()
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if platform and root then
+				local flat = Vector3.new(root.Position.X - platform.Position.X, 0, root.Position.Z - platform.Position.Z)
+				if flat.Magnitude > math.max(platform.Size.X, platform.Size.Z) * 0.6 then
+					teleportTo(platform)
+				end
+			end
+		end
+	end
+
+	local function teleportToWorld2Stars()
+		return teleportTo(getAreaPart("Areas2", "area1", "3DStarSpawn") or workspace:FindFirstChild("3DStarSpawn"))
 	end
 
 	return {
@@ -61,6 +86,7 @@ function M.create(opts)
 		teleportToBlockButton = function()
 			return teleportTo(getBlockSensor())
 		end,
+		teleportToWorld2Stars = teleportToWorld2Stars,
 	}
 end
 

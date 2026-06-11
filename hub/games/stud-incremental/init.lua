@@ -12,8 +12,10 @@ local LoopsLib = require("games/stud-incremental/loops.lua")
 local RemotesLib = require("games/stud-incremental/remotes.lua")
 local StatsLib = require("games/stud-incremental/stats.lua")
 local AutomationLib = require("games/stud-incremental/automation.lua")
+local UpgradesLib = require("games/stud-incremental/upgrades.lua")
 local MovementLib = require("games/stud-incremental/movement.lua")
 local UILibDef = require("games/stud-incremental/ui.lua")
+local ExploitsLib = require("games/stud-incremental/exploits.lua")
 local BootstrapLib = require("games/stud-incremental/bootstrap.lua")
 
 local M = {}
@@ -45,12 +47,28 @@ function M.run()
 		localPlayer = LocalPlayer,
 	})
 
+	local upgrades = UpgradesLib.create({
+		stats = stats,
+		localPlayer = LocalPlayer,
+		replicatedStorage = ReplicatedStorage,
+	})
+
 	local automation = AutomationLib.create({
 		config = Config,
 		constants = Constants,
 		remotes = remotes,
 		stats = stats,
+		upgrades = upgrades,
 		localPlayer = LocalPlayer,
+	})
+
+	local exploits = ExploitsLib.create({
+		config = Config,
+		constants = Constants,
+		remotes = remotes,
+		stats = stats,
+		localPlayer = LocalPlayer,
+		replicatedStorage = ReplicatedStorage,
 	})
 
 	local function redeemNow()
@@ -63,9 +81,11 @@ function M.run()
 
 	UILibDef.create({
 		config = Config,
+		constants = Constants,
 		uiLib = UILib,
 		movement = movement,
 		redeemNow = redeemNow,
+		exploits = exploits,
 	})
 
 	local genv = typeof(getgenv) == "function" and getgenv() or _G
@@ -75,6 +95,7 @@ function M.run()
 		config = Config,
 		runService = RunService,
 		automation = automation,
+		exploits = exploits,
 		movement = movement,
 		connections = connections,
 		loopHelpers = loopHelpers,

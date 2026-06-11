@@ -2,9 +2,11 @@ local M = {}
 
 function M.create(opts)
 	local Config = opts.config
+	local Constants = opts.constants
 	local UILib = opts.uiLib
 	local movement = opts.movement
 	local redeemNow = opts.redeemNow
+	local exploits = opts.exploits
 
 	UILib.create({
 		title = "STUD INCREMENTAL",
@@ -18,6 +20,8 @@ function M.create(opts)
 						items = {
 							{ type = "toggle", key = "AutoCollectStuds", label = "Auto Collect Studs", hud = "Auto Studs" },
 							{ type = "toggle", key = "CollectAnywhere", label = "Collect Off Platform", hud = "Anywhere" },
+							{ type = "toggle", key = "AutoAddXP", label = "Auto Add XP", hud = "Auto XP" },
+							{ type = "toggle", key = "AutoAfkStudPlatform", label = "AFK Stud Platform", hud = "AFK Studs" },
 							{
 								type = "slider",
 								key = "CollectRadius",
@@ -30,12 +34,20 @@ function M.create(opts)
 						},
 					},
 					{
-						title = "AREA 2+",
+						title = "AREA 2-3",
 						items = {
 							{ type = "toggle", key = "AutoPoints", label = "Auto Points (Tier 6+)", hud = "Auto Points" },
 							{ type = "toggle", key = "AutoBlocks", label = "Auto Blocks Gain", hud = "Auto Blocks" },
 							{ type = "button", label = "TP Block Button", onClick = movement.teleportToBlockButton },
+						},
+					},
+					{
+						title = "WORLD 2",
+						items = {
 							{ type = "toggle", key = "AutoCollectStars", label = "Auto Collect Stars", hud = "Auto Stars" },
+							{ type = "toggle", key = "CollectStarsAnywhere", label = "Collect All Stars", hud = "All Stars" },
+							{ type = "toggle", key = "AutoRocketBuild", label = "Auto Rocket Build", hud = "Rocket" },
+							{ type = "button", label = "TP Star Volume", onClick = movement.teleportToWorld2Stars },
 						},
 					},
 				},
@@ -44,7 +56,7 @@ function M.create(opts)
 				label = "Upgrades",
 				sections = {
 					{
-						title = "AUTO BUY",
+						title = "AREA 1-2",
 						items = {
 							{ type = "toggle", key = "AutoBuyStudUpgrades", label = "Stud Upgrades", hud = "Stud Up" },
 							{ type = "toggle", key = "AutoBuyStudMax", label = "Stud Buy Max", hud = "Stud Max" },
@@ -61,14 +73,149 @@ function M.create(opts)
 						},
 					},
 					{
+						title = "AREA 3",
+						items = {
+							{ type = "toggle", key = "AutoBuyBlockUpgrades", label = "Block Upgrades", hud = "Block Up" },
+							{ type = "toggle", key = "AutoBuyBlockMax", label = "Block Buy Max", hud = "Block Max" },
+							{ type = "toggle", key = "AutoBuyUpgradeTree", label = "Upgrade Tree", hud = "Tree Up" },
+						},
+					},
+					{
+						title = "AREA 4-5",
+						items = {
+							{ type = "toggle", key = "AutoBuyDropperUpgrades", label = "Dropper Upgrades", hud = "Dropper Up" },
+							{ type = "toggle", key = "AutoBuyDropperMax", label = "Dropper Buy Max", hud = "Drop Max" },
+							{ type = "toggle", key = "AutoBuyFuserUpgrades", label = "Fuser Upgrades", hud = "Fuser Up" },
+							{ type = "toggle", key = "AutoBuyFuserMax", label = "Fuser Buy Max", hud = "Fuse Max" },
+							{ type = "toggle", key = "AutoBuyResearchUpgrades", label = "Research Upgrades", hud = "Research" },
+							{ type = "toggle", key = "AutoBuyResearchMax", label = "Research Buy Max", hud = "Res Max" },
+							{ type = "toggle", key = "AutoFuse", label = "Auto Fuse Cores", hud = "Auto Fuse" },
+							{ type = "toggle", key = "AutoBuyPlantUpgrades", label = "Plant Upgrades", hud = "Plant Up" },
+							{ type = "toggle", key = "AutoBuyPlantMax", label = "Plant Buy Max", hud = "Plant Max" },
+						},
+					},
+					{
+						title = "WORLD 2 UPGRADES",
+						items = {
+							{ type = "toggle", key = "AutoBuyStarUpgrades", label = "Star Upgrades", hud = "Star Up" },
+							{ type = "toggle", key = "AutoBuyStarMax", label = "Star Buy Max", hud = "Star Max" },
+							{ type = "toggle", key = "AutoBuyStardustUpgrades", label = "Stardust Upgrades", hud = "Dust Up" },
+							{ type = "toggle", key = "AutoBuyStardustMax", label = "Stardust Buy Max", hud = "Dust Max" },
+						},
+					},
+					{
 						title = "RESETS",
 						items = {
 							{ type = "toggle", key = "AutoRebirth", label = "Auto Rebirth", hud = "Auto Rebirth" },
+							{
+								type = "slider",
+								key = "MinRebirthStuds",
+								label = "Min Rebirth Studs",
+								min = 1000,
+								max = 1000000,
+								step = 1000,
+							},
 							{ type = "toggle", key = "AutoTierUp", label = "Auto Tier Up", hud = "Auto Tier" },
 							{ type = "toggle", key = "AutoAscend", label = "Auto Ascend", hud = "Auto Ascend" },
+						},
+					},
+				},
+			},
+			{
+				label = "Exploits",
+				sections = {
+					{
+						title = "CURRENCY SPAM",
+						items = {
+							{ type = "toggle", key = "ExploitGodlyStudSpam", label = "Godly Stud Spam", hud = "Godly Spam" },
+							{ type = "toggle", key = "ExploitRemotePoints", label = "Remote Points Spam", hud = "Pt Spam" },
+							{ type = "toggle", key = "ExploitRemoteBlocks", label = "Remote Blocks Spam", hud = "Blk Spam" },
+							{ type = "toggle", key = "ExploitFastXP", label = "Fast XP Spam", hud = "XP Spam" },
+							{ type = "toggle", key = "ExploitTokenFarm", label = "Token ID Farm", hud = "Token Farm" },
+							{
+								type = "select",
+								key = "ExploitTokenPlant",
+								label = "Token Plant ID",
+								options = Constants.PLANT_TOKEN_IDS,
+							},
+						},
+					},
+					{
+						title = "AREA 4-5",
+						items = {
+							{ type = "toggle", key = "ExploitCoreGain", label = "Core Gain Amount", hud = "Core Gain" },
+							{
+								type = "slider",
+								key = "ExploitCoreGainAmount",
+								label = "Core Amount",
+								min = 1,
+								max = 1000000,
+								step = 100,
+							},
+							{ type = "button", label = "Burst Core Gain", onClick = exploits.burstCoreGain },
+							{ type = "toggle", key = "ExploitFuseLoop", label = "Fuse + Core Loop", hud = "Fuse Loop" },
+							{ type = "toggle", key = "ExploitCoreGainAfterFuse", label = "Core Gain After Fuse", hud = "Fuse Core" },
+							{ type = "toggle", key = "ExploitParticleSpam", label = "Particle Gain Spam", hud = "Particles" },
+							{
+								type = "slider",
+								key = "ExploitParticleSlot",
+								label = "Particle Slot (0=rotate)",
+								min = 0,
+								max = 3,
+								step = 1,
+							},
+							{ type = "button", label = "Burst Token Farm", onClick = exploits.burstTokenFarm },
+						},
+					},
+					{
+						title = "UPGRADE TREE",
+						items = {
+							{ type = "toggle", key = "ExploitUpgradeTreeMulti", label = "Inflated Tree Multi", hud = "Tree Multi" },
+							{
+								type = "slider",
+								key = "ExploitUpgradeTreeMultiValue",
+								label = "Tree Multi Value",
+								min = 1,
+								max = 500,
+								step = 1,
+							},
+							{ type = "button", label = "Burst All Tree Nodes", onClick = exploits.burstUpgradeTree },
+							{ type = "toggle", key = "ExploitRogueTreeSync", label = "Rogue Tree Resync", hud = "Rogue Sync" },
+						},
+					},
+					{
+						title = "MISC EXPLOITS",
+						items = {
+							{ type = "toggle", key = "ExploitCurrentStudsZero", label = "Reset CurrentStuds (0)", hud = "Studs 0" },
+							{ type = "toggle", key = "ExploitCurrentStudsMax", label = "Spoof CurrentStuds High", hud = "Studs Max" },
+							{
+								type = "slider",
+								key = "ExploitCurrentStudsCount",
+								label = "CurrentStuds Value",
+								min = 0,
+								max = 50000,
+								step = 100,
+							},
+							{ type = "toggle", key = "ExploitStarCollectSpam", label = "Star Collect Spam", hud = "Star Spam" },
+							{
+								type = "slider",
+								key = "ExploitTickInterval",
+								label = "Exploit Tick Rate",
+								min = 0.02,
+								max = 0.5,
+								step = 0.01,
+							},
+							{
+								type = "slider",
+								key = "ExploitBurstCount",
+								label = "Burst Count",
+								min = 1,
+								max = 25,
+								step = 1,
+							},
 							{
 								type = "hint",
-								text = "Rebirth needs 1k+ studs. Tier/Ascend spend studs at their walls.",
+								text = "Exploits abuse server-trusted remotes. High rates may kick. CoreGain and Tree Multi are the strongest.",
 							},
 						},
 					},
@@ -85,8 +232,9 @@ function M.create(opts)
 						},
 					},
 					{
-						title = "CODES",
+						title = "REWARDS",
 						items = {
+							{ type = "toggle", key = "AutoClaimGroupReward", label = "Auto Group Reward", hud = "Group" },
 							{ type = "toggle", key = "AutoRedeemCode", label = "Auto Redeem Code", hud = "Auto Code" },
 							{ type = "button", label = "Redeem Code Now", onClick = redeemNow },
 							{

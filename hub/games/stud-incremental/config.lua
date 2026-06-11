@@ -1,16 +1,20 @@
 return {
 	ShowHUD = true,
 	TickInterval = 0.15,
+	ExploitTickInterval = 0.05,
 
 	AutoCollectStuds = false,
 	CollectRadius = 120,
 	CollectAnywhere = true,
+	AutoAddXP = false,
+	AutoAfkStudPlatform = false,
 
 	AutoBuyStudUpgrades = false,
 	AutoBuyStudMax = true,
 	StudUpgradePriority = "MoreStuds",
 
 	AutoRebirth = false,
+	MinRebirthStuds = 1000,
 	AutoRebirthUpgrades = false,
 	AutoBuyRebirthMax = true,
 
@@ -22,10 +26,55 @@ return {
 	AutoBuyPointUpgrades = false,
 	AutoBuyPointMax = true,
 
+	AutoBuyBlockUpgrades = false,
+	AutoBuyBlockMax = true,
+	AutoBuyUpgradeTree = false,
+
+	AutoBuyDropperUpgrades = false,
+	AutoBuyDropperMax = true,
+	AutoBuyFuserUpgrades = false,
+	AutoBuyFuserMax = true,
+	AutoBuyResearchUpgrades = false,
+	AutoBuyResearchMax = true,
+	AutoFuse = false,
+
+	AutoBuyPlantUpgrades = false,
+	AutoBuyPlantMax = true,
+
 	AutoCollectStars = false,
+	CollectStarsAnywhere = true,
+	AutoBuyStarUpgrades = false,
+	AutoBuyStarMax = true,
+	AutoBuyStardustUpgrades = false,
+	AutoBuyStardustMax = true,
+	AutoRocketBuild = false,
+
+	AutoClaimGroupReward = false,
 	AutoRedeemCode = false,
 	RedeemCodeText = "",
 
 	SpeedBoost = false,
 	WalkSpeed = 32,
+
+	-- Exploits (server trusts client on these remotes)
+	ExploitGodlyStudSpam = false,
+	ExploitCoreGain = false,
+	ExploitCoreGainAmount = 10000,
+	ExploitCoreGainAfterFuse = true,
+	ExploitFuseLoop = false,
+	ExploitTokenFarm = false,
+	ExploitTokenPlant = "BLOSSOM_K3_OMEGA_88",
+	ExploitParticleSpam = false,
+	ExploitParticleSlot = 0,
+	ExploitFastXP = false,
+	ExploitUpgradeTreeMulti = false,
+	ExploitUpgradeTreeMultiValue = 50,
+	ExploitCurrentStudsZero = false,
+	ExploitCurrentStudsMax = false,
+	ExploitCurrentStudsCount = 9999,
+	ExploitRemotePoints = false,
+	ExploitRemoteBlocks = false,
+	ExploitRogueTreeSync = false,
+	ExploitStarCollectSpam = false,
+	ExploitBurstCount = 10,
 }

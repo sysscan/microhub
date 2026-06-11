@@ -41,18 +41,21 @@ function M.create(opts)
 	end
 
 	local function getFolders()
-		local stats = waitStat(LocalPlayer, "Stats")
+		local statsFolder = waitStat(LocalPlayer, "Stats")
 		local area1 = waitStat(LocalPlayer, "Area1Stats")
 		local area2 = waitStat(LocalPlayer, "Area2Stats")
 		local area3 = waitStat(LocalPlayer, "Area3Stats")
-		if not (stats and area1 and area2 and area3) then
+		if not (statsFolder and area1 and area2 and area3) then
 			return nil
 		end
 		return {
-			stats = stats,
+			stats = statsFolder,
 			area1 = area1,
 			area2 = area2,
 			area3 = area3,
+			area4 = LocalPlayer:FindFirstChild("Area4Stats"),
+			area5 = LocalPlayer:FindFirstChild("Area5Stats"),
+			world2 = LocalPlayer:FindFirstChild("World2Area1Stats"),
 		}
 	end
 
@@ -114,8 +117,8 @@ function M.create(opts)
 			table.insert(lines, "Ascensions: " .. tostring(ascensions.Value))
 		end
 
-		local world2 = LocalPlayer:FindFirstChild("World2Area1Stats")
-		if world2 then
+		if folders.world2 then
+			local world2 = folders.world2
 			local stars = world2:FindFirstChild("Stars")
 			local stardust = world2:FindFirstChild("Stardust")
 			if stars then

@@ -56,11 +56,62 @@ function M.create(opts)
 		blocksGain = function()
 			return fire("Area3/BlocksGain")
 		end,
+		blocksUpgrade = function(id)
+			return fire("Area3/BlocksUpgradeWall", id)
+		end,
+		upgradeTree = function(nodeId, multi)
+			return fire("Area3/UpgradeTree", nodeId, multi)
+		end,
 		ascend = function()
 			return fire("Area3/Ascend", 1)
 		end,
+		dropperUpgrade = function(id)
+			return fire("Area4/DropperUpgradeWall", id)
+		end,
+		fuserUpgrade = function(id)
+			return fire("Area4/FuserUpgradeWall", id)
+		end,
+		researchUpgrade = function(id)
+			return fire("Area4/UpgradeResearch", id)
+		end,
+		spawnCore = function()
+			return fire("Area4/SpawnCore")
+		end,
+		coreGain = function(amount)
+			return fire("Area4/CoreGain", amount)
+		end,
+		particleGain = function(slotIndex)
+			return fire("Area4/ParticleGain", slotIndex)
+		end,
+		tokenGain = function(plantId, potName)
+			return fire("Area5/TokenGain", plantId, potName or "Pot1")
+		end,
+		currentStuds = function(count)
+			return fire("Area1/CurrentStuds", count)
+		end,
+		rogueUpgradeTree = function()
+			return fire("Area3/RogueUpgradeTreeUpgrades")
+		end,
+		plantUpgrade = function(id)
+			return fire("Area5/PlantsUpgradeWall", id)
+		end,
 		starCollect = function(rarity)
 			return fire("World2/Area1/StarCollect", rarity)
+		end,
+		starUpgrade = function(name, buyMax)
+			return fire("World2/Area1/PurchaseWorld2StarUpgrade", name, buyMax)
+		end,
+		stardustUpgrade = function(name, buyMax)
+			return fire("World2/Area1/PurchaseWorld2StardustUpgrade", name, buyMax)
+		end,
+		buildRocket = function()
+			return fire("BuildRocketEvent")
+		end,
+		addXp = function()
+			return fire("AddXpEvent")
+		end,
+		claimGroupReward = function()
+			return fire("ClaimGroupRewardEvent")
 		end,
 		redeemCode = function(code)
 			return fire("RedeemCodeEvent", code)
