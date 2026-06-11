@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "61-sa-diag"
+local GAME_BUILD = "62-sa-mhsonly"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -661,35 +661,19 @@ local function installNetworkHook(): boolean
 		local eventName = args[2]
 		local payload = { table.unpack(args, 3) }
 
-		if Config.SilentAim then
+		if Config.AimDebugger and Config.SilentAim then
 			local part = saFireTarget()
 			if eventName == "Fire" and part then
-				local raw = payload[3]
-				local cf = dbgDecode(raw)
-				if typeof(cf) == "CFrame" then
-					payload[3] = netEncode(net, raw, saAimCf(cf, part))
-					if Config.AimDebugger then
-						local tgt = if part.Parent then part.Parent.Name else "?"
-						print("[GFA-DBG] SA-Fire ->", tgt, dbgShortCf(dbgDecode(payload[3])))
-					end
-				end
+				local tgt = if part.Parent then part.Parent.Name else "?"
+				pcall(function()
+					print("[GFA-DBG] SA-tgt ->", tgt, "| fire passthrough")
+				end)
 			elseif eventName == "Hitcheck" and part then
-				if Config.AimDebugger then
-					pcall(function()
-						local oa, ob, oc, od = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-						print("[GFA-DBG] HC-orig", dbgShort(oa), "|", dbgShort(ob), "|", dbgShort(oc), "|", dbgDumpTable(od))
-					end)
-				end
-				payload = saRewriteHitcheck(net, payload, part)
-				if Config.AimDebugger then
-					pcall(function()
-						local tgt = if part.Parent then part.Parent.Name else "?"
-						local ra, rb, rc, rd = dbgDecode(payload[1]), dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
-						print("[GFA-DBG] HC-rewr ->", tgt, "|", dbgShort(ra), "|", dbgShort(rb), "|", dbgShort(rc), "|", dbgDumpTable(rd))
-					end)
-				end
-			elseif eventName == "Fire" and Config.AimDebugger then
-				print("[GFA-DBG] SA-skip no target")
+				pcall(function()
+					local ob, oc, od = dbgDecode(payload[2]), dbgDecode(payload[3]), dbgDecode(payload[4])
+					local tgt = if part.Parent then part.Parent.Name else "?"
+					print("[GFA-DBG] SA-tgt", tgt, "| HC-nat", dbgShort(ob), "|", dbgShort(oc), "|", dbgDumpTable(od))
+				end)
 			end
 		end
 
@@ -713,7 +697,7 @@ local function installNetworkHook(): boolean
 	ensureSyncDbg()
 	print(
 		"[GFA] network hooked via filtergc",
-		if Config.SilentAim then "| silent aim (Fire+Hitcheck)" else "",
+		if Config.SilentAim then "| silent aim (MouseHitSpot)" else "",
 		if Config.AimDebugger then "| debugger" else ""
 	)
 	return true
@@ -1023,7 +1007,7 @@ UILib.create({
 					title = "Silent Aim",
 					items = {
 						{ type = "toggle", key = "SilentAim", label = "Silent Aim", hud = "Silent Aim" },
-						{ type = "hint", text = "Redirects Fire + Hitcheck to closest enemy. No camera move. Uses FOV + team check." },
+						{ type = "hint", text = "Sets MouseHitSpot to redirect aim. Works in 3rd person. Uses FOV + team check." },
 						{ type = "toggle", key = "AimDebugger", label = "Network Debugger", hud = "Net Debug" },
 						{ type = "hint", text = "Logs Fire / Hitcheck / SA-Fire. Rejoin after toggling hooks." },
 					},
