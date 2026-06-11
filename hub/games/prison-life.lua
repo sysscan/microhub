@@ -890,14 +890,14 @@ local function installGunHooks()
 	end
 
 	if Config.SilentAim and gun.Bullet and not hookedBullet then
-		oldBulletFn = gun.Bullet
-		hookedBullet = hookfunction(gun.Bullet, function(origin, aimPoint, spread, ...)
+		oldBulletFn = hookfunction(gun.Bullet, function(origin, aimPoint, spread, ...)
 			local target = getSilentTarget(origin, Config.SilentAimFOV)
 			if target then
 				aimPoint = target.Position
 			end
 			return oldBulletFn(origin, aimPoint, spread, ...)
 		end)
+		hookedBullet = true
 	end
 end
 
