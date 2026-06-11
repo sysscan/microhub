@@ -11,7 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "46-hitfix"
+local GAME_BUILD = "47-orderfix"
 warn("[GunfightArena] build", GAME_BUILD)
 
 local Config = {
@@ -245,6 +245,10 @@ local function aimPart(char: Model): BasePart?
 		return part
 	end
 	return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+end
+
+local function saAimPart(char)
+	return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head") or char.PrimaryPart
 end
 
 local function aimOrigin(): Vector2
@@ -648,10 +652,6 @@ local sa = {
 }
 local vortexSyncRef = nil
 local vSyncConn = nil
-
-local function saAimPart(char)
-	return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head") or char.PrimaryPart
-end
 
 local function closestEnemyPart()
 	local origin = aimOrigin()
