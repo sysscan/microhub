@@ -48,6 +48,14 @@ local Config = {
 	StripShield = false,
 	FullBright = false,
 	ShowHUD = true,
+	DebugAC = false,
+	DebugRemotes = true,
+	DebugBridgeNet = true,
+	DebugHits = true,
+	DebugKicks = true,
+	DebugOverlay = false,
+	DebugVerbose = false,
+	DebugFilterOnly = false,
 	FOV = 200,
 	AimPart = "Head",
 	ESPEnemyColor = Color3.fromRGB(255, 75, 75),
@@ -373,6 +381,500 @@ local function clearFlightKeys()
 	end
 end
 
+-- Anti-cheat / remote debugging
+local LogService = game:GetService("LogService")
+local TeleportService = game:GetService("TeleportService")
+local StarterGui = game:GetService("StarterGui")
+
+local ACDBG_TAG = "[WarfareAC]"
+local ACDBG_MAX = 250
+local ACDBG_KEYWORDS = {
+	"kick", "ban", "cheat", "anticheat", "anti", "invalid", "hit", "rate", "exploit",
+	"detect", "flag", "violation", "sanity", "validate", "reject", "security", "ac_",
+}
+local ACDBG_BRIDGE_GUESSES = {
+	"HitConfirm", "Damage", "Hit", "Fire", "Bullet", "AntiCheat", "AC", "Kick", "Ban",
+	"Report", "Validate", "Sanity", "Cheat", "Flag", "Violation", "HitRate", "Combat",
+	"Weapon", "Shoot", "Kill", "Death", "Replication", "Replicate",
+}
+local acdbgLog = {}
+local acdbgSeq = 0
+local acdbgWrappedBridges = {}
+local acdbgHookedRemotes = {}
+local acdbgConns = {}
+local acdbgOverlayGui = nil
+local acdbgOverlayLabel = nil
+local acdbgNamecallHook = nil
+local acdbgBridgeNetRef = nil
+local acdbgDescendantConn = nil
+
+local function acdbgKind(value)
+	if typeof then
+		return typeof(value)
+	end
+	return type(value)
+end
+
+local function acdbgSerialize(value, depth)
+	depth = depth or 0
+	if depth > 4 then
+		return "<deep>"
+	end
+	local kind = acdbgKind(value)
+	if kind == "nil" then
+		return "nil"
+	end
+	if kind == "boolean" or kind == "number" then
+		return tostring(value)
+	end
+	if kind == "string" then
+		if #value > 160 then
+			return string.format("%q...", value:sub(1, 160))
+		end
+		return string.format("%q", value)
+	end
+	if kind == "Instance" then
+		return value:GetFullName()
+	end
+	if kind == "Vector3" then
+		return string.format("V3(%.2f,%.2f,%.2f)", value.X, value.Y, value.Z)
+	end
+	if kind == "Vector2" then
+		return string.format("V2(%.2f,%.2f)", value.X, value.Y)
+	end
+	if kind == "CFrame" then
+		local p = value.Position
+		return string.format("CF(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z)
+	end
+	if kind == "EnumItem" then
+		return tostring(value)
+	end
+	if kind == "table" then
+		local parts = {}
+		local count = 0
+		for key, entry in value do
+			count += 1
+			if count > 14 then
+				table.insert(parts, "...")
+				break
+			end
+			table.insert(parts, tostring(key) .. "=" .. acdbgSerialize(entry, depth + 1))
+		end
+		return "{" .. table.concat(parts, ", ") .. "}"
+	end
+	return "<" .. kind .. ">"
+end
+
+local function acdbgSerializeArgs(args)
+	local parts = {}
+	for index = 1, math.min(args.n or #args, 12) do
+		table.insert(parts, acdbgSerialize(args[index]))
+	end
+	if (args.n or #args) > 12 then
+		table.insert(parts, "...")
+	end
+	return table.concat(parts, ", ")
+end
+
+local function acdbgMatchesKeywords(text)
+	local lower = string.lower(text)
+	for _, keyword in ACDBG_KEYWORDS do
+		if lower:find(keyword, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function acdbgPush(category, message, force)
+	if not Config.DebugAC and not force then
+		return
+	end
+	if Config.DebugFilterOnly and not force and not acdbgMatchesKeywords(category .. " " .. message) then
+		return
+	end
+
+	acdbgSeq += 1
+	local entry = {
+		seq = acdbgSeq,
+		t = tick(),
+		category = category,
+		message = message,
+	}
+	table.insert(acdbgLog, entry)
+	while #acdbgLog > ACDBG_MAX do
+		table.remove(acdbgLog, 1)
+	end
+
+	warn(ACDBG_TAG, string.format("[%s] %s", category, message))
+
+	if Config.DebugOverlay and acdbgOverlayLabel then
+		local lines = {}
+		for index = math.max(1, #acdbgLog - 7), #acdbgLog do
+			local row = acdbgLog[index]
+			table.insert(lines, string.format("%d %s: %s", row.seq, row.category, row.message))
+		end
+		acdbgOverlayLabel.Text = table.concat(lines, "\n")
+	end
+end
+
+local function acdbgRemotePath(remote)
+	if not remote or not remote:IsA("Instance") then
+		return tostring(remote)
+	end
+	return remote:GetFullName()
+end
+
+local function acdbgLogRemote(direction, remote, args)
+	if not Config.DebugAC or not Config.DebugRemotes then
+		return
+	end
+	local packed = table.pack(unpack(args))
+	local text = string.format("%s %s | %s", direction, acdbgRemotePath(remote), acdbgSerializeArgs(packed))
+	if Config.DebugVerbose and debug and typeof(debug.info) == "function" then
+		text ..= " | " .. debug.info(3, "slnfa")
+	end
+	acdbgPush("REMOTE", text)
+end
+
+local function acdbgLogBridge(direction, bridgeName, args)
+	if not Config.DebugAC or not Config.DebugBridgeNet then
+		return
+	end
+	local packed = table.pack(unpack(args))
+	acdbgPush("BRIDGE", string.format("%s %s | %s", direction, bridgeName, acdbgSerializeArgs(packed)))
+end
+
+local function acdbgLogKick(source, args)
+	if not Config.DebugAC or not Config.DebugKicks then
+		return
+	end
+	local packed = table.pack(unpack(args))
+	acdbgPush("KICK", string.format("%s | %s", source, acdbgSerializeArgs(packed)), true)
+end
+
+local function acdbgOnHitConfirm(payload)
+	if not Config.DebugAC or not Config.DebugHits then
+		return
+	end
+	local ratio = getRecentHitRatio()
+	local msg = string.format(
+		"HitConfirm %s | hits=%d shots=%d ratio=%.2f",
+		acdbgSerialize(payload),
+		#hitRateRecentHits,
+		#hitRateRecentShots,
+		ratio
+	)
+	acdbgPush("HIT", msg)
+end
+
+local function acdbgOnShot(redirectAim)
+	if not Config.DebugAC or not Config.DebugHits or not Config.DebugVerbose then
+		return
+	end
+	acdbgPush(
+		"SHOT",
+		string.format(
+			"redirect=%s ratio=%.2f hits=%d shots=%d",
+			tostring(redirectAim),
+			getRecentHitRatio(),
+			#hitRateRecentHits,
+			#hitRateRecentShots
+		)
+	)
+end
+
+local function acdbgWrapBridge(bridgeName, bridge)
+	if not bridge or acdbgWrappedBridges[bridge] then
+		return
+	end
+	acdbgWrappedBridges[bridge] = bridgeName
+
+	for methodName in { "Fire", "Invoke", "Send" } do
+		local method = bridge[methodName]
+		if typeof(method) == "function" and not bridge["_acdbg" .. methodName] then
+			bridge["_acdbg" .. methodName] = true
+			local oldMethod = method
+			bridge[methodName] = function(...)
+				acdbgLogBridge("OUT", bridgeName, { ... })
+				return oldMethod(...)
+			end
+		end
+	end
+
+	if typeof(bridge.Connect) == "function" and not bridge._acdbgConnect then
+		bridge._acdbgConnect = true
+		local oldConnect = bridge.Connect
+		bridge.Connect = function(self, callback)
+			if typeof(callback) ~= "function" then
+				return oldConnect(self, callback)
+			end
+			return oldConnect(self, function(...)
+				acdbgLogBridge("IN", bridgeName, { ... })
+				return callback(...)
+			end)
+		end
+	end
+end
+
+local function acdbgHookIncomingRemote(remote)
+	if acdbgHookedRemotes[remote] then
+		return
+	end
+	acdbgHookedRemotes[remote] = true
+
+	if remote:IsA("RemoteEvent") or remote:IsA("UnreliableRemoteEvent") then
+		table.insert(acdbgConns, remote.OnClientEvent:Connect(function(...)
+			acdbgLogRemote("IN", remote, { ... })
+		end))
+	elseif remote:IsA("RemoteFunction") then
+		local oldInvoke = remote.InvokeClient
+		if typeof(oldInvoke) == "function" and not remote._acdbgInvokeClient then
+			remote._acdbgInvokeClient = true
+			remote.InvokeClient = function(self, ...)
+				acdbgLogRemote("IN", remote, { ... })
+				return oldInvoke(self, ...)
+			end
+		end
+	end
+end
+
+local function acdbgScanRemotes(logEach)
+	local remotes = {}
+	for _, descendant in ipairs(game:GetDescendants()) do
+		if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") or descendant:IsA("UnreliableRemoteEvent") then
+			table.insert(remotes, descendant)
+			if Config.DebugAC then
+				acdbgHookIncomingRemote(descendant)
+			end
+		end
+	end
+	table.sort(remotes, function(a, b)
+		return a:GetFullName() < b:GetFullName()
+	end)
+	if logEach then
+		acdbgPush("SCAN", "Found " .. #remotes .. " remotes", true)
+		for _, remote in ipairs(remotes) do
+			acdbgPush("SCAN", remote.ClassName .. " " .. remote:GetFullName(), true)
+		end
+	end
+	return remotes
+end
+
+local function acdbgScanSuspiciousModules()
+	local hits = {}
+	for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
+		if descendant:IsA("ModuleScript") then
+			local lower = string.lower(descendant.Name)
+			if lower:find("anticheat", 1, true)
+				or lower:find("anti", 1, true) and lower:find("cheat", 1, true)
+				or lower:find("validate", 1, true)
+				or lower:find("security", 1, true)
+				or lower:find("sanity", 1, true)
+				or lower:find("kick", 1, true)
+				or lower:find("exploit", 1, true)
+			then
+				table.insert(hits, descendant:GetFullName())
+			end
+		end
+	end
+	table.sort(hits)
+	acdbgPush("SCAN", "Suspicious modules: " .. #hits, true)
+	for _, path in ipairs(hits) do
+		acdbgPush("SCAN", path, true)
+	end
+	return hits
+end
+
+local function acdbgProbeBridges(bridgeNet)
+	if not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" then
+		return
+	end
+	acdbgPush("PROBE", "Probing BridgeNet bridges", true)
+	for _, name in ipairs(ACDBG_BRIDGE_GUESSES) do
+		local ok, bridge = pcall(bridgeNet.ReferenceBridge, name)
+		if ok and bridge then
+			acdbgPush("PROBE", "Bridge exists: " .. name, true)
+			acdbgWrapBridge(name, bridge)
+		end
+	end
+end
+
+local function acdbgInstallBridgeNet(bridgeNet)
+	if not bridgeNet or typeof(bridgeNet.ReferenceBridge) ~= "function" or bridgeNet._acdbgRefHooked then
+		return
+	end
+	acdbgBridgeNetRef = bridgeNet
+	bridgeNet._acdbgRefHooked = true
+	local oldReference = bridgeNet.ReferenceBridge
+	bridgeNet.ReferenceBridge = function(name)
+		local bridge = oldReference(name)
+		if Config.DebugAC and Config.DebugBridgeNet then
+			acdbgWrapBridge(name, bridge)
+			acdbgPush("BRIDGE", "ReferenceBridge(" .. tostring(name) .. ")", true)
+		end
+		return bridge
+	end
+	acdbgProbeBridges(bridgeNet)
+end
+
+local function acdbgEnsureOverlay()
+	if acdbgOverlayGui then
+		acdbgOverlayGui.Enabled = Config.DebugAC and Config.DebugOverlay
+		return
+	end
+	local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
+	acdbgOverlayGui = Instance.new("ScreenGui")
+	acdbgOverlayGui.Name = "MicroHub_WarfareACDebug"
+	acdbgOverlayGui.ResetOnSpawn = false
+	acdbgOverlayGui.IgnoreGuiInset = true
+	acdbgOverlayGui.DisplayOrder = 1000
+	acdbgOverlayGui.Parent = playerGui
+
+	acdbgOverlayLabel = Instance.new("TextLabel")
+	acdbgOverlayLabel.Name = "Log"
+	acdbgOverlayLabel.BackgroundTransparency = 0.35
+	acdbgOverlayLabel.BackgroundColor3 = Color3.fromRGB(8, 10, 14)
+	acdbgOverlayLabel.TextColor3 = Color3.fromRGB(220, 230, 240)
+	acdbgOverlayLabel.TextStrokeTransparency = 0.5
+	acdbgOverlayLabel.Font = Enum.Font.Code
+	acdbgOverlayLabel.TextSize = 13
+	acdbgOverlayLabel.TextXAlignment = Enum.TextXAlignment.Left
+	acdbgOverlayLabel.TextYAlignment = Enum.TextYAlignment.Top
+	acdbgOverlayLabel.Size = UDim2.new(0, 520, 0, 150)
+	acdbgOverlayLabel.Position = UDim2.fromOffset(8, 8)
+	acdbgOverlayLabel.TextWrapped = true
+	acdbgOverlayLabel.Parent = acdbgOverlayGui
+	acdbgOverlayGui.Enabled = Config.DebugAC and Config.DebugOverlay
+end
+
+local function acdbgInstallNamecallHook()
+	if acdbgNamecallHook or typeof(hookmetamethod) ~= "function" or typeof(getnamecallmethod) ~= "function" then
+		return
+	end
+	local wrap = newcclosure
+	if typeof(wrap) ~= "function" then
+		wrap = function(fn)
+			return fn
+		end
+	end
+	local oldNamecall
+	oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+		local method = getnamecallmethod()
+		if Config.DebugAC then
+			if Config.DebugRemotes and (method == "FireServer" or method == "InvokeServer") then
+				if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") or self:IsA("UnreliableRemoteEvent") then
+					acdbgLogRemote("OUT", self, { ... })
+				end
+			end
+			if Config.DebugKicks then
+				if method == "Kick" and self == LocalPlayer then
+					acdbgLogKick("LocalPlayer:Kick", { ... })
+				elseif method == "Teleport" or method == "TeleportToPlaceInstance" then
+					if self == TeleportService then
+						acdbgLogKick("TeleportService:" .. method, { ... })
+					end
+				end
+			end
+		end
+		return oldNamecall(self, ...)
+	end))
+	acdbgNamecallHook = oldNamecall
+	acdbgPush("HOOK", "Installed __namecall remote/kick hook", true)
+end
+
+local function acdbgInstallLogHook()
+	table.insert(acdbgConns, LogService.MessageOut:Connect(function(message, messageType)
+		if not Config.DebugAC then
+			return
+		end
+		if messageType == Enum.MessageType.MessageError or acdbgMatchesKeywords(message) then
+			acdbgPush("LOG", tostring(messageType) .. " | " .. message)
+		end
+	end))
+end
+
+local function acdbgInstallDescendantHook()
+	if acdbgDescendantConn then
+		return
+	end
+	acdbgDescendantConn = game.DescendantAdded:Connect(function(descendant)
+		if not Config.DebugAC then
+			return
+		end
+		if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") or descendant:IsA("UnreliableRemoteEvent") then
+			acdbgHookIncomingRemote(descendant)
+			acdbgPush("SCAN", "New remote: " .. descendant:GetFullName(), true)
+		end
+	end)
+	table.insert(acdbgConns, acdbgDescendantConn)
+end
+
+local acdbgInstalled = false
+local function acdbgInstall()
+	if acdbgInstalled then
+		return
+	end
+	acdbgInstalled = true
+	acdbgInstallNamecallHook()
+	acdbgInstallLogHook()
+	acdbgInstallDescendantHook()
+	acdbgScanRemotes(false)
+	if acdbgBridgeNetRef then
+		acdbgInstallBridgeNet(acdbgBridgeNetRef)
+	end
+	acdbgPush("BOOT", "AC debug hooks installed", true)
+end
+
+local function acdbgSync()
+	if Config.DebugAC then
+		acdbgInstall()
+		acdbgEnsureOverlay()
+		acdbgScanRemotes(false)
+		if acdbgBridgeNetRef then
+			acdbgProbeBridges(acdbgBridgeNetRef)
+		end
+	else
+		if acdbgOverlayGui then
+			acdbgOverlayGui.Enabled = false
+		end
+	end
+end
+
+local function acdbgPrintLog()
+	acdbgPush("DUMP", "Printing " .. #acdbgLog .. " buffered entries", true)
+	for _, entry in ipairs(acdbgLog) do
+		warn(ACDBG_TAG, string.format("%d [%.2f] [%s] %s", entry.seq, entry.t, entry.category, entry.message))
+	end
+end
+
+local function acdbgClearLog()
+	table.clear(acdbgLog)
+	acdbgSeq = 0
+	if acdbgOverlayLabel then
+		acdbgOverlayLabel.Text = ""
+	end
+	acdbgPush("DUMP", "Log cleared", true)
+end
+
+local function acdbgDumpHitStats()
+	acdbgPush(
+		"STAT",
+		string.format(
+			"hits=%d shots=%d ratio=%.2f window=%.1fs",
+			#hitRateRecentHits,
+			#hitRateRecentShots,
+			getRecentHitRatio(),
+			HIT_RATE_WINDOW
+		),
+		true
+	)
+end
+
+local genv = if typeof(getgenv) == "function" then getgenv() else _G
+genv.__WarfareACLog = acdbgLog
+genv.__WarfareACDump = acdbgPrintLog
+
 local UILib = shared.__MicroHubUILib
 if typeof(UILib) ~= "table" or typeof(UILib.create) ~= "function" then
 	error("MicroHub UI library not loaded — run hub/loader.lua", 0)
@@ -493,9 +995,46 @@ local HubUI = UILib.create({
 						},
 					},
 				},
+				{
+					title = "AC DEBUG",
+					items = {
+						{ type = "toggle", key = "DebugAC", label = "AC Debug", hud = "AC Debug" },
+						{ type = "toggle", key = "DebugRemotes", label = "Log Remotes", hud = "Dbg Remote" },
+						{ type = "toggle", key = "DebugBridgeNet", label = "Log Bridges", hud = "Dbg Bridge" },
+						{ type = "toggle", key = "DebugHits", label = "Log Hits", hud = "Dbg Hits" },
+						{ type = "toggle", key = "DebugKicks", label = "Log Kicks", hud = "Dbg Kicks" },
+						{ type = "toggle", key = "DebugOverlay", label = "On-Screen Log", hud = "Dbg Overlay" },
+						{ type = "toggle", key = "DebugVerbose", label = "Verbose", hud = "Dbg Verbose" },
+						{ type = "toggle", key = "DebugFilterOnly", label = "AC Keywords Only", hud = "Dbg Filter" },
+						{ type = "hint", text = "Output: F9 console + getgenv().__WarfareACLog. Enable before fighting to catch kick traffic." },
+						{ type = "button", id = "acDumpRemotes", label = "Dump Remotes", onClick = function()
+							acdbgScanRemotes(true)
+						end },
+						{ type = "button", id = "acDumpModules", label = "Scan AC Modules", onClick = function()
+							acdbgScanSuspiciousModules()
+						end },
+						{ type = "button", id = "acProbeBridges", label = "Probe Bridges", onClick = function()
+							local ok, bridgeNet = pcall(require, Modules:WaitForChild("BridgeNet2"))
+							if ok then
+								acdbgInstallBridgeNet(bridgeNet)
+								acdbgProbeBridges(bridgeNet)
+							else
+								acdbgPush("PROBE", "BridgeNet2 require failed: " .. tostring(bridgeNet), true)
+							end
+						end },
+						{ type = "button", id = "acHitStats", label = "Hit Stats", onClick = acdbgDumpHitStats },
+						{ type = "button", id = "acPrintLog", label = "Print Log", onClick = acdbgPrintLog },
+						{ type = "button", id = "acClearLog", label = "Clear Log", onClick = acdbgClearLog },
+					},
+				},
 			},
 		},
 	},
+	onToggle = function(key, value)
+		if string.sub(key, 1, 5) == "Debug" then
+			acdbgSync()
+		end
+	end,
 	onMenuVisible = function(visible)
 		if visible and Config.Flight then
 			clearFlightKeys()
@@ -2665,13 +3204,16 @@ local function installCombatHooks()
 
 	local ok, bridgeNet = pcall(require, Modules:WaitForChild("BridgeNet2"))
 	if ok and bridgeNet and bridgeNet.ReferenceBridge then
+		acdbgInstallBridgeNet(bridgeNet)
 		local confirmBridge = bridgeNet.ReferenceBridge("HitConfirm")
 		if confirmBridge and confirmBridge.Connect then
+			acdbgWrapBridge("HitConfirm", confirmBridge)
 			confirmBridge:Connect(function(payload)
 				if typeof(payload) ~= "table" then
 					return
 				end
 				recordHitRateHit()
+				acdbgOnHitConfirm(payload)
 				if not Config.HitMarkers then
 					return
 				end
@@ -3152,6 +3694,7 @@ local function installSimulateHook(simulateMethod, label, applyAim)
 			if applyAim and not checkcaller() then
 				recordHitRateShot()
 				redirectAim = shouldRedirectAimShot()
+				acdbgOnShot(redirectAim)
 				local shotAimPart = nil
 				if redirectAim and (Config.BulletTP or Config.SilentAim or killAllForcedTarget) then
 					shotTarget = getActiveAimTarget()
@@ -3184,3 +3727,26 @@ end
 
 installSimulateHook(BulletSimulator.Simulate, "BulletSimulator.Simulate", true)
 installSimulateHook(BulletSimulator.CosmeticSimulate, "BulletSimulator.CosmeticSimulate", false)
+
+task.defer(acdbgInstall)
+task.defer(acdbgSync)
+
+local function warfareUnload()
+	for _, conn in ipairs(acdbgConns) do
+		pcall(function()
+			conn:Disconnect()
+		end)
+	end
+	table.clear(acdbgConns)
+	if acdbgOverlayGui then
+		acdbgOverlayGui:Destroy()
+		acdbgOverlayGui = nil
+		acdbgOverlayLabel = nil
+	end
+	if acdbgDescendantConn then
+		acdbgDescendantConn:Disconnect()
+		acdbgDescendantConn = nil
+	end
+end
+
+genv.__WarfareUnload = warfareUnload

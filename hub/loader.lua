@@ -237,8 +237,12 @@ local function unloadOld()
 	if typeof(genv.__GunfightArenaUnload) == "function" then
 		pcall(genv.__GunfightArenaUnload)
 	end
+	if typeof(genv.__WarfareUnload) == "function" then
+		pcall(genv.__WarfareUnload)
+	end
 	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
+	genv.__WarfareUnload = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
 			genv.Library:Exit()
