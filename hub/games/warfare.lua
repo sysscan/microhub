@@ -19,6 +19,8 @@ local Config = {
 	Tracer = true,
 	ESP = true,
 	ESPAllies = true,
+	ESPSnaplines = false,
+	ESPStatusTags = true,
 	FOVCircle = false,
 	NoRecoil = false,
 	StableAim = false,
@@ -356,6 +358,8 @@ local HubUI = UILib.create({
 					items = {
 						{ type = "toggle", key = "ESP", label = "ESP", hud = "ESP" },
 						{ type = "toggle", key = "ESPAllies", label = "ESP Allies", hud = "ESP Allies" },
+						{ type = "toggle", key = "ESPSnaplines", label = "Snaplines", hud = "Snaplines" },
+						{ type = "toggle", key = "ESPStatusTags", label = "Status Tags", hud = "Status Tags" },
 						{ type = "toggle", key = "Tracer", label = "Tracer", hud = "Tracer" },
 						{ type = "toggle", key = "FOVCircle", label = "FOV Circle", hud = "FOV Circle" },
 						{ type = "toggle", key = "ThermalESP", label = "Thermal", hud = "Thermal" },
@@ -632,27 +636,93 @@ LocalPlayer.CharacterAdded:Connect(function(character)
 	end
 end)
 
--- ESP
+-- ESP (Prison Life v2)
 local espCache = {}
 local droneEspCache = {}
 local teamNameCache = {}
 local espWasEnabled = false
+local espNeedsHide = false
+local ESP_MAX_DIST = 2000
 local cameraPosCache = Vector3.zero
 local jamGuardConn = nil
 local jamGuardTarget = nil
 local rapidFireTool = nil
 local rapidFireBaseInterval = nil
 
+local ESP_DIM = Color3.fromRGB(148, 156, 168)
+
+local function mkEspDraw(kind, props)
+	local draw = createDrawing(kind)
+	if not draw then
+		return nil
+	end
+	for key, value in props do
+		draw[key] = value
+	end
+	draw.Visible = false
+	return draw
+end
+
+local function lerpEspColor(a, b, t)
+	return Color3.new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t)
+end
+
+local function espHpColor(ratio)
+	if ratio > 0.5 then
+		return lerpEspColor(Color3.fromRGB(255, 220, 60), Color3.fromRGB(60, 230, 120), (ratio - 0.5) * 2)
+	end
+	return lerpEspColor(Color3.fromRGB(255, 50, 50), Color3.fromRGB(255, 220, 60), ratio * 2)
+end
+
+local function formatEspDistance(studs)
+	if studs >= 1000 then
+		return string.format("%.1fk", studs / 1000)
+	end
+	return string.format("%d", math.floor(studs))
+end
+
+local function getWeaponName(character)
+	local tool = character:FindFirstChildWhichIsA("Tool")
+	return tool and tool.Name or nil
+end
+
+local function espBox2d(character, root)
+	if not character.Parent or not root.Parent then
+		return nil
+	end
+	local head = character:FindFirstChild("Head")
+	if head and head:IsA("BasePart") then
+		local topPos = head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.4, 0)
+		local botPos = root.Position - Vector3.new(0, 2.8, 0)
+		local top, topOn = Camera:WorldToViewportPoint(topPos)
+		local bot, botOn = Camera:WorldToViewportPoint(botPos)
+		if top.Z > 0 and bot.Z > 0 and (topOn or botOn) then
+			local h = math.max(14, bot.Y - top.Y)
+			local w = h * 0.55
+			return top.X - w * 0.5, top.Y, w, h
+		end
+	end
+	local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
+	if onScreen and pos.Z > 0 then
+		return pos.X - 16, pos.Y - 30, 32, 60
+	end
+	return nil
+end
+
 local function hideEspEntry(entry)
-	entry.Box.Visible = false
-	entry.Name.Visible = false
-	entry.Team.Visible = false
-	entry.HealthText.Visible = false
-	entry.HealthBarBg.Visible = false
-	entry.HealthBarFill.Visible = false
-	entry.Distance.Visible = false
-	entry.Snapline.Visible = false
-	entry.Head.Visible = false
+	for _, obj in entry do
+		pcall(function()
+			obj.Visible = false
+		end)
+	end
+end
+
+local function destroyEspEntry(entry)
+	for _, obj in entry do
+		pcall(function()
+			obj:Remove()
+		end)
+	end
 end
 
 local function removeEsp(player)
@@ -660,15 +730,7 @@ local function removeEsp(player)
 	if not entry then
 		return
 	end
-	entry.Box:Remove()
-	entry.Name:Remove()
-	entry.Team:Remove()
-	entry.HealthText:Remove()
-	entry.HealthBarBg:Remove()
-	entry.HealthBarFill:Remove()
-	entry.Distance:Remove()
-	entry.Snapline:Remove()
-	entry.Head:Remove()
+	destroyEspEntry(entry)
 	espCache[player] = nil
 end
 
@@ -690,68 +752,23 @@ local function ensureEsp(player)
 		return espCache[player]
 	end
 
-	local box = createDrawing("Square")
-	box.Filled = false
-	box.Thickness = 1.5
-	box.Visible = false
-
-	local name = createDrawing("Text")
-	name.Size = 14
-	name.Outline = true
-	name.Center = true
-	name.Visible = false
-
-	local team = createDrawing("Text")
-	team.Size = 12
-	team.Outline = true
-	team.Center = true
-	team.Visible = false
-
-	local healthText = createDrawing("Text")
-	healthText.Size = 12
-	healthText.Outline = true
-	healthText.Center = true
-	healthText.Visible = false
-
-	local healthBarBg = createDrawing("Square")
-	healthBarBg.Filled = true
-	healthBarBg.Thickness = 1
-	healthBarBg.Color = Color3.fromRGB(30, 30, 30)
-	healthBarBg.Visible = false
-
-	local healthBarFill = createDrawing("Square")
-	healthBarFill.Filled = true
-	healthBarFill.Thickness = 1
-	healthBarFill.Visible = false
-
-	local distance = createDrawing("Text")
-	distance.Size = 12
-	distance.Outline = true
-	distance.Center = true
-	distance.Visible = false
-
-	local snapline = createDrawing("Line")
-	snapline.Thickness = 1
-	snapline.Visible = false
-
-	local head = createDrawing("Circle")
-	head.Filled = true
-	head.NumSides = 12
-	head.Radius = 3
-	head.Visible = false
-
-	espCache[player] = {
-		Box = box,
-		Name = name,
-		Team = team,
-		HealthText = healthText,
-		HealthBarBg = healthBarBg,
-		HealthBarFill = healthBarFill,
-		Distance = distance,
-		Snapline = snapline,
-		Head = head,
+	local entry = {
+		boxOutline = mkEspDraw("Square", { Filled = false, Thickness = 3, Color = Color3.new(0, 0, 0), Transparency = 0.6 }),
+		box = mkEspDraw("Square", { Filled = false, Thickness = 1.4 }),
+		hpBarBg = mkEspDraw("Square", { Filled = true, Thickness = 0, Color = Color3.fromRGB(20, 20, 20), Transparency = 0.3 }),
+		hpBar = mkEspDraw("Square", { Filled = true, Thickness = 0 }),
+		name = mkEspDraw("Text", { Size = 14, Center = true, Outline = true, Font = 2 }),
+		weapon = mkEspDraw("Text", { Size = 11, Center = true, Outline = true, Font = 2, Color = Color3.fromRGB(200, 200, 200) }),
+		dist = mkEspDraw("Text", { Size = 11, Center = true, Outline = true, Font = 2 }),
+		snapline = mkEspDraw("Line", { Thickness = 1, Transparency = 0.4 }),
 	}
-	return espCache[player]
+	if not entry.box or not entry.name then
+		destroyEspEntry(entry)
+		return nil
+	end
+
+	espCache[player] = entry
+	return entry
 end
 
 local function ensureDroneEsp(model)
@@ -790,6 +807,20 @@ local function getCachedTeamName(player)
 	return name
 end
 
+local function espStatusSuffix(player, character)
+	if not Config.ESPStatusTags then
+		return ""
+	end
+	local teamName = getCachedTeamName(player)
+	if teamName then
+		return "[" .. teamName .. "]"
+	end
+	if character:GetAttribute("Downed") then
+		return "[Downed]"
+	end
+	return ""
+end
+
 local function getBoundingBox2D(character)
 	local cf, size = character:GetBoundingBox()
 	local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
@@ -821,7 +852,7 @@ local function getBoundingBox2D(character)
 	return Vector2.new(minX, minY), Vector2.new(maxX - minX, maxY - minY)
 end
 
-local function drawPlayerEsp(player, character, humanoid)
+local function drawPlayerEsp(player, character, humanoid, root, camPos, snapFrom)
 	local relation = getTeamRelation(player)
 	if relation == "Ally" and not Config.ESPAllies then
 		local entry = espCache[player]
@@ -831,9 +862,17 @@ local function drawPlayerEsp(player, character, humanoid)
 		return
 	end
 
-	local color = getTeamColor(relation)
-	local topLeft, boxSize = getBoundingBox2D(character)
-	if not topLeft then
+	local dist = (root.Position - camPos).Magnitude
+	if dist > ESP_MAX_DIST then
+		local entry = espCache[player]
+		if entry then
+			hideEspEntry(entry)
+		end
+		return
+	end
+
+	local x, y, w, h = espBox2d(character, root)
+	if not x then
 		local entry = espCache[player]
 		if entry then
 			hideEspEntry(entry)
@@ -845,75 +884,70 @@ local function drawPlayerEsp(player, character, humanoid)
 	if not entry then
 		return
 	end
-	local centerX = topLeft.X + boxSize.X * 0.5
-	local bottomY = topLeft.Y + boxSize.Y
 
-	entry.Box.Position = topLeft
-	entry.Box.Size = boxSize
-	entry.Box.Color = color
-	entry.Box.Visible = true
+	local accent = getTeamColor(relation)
+	local cx = x + w * 0.5
+	local bottom = y + h
+	local ratio = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+	local fadeAlpha = 1 - math.clamp((dist - 800) / 1200, 0, 0.6)
 
-	entry.Name.Position = Vector2.new(centerX, topLeft.Y - 16)
-	entry.Name.Text = player.DisplayName
-	entry.Name.Color = color
-	entry.Name.Visible = true
+	entry.boxOutline.Position = Vector2.new(x - 1, y - 1)
+	entry.boxOutline.Size = Vector2.new(w + 2, h + 2)
+	entry.boxOutline.Transparency = 0.55 * fadeAlpha
+	entry.boxOutline.Visible = true
 
-	local teamName = getCachedTeamName(player)
-	entry.Team.Position = Vector2.new(centerX, topLeft.Y - 30)
-	entry.Team.Text = (teamName or relation) .. " (" .. relation .. ")"
-	entry.Team.Color = color
-	entry.Team.Visible = true
+	entry.box.Position = Vector2.new(x, y)
+	entry.box.Size = Vector2.new(w, h)
+	entry.box.Color = accent
+	entry.box.Transparency = (1 - fadeAlpha) * 0.3
+	entry.box.Visible = true
 
-	local health = humanoid.Health
-	local maxHealth = humanoid.MaxHealth > 0 and humanoid.MaxHealth or 100
-	local healthRatio = math.clamp(health / maxHealth, 0, 1)
-	local barWidth = math.max(36, boxSize.X)
-	local barHeight = 4
-	local barX = centerX - barWidth * 0.5
-	local barY = bottomY + 4
+	local barH = math.clamp(h, 8, 200)
+	local barW = 3
+	local barX = x - 6
+	local barY = y
 
-	entry.HealthBarBg.Position = Vector2.new(barX, barY)
-	entry.HealthBarBg.Size = Vector2.new(barWidth, barHeight)
-	entry.HealthBarBg.Visible = true
+	entry.hpBarBg.Position = Vector2.new(barX - 1, barY - 1)
+	entry.hpBarBg.Size = Vector2.new(barW + 2, barH + 2)
+	entry.hpBarBg.Visible = true
 
-	entry.HealthBarFill.Position = Vector2.new(barX, barY)
-	entry.HealthBarFill.Size = Vector2.new(barWidth * healthRatio, barHeight)
-	entry.HealthBarFill.Color = Color3.fromRGB(255 * (1 - healthRatio), 255 * healthRatio, 60)
-	entry.HealthBarFill.Visible = true
+	local fillH = math.max(1, barH * ratio)
+	entry.hpBar.Position = Vector2.new(barX, barY + (barH - fillH))
+	entry.hpBar.Size = Vector2.new(barW, fillH)
+	entry.hpBar.Color = espHpColor(ratio)
+	entry.hpBar.Visible = true
 
-	entry.HealthText.Position = Vector2.new(centerX, barY + 6)
-	entry.HealthText.Text = string.format("%d / %d", math.floor(health), math.floor(maxHealth))
-	entry.HealthText.Color = color
-	entry.HealthText.Visible = true
-
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root then
-		local dist = (root.Position - cameraPosCache).Magnitude
-		entry.Distance.Position = Vector2.new(centerX, barY + 20)
-		entry.Distance.Text = string.format("%dm", math.floor(dist))
-		entry.Distance.Color = color
-		entry.Distance.Visible = true
+	local suffix = espStatusSuffix(player, character)
+	local nameStr = player.DisplayName
+	if suffix ~= "" then
+		nameStr = nameStr .. " " .. suffix
 	end
+	entry.name.Position = Vector2.new(cx, y - 16)
+	entry.name.Text = nameStr
+	entry.name.Color = accent
+	entry.name.Visible = true
 
-	local viewport = Camera.ViewportSize
-	entry.Snapline.From = Vector2.new(viewport.X * 0.5, viewport.Y)
-	entry.Snapline.To = Vector2.new(centerX, bottomY)
-	entry.Snapline.Color = color
-	entry.Snapline.Visible = true
+	local wepName = getWeaponName(character)
+	entry.weapon.Position = Vector2.new(cx, bottom + 2)
+	entry.weapon.Text = wepName or ""
+	entry.weapon.Visible = wepName ~= nil
 
-	local head = character:FindFirstChild("Head")
-	if head then
-		local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position)
-		if headOnScreen and headPos.Z > 0 then
-			entry.Head.Position = Vector2.new(headPos.X, headPos.Y)
-			entry.Head.Color = color
-			entry.Head.Visible = true
-		else
-			entry.Head.Visible = false
-		end
-	else
-		entry.Head.Visible = false
+	local distStr = formatEspDistance(dist) .. "m"
+	if ratio < 1 then
+		distStr = distStr .. " | " .. math.floor(humanoid.Health) .. "hp"
 	end
+	entry.dist.Position = Vector2.new(cx, bottom + (if wepName then 14 else 2))
+	entry.dist.Text = distStr
+	entry.dist.Color = ESP_DIM
+	entry.dist.Visible = true
+
+	if snapFrom then
+		entry.snapline.From = snapFrom
+		entry.snapline.To = Vector2.new(cx, bottom + 1)
+		entry.snapline.Color = accent
+		entry.snapline.Transparency = 0.5 * fadeAlpha
+	end
+	entry.snapline.Visible = Config.ESPSnaplines and snapFrom ~= nil
 end
 
 local function updateDroneESP()
@@ -989,14 +1023,25 @@ local function updateESP()
 		return
 	end
 	if not Config.ESP then
-		for _, entry in pairs(espCache) do
-			hideEspEntry(entry)
+		if espNeedsHide then
+			for player, entry in pairs(espCache) do
+				destroyEspEntry(entry)
+				espCache[player] = nil
+			end
+			espNeedsHide = false
 		end
 		updateDroneESP()
 		return
 	end
+	espNeedsHide = true
 
+	cameraPosCache = Camera.CFrame.Position
+	local vpSize = Camera.ViewportSize
+	local snapFrom = if Config.ESPSnaplines
+		then Vector2.new(vpSize.X * 0.5, vpSize.Y)
+		else nil
 	local activePlayers = {}
+
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player == LocalPlayer then
 			continue
@@ -1004,7 +1049,8 @@ local function updateESP()
 
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if not isPlayerInCombat(player) then
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not isPlayerInCombat(player) or not humanoid or not root then
 			local entry = espCache[player]
 			if entry then
 				hideEspEntry(entry)
@@ -1013,7 +1059,7 @@ local function updateESP()
 		end
 
 		activePlayers[player] = true
-		drawPlayerEsp(player, character, humanoid)
+		drawPlayerEsp(player, character, humanoid, root, cameraPosCache, snapFrom)
 	end
 
 	for player in pairs(espCache) do

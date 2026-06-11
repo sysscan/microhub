@@ -20,7 +20,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-local GAME_BUILD = "7-vape-port-fix4"
+local GAME_BUILD = "8-vape-trim"
 warn("[PrisonLife] build", GAME_BUILD)
 
 local MAX_SAFE_WALKSPEED = 24
@@ -33,6 +33,9 @@ local TeamNeutral = Teams:FindFirstChild("Neutral")
 
 local HEAL_ITEMS = { Breakfast = true, Lunch = true, Dinner = true }
 local GUN_PRIORITY = { M4A1 = 1, ["AK-47"] = 1, MP5 = 1, FAL = 1, ["Remington 870"] = 2, M9 = 3, Revolver = 4 }
+local PICKUP_WEAPON_OPTIONS = { "MP5", "Remington 870", "AK-47", "M9", "M4A1", "FAL", "Taser" }
+local DEFAULT_HIT_SOUNDS = { "rbxassetid://12222216" }
+local DEFAULT_KILL_SOUNDS = { "rbxassetid://12222235" }
 
 local TEAM_COLOR = {
 	Inmate = "Bright orange",
@@ -53,12 +56,8 @@ local Config = {
 	ArrestHandCheck = true,
 	ArrestInmates = true,
 	ArrestCriminals = true,
-	GunMods = false,
-	GunNoSpread = true,
-	GunFireRate = 100,
-	GunAutomatic = false,
+	AutoArrestCooldownBar = false,
 	SilentAim = false,
-	SilentAimFOV = 150,
 	SilentAimHead = true,
 	SilentAimTeamCheck = true,
 	SilentAimWallCheck = true,
@@ -68,6 +67,9 @@ local Config = {
 	SilentAimHeadshotChance = 65,
 	SilentAimWallbang = false,
 	SilentAimRangeCircle = false,
+	SilentAimCircleColor = Color3.fromRGB(255, 255, 255),
+	SilentAimCircleTransparency = 0.5,
+	SilentAimCircleFilled = false,
 	AutoReload = false,
 	AutoReloadSwap = false,
 	AutoFire = false,
@@ -91,6 +93,10 @@ local Config = {
 	FullBright = false,
 	KillNotify = false,
 	C4ESP = true,
+	C4ESPFillColor = Color3.fromRGB(255, 72, 72),
+	C4ESPOutlineColor = Color3.fromRGB(255, 200, 80),
+	C4ESPFillTransparency = 0.5,
+	C4ESPOutlineTransparency = 0.2,
 	ESP = true,
 	ESPAllies = true,
 	ESPSnaplines = false,
@@ -111,15 +117,30 @@ local Config = {
 	BulletTracerLifetime = 0.2,
 	BulletTracerFade = true,
 	BulletTracerColor = Color3.fromRGB(255, 200, 80),
+	BulletTracerMaterial = "SmoothPlastic",
 	DamageIndicator = false,
+	DamageIndicatorColor = Color3.fromRGB(255, 72, 72),
 	HitSound = false,
+	HitSoundVolume = 1,
+	HitSoundPitchShift = false,
 	KillSound = false,
+	KillSoundVolume = 1,
+	KillSoundPitchShift = false,
 	Viewmodel = false,
 	ViewmodelDepth = 3,
 	ViewmodelHorizontal = 2,
 	ViewmodelVertical = -1.5,
 	ViewmodelSway = true,
+	ViewmodelForceField = false,
+	ViewmodelForceFieldColor = Color3.fromRGB(120, 200, 255),
 	Crosshair = false,
+	CrosshairImage = "",
+	GuardPickup1 = "MP5",
+	GuardPickup2 = "Remington 870",
+	PrisonerPickup1 = "MP5",
+	PrisonerPickup2 = "Remington 870",
+	CriminalPickup1 = "AK-47",
+	CriminalPickup2 = "Remington 870",
 }
 
 local UILib = shared.__MicroHubUILib
@@ -165,15 +186,14 @@ local gun = {
 	Bullet = nil,
 	Equip = nil,
 }
-local gunDataBackup: { [string]: any }? = nil
-local gunDataRef: any = nil
 local hookedShoot: any = nil
 local hookedBullet: any = nil
-local hookedEquip: any = nil
 local oldShootFn: any = nil
 local oldBulletFn: any = nil
-local oldEquipFn: any = nil
-local toolAttrBackup: { [Instance]: { [string]: any } } = {}
+local hitSoundDebounce: thread? = nil
+local arrestCdHolder: Frame? = nil
+local arrestCdFrame: Frame? = nil
+local arrestCdLabel: TextLabel? = nil
 local pickupSeen: { [Instance]: boolean } = {}
 local spawnTimes: { [Model]: number } = {}
 
@@ -653,20 +673,87 @@ local function flagCheater(player: Player, flagType: string, limit: number)
 		pcall(function()
 			StarterGui:SetCore("SendNotification", {
 				Title = "Cheat Detector",
-				Text = player.Name .. " may be cheating (" .. flagType .. ")",
-				Duration = 8,
+				Text = "This player may be cheating! (" .. flagType .. "): " .. player.Name,
+				Duration = 60,
 			})
 		end)
 	end
 end
 
-local function playSoundId(soundId: string, volume: number)
+local function playSoundId(soundId: string, volume: number, pitchShift: boolean?)
 	local sound = Instance.new("Sound")
 	sound.SoundId = soundId
 	sound.Volume = volume
+	if pitchShift then
+		sound.PlaybackSpeed = 1 + ((0.5 - math.random()) / 10)
+	end
 	sound.PlayOnRemove = true
 	sound.Parent = workspace
 	sound:Destroy()
+end
+
+local function rebuildSortedPickups()
+	sortedPickups.Guard = { [1] = Config.GuardPickup1, [2] = Config.GuardPickup2 }
+	sortedPickups.Prisoner = { [1] = Config.PrisonerPickup1, [2] = Config.PrisonerPickup2 }
+	sortedPickups.Criminal = { [1] = Config.CriminalPickup1, [2] = Config.CriminalPickup2 }
+end
+
+local function syncArrestCooldownBar(enabled: boolean)
+	if not enabled then
+		if arrestCdHolder then
+			arrestCdHolder:Destroy()
+			arrestCdHolder = nil
+			arrestCdFrame = nil
+			arrestCdLabel = nil
+		end
+		return
+	end
+	if arrestCdHolder then
+		return
+	end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "MicroHubPL_ArrestCD"
+	gui.ResetOnSpawn = false
+	gui.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
+	arrestCdHolder = Instance.new("Frame")
+	arrestCdHolder.Name = "Holder"
+	arrestCdHolder.Visible = false
+	arrestCdHolder.BorderSizePixel = 0
+	arrestCdHolder.BackgroundTransparency = 0.7
+	arrestCdHolder.AnchorPoint = Vector2.new(0.5, 0)
+	arrestCdHolder.BackgroundColor3 = Color3.new(1, 1, 1)
+	arrestCdHolder.Size = UDim2.new(0.1, 0, 0, 5)
+	arrestCdHolder.Position = UDim2.fromScale(0.5, 0.55)
+	arrestCdHolder.Parent = gui
+	arrestCdFrame = Instance.new("Frame")
+	arrestCdFrame.BorderSizePixel = 0
+	arrestCdFrame.BackgroundTransparency = 0.3
+	arrestCdFrame.BackgroundColor3 = Color3.new(1, 1, 1)
+	arrestCdFrame.Size = UDim2.new(1, -2, 1, -2)
+	arrestCdFrame.Position = UDim2.fromOffset(1, 1)
+	arrestCdFrame.Parent = arrestCdHolder
+	arrestCdLabel = Instance.new("TextLabel")
+	arrestCdLabel.Size = UDim2.new(1, 0, 0, 14)
+	arrestCdLabel.Position = UDim2.fromOffset(0, 10)
+	arrestCdLabel.BackgroundTransparency = 1
+	arrestCdLabel.TextColor3 = Color3.new(1, 1, 1)
+	arrestCdLabel.TextScaled = true
+	arrestCdLabel.TextStrokeTransparency = 0
+	arrestCdLabel.Font = Enum.Font.Arial
+	arrestCdLabel.Parent = arrestCdHolder
+end
+
+local function updateArrestCooldownBar()
+	if not Config.AutoArrestCooldownBar or not arrestCdHolder or not arrestCdFrame or not arrestCdLabel then
+		return
+	end
+	local onCooldown = arrestCooldown > os.clock()
+	arrestCdHolder.Visible = onCooldown
+	if onCooldown then
+		local diff = arrestCooldown - os.clock()
+		arrestCdFrame.Size = UDim2.new(math.clamp(diff / 7, 0, 1), -2, 1, -2)
+		arrestCdLabel.Text = string.format("%.1fs", diff)
+	end
 end
 
 local function getRelation(player: Player, char: Model): string
@@ -1197,81 +1284,6 @@ local function getGunData()
 	return nil
 end
 
-local function modifyGunData()
-	local data = getGunData()
-	if not data or not Config.GunMods then
-		return
-	end
-	if gunDataRef ~= data then
-		gunDataRef = data
-		gunDataBackup = table.clone(data)
-	end
-	if not gunDataBackup then
-		return
-	end
-
-	if gunDataBackup.SpreadRadius ~= nil then
-		data.SpreadRadius = Config.GunNoSpread and 0 or gunDataBackup.SpreadRadius
-	end
-	if gunDataBackup.FireRate ~= nil then
-		data.FireRate = gunDataBackup.FireRate * (Config.GunFireRate / 100)
-	end
-	if gunDataBackup.AutoFire ~= nil then
-		data.AutoFire = Config.GunAutomatic or gunDataBackup.AutoFire
-	end
-end
-
-local function patchToolGunAttributes(tool: Instance)
-	if not Config.GunMods or not tool:IsA("Tool") or not tool:GetAttribute("FireRate") then
-		return
-	end
-	if not toolAttrBackup[tool] then
-		toolAttrBackup[tool] = {
-			SpreadRadius = tool:GetAttribute("SpreadRadius"),
-			FireRate = tool:GetAttribute("FireRate"),
-			AutoFire = tool:GetAttribute("AutoFire"),
-		}
-	end
-	local backup = toolAttrBackup[tool]
-	if Config.GunNoSpread and backup.SpreadRadius ~= nil then
-		tool:SetAttribute("SpreadRadius", 0)
-	end
-	if backup.FireRate then
-		tool:SetAttribute("FireRate", backup.FireRate * (Config.GunFireRate / 100))
-	end
-	if Config.GunAutomatic then
-		tool:SetAttribute("AutoFire", true)
-	end
-end
-
-local function patchAllGunTools()
-	if not Config.GunMods then
-		return
-	end
-	local char = LocalPlayer.Character
-	if char then
-		for _, child in char:GetChildren() do
-			patchToolGunAttributes(child)
-		end
-	end
-	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-	if backpack then
-		for _, child in backpack:GetChildren() do
-			patchToolGunAttributes(child)
-		end
-	end
-end
-
-local function restoreGunData()
-	if gunDataRef and gunDataBackup then
-		for key, value in gunDataBackup do
-			gunDataRef[key] = value
-		end
-	end
-	gunDataRef = nil
-	gunDataBackup = nil
-end
-
 local function hookSilentBullet(...)
 	local args = table.pack(...)
 	local origin = args[1]
@@ -1327,15 +1339,6 @@ local function installGunHooks()
 		return
 	end
 
-	if Config.GunMods and gun.Equip and not hookedEquip then
-		oldEquipFn = hookfunction(gun.Equip, function(...)
-			local res = table.pack(oldEquipFn(...))
-			modifyGunData()
-			return table.unpack(res, 1, res.n)
-		end)
-		hookedEquip = true
-	end
-
 	if Config.AutoReload and gun.Shoot and not hookedShoot then
 		oldShootFn = hookfunction(gun.Shoot, function(...)
 			local res = table.pack(oldShootFn(...))
@@ -1382,16 +1385,6 @@ local function removeGunHooks()
 		hookedShoot = nil
 		oldShootFn = nil
 	end
-	if hookedEquip and oldEquipFn and gun.Equip then
-		if typeof(restorefunction) == "function" then
-			restorefunction(gun.Equip)
-		else
-			hookfunction(gun.Equip, oldEquipFn)
-		end
-		hookedEquip = nil
-		oldEquipFn = nil
-	end
-	restoreGunData()
 end
 
 local function tryAutoFire()
@@ -1433,11 +1426,8 @@ local autoFireCooldown = 0
 
 local function refreshGunFeatures()
 	removeGunHooks()
-	if Config.GunMods or Config.SilentAim or Config.AutoReload then
+	if Config.SilentAim or Config.AutoReload then
 		installGunHooks()
-	end
-	if Config.GunMods then
-		modifyGunData()
 	end
 end
 
@@ -1457,6 +1447,7 @@ local function runKillaura()
 end
 
 local function runAutoArrest()
+	updateArrestCooldownBar()
 	if not Config.AutoArrest or os.clock() < arrestCooldown then
 		return
 	end
@@ -1494,6 +1485,13 @@ local function runAutoArrest()
 		end)
 		if ok and arrested then
 			arrestCooldown = os.clock() + 7
+			pcall(function()
+				StarterGui:SetCore("SendNotification", {
+					Title = "Auto Arrest",
+					Text = "Arrested " .. player.Name,
+					Duration = 5,
+				})
+			end)
 			break
 		end
 	end
@@ -1528,6 +1526,13 @@ local function runAutoHeal()
 			tool.Parent = char
 			tool:SetAttribute("Quantity", (tool:GetAttribute("Quantity") or 1) - 1)
 			tool:SetAttribute("Client_LastConsumedAt", os.clock())
+			pcall(function()
+				StarterGui:SetCore("SendNotification", {
+					Title = "Auto Heal",
+					Text = "Quantity: " .. tostring(tool:GetAttribute("Quantity")),
+					Duration = 3,
+				})
+			end)
 			pcall(function()
 				eat:FireServer()
 			end)
@@ -1810,10 +1815,13 @@ local function syncSilentAimCircle()
 			silentAimCircle = Drawing.new("Circle")
 			silentAimCircle.NumSides = 64
 			silentAimCircle.Thickness = 1
-			silentAimCircle.Filled = false
-			silentAimCircle.Color = Color3.fromRGB(255, 255, 255)
-			silentAimCircle.Transparency = 0.5
+			silentAimCircle.Filled = Config.SilentAimCircleFilled
+			silentAimCircle.Color = Config.SilentAimCircleColor
+			silentAimCircle.Transparency = Config.SilentAimCircleTransparency
 		end
+		silentAimCircle.Filled = Config.SilentAimCircleFilled
+		silentAimCircle.Color = Config.SilentAimCircleColor
+		silentAimCircle.Transparency = Config.SilentAimCircleTransparency
 		silentAimCircle.Position = getMousePosition()
 		silentAimCircle.Radius = Config.SilentAimRange
 		silentAimCircle.Visible = true
@@ -1852,6 +1860,9 @@ local function syncBulletTracers(enabled: boolean)
 				part.CanCollide = false
 				part.CanQuery = false
 				part.Anchored = true
+				pcall(function()
+					part.Material = Enum.Material[Config.BulletTracerMaterial]
+				end)
 				part.Color = Config.BulletTracerColor
 				part.Transparency = 0.35
 				part.Parent = workspace
@@ -1949,7 +1960,7 @@ local function runDamageIndicator()
 			label.Size = UDim2.fromScale(1, 1)
 			label.TextScaled = true
 			label.Font = Enum.Font.GothamBlack
-			label.TextColor3 = Color3.fromRGB(255, 72, 72)
+			label.TextColor3 = Config.DamageIndicatorColor
 			label.Parent = billboard
 		end
 		damageIndicatorPart.Position = head.Position + Vector3.new(0, 2, 0)
@@ -1957,6 +1968,7 @@ local function runDamageIndicator()
 		local label = damageIndicatorPart:FindFirstChildWhichIsA("BillboardGui", true)
 		label = label and label:FindFirstChild("Damage")
 		if label and label:IsA("TextLabel") then
+			label.TextColor3 = Config.DamageIndicatorColor
 			label.Text = tostring(math.ceil(damage))
 		end
 		damageIndicatorThread = task.delay(1, function()
@@ -1979,7 +1991,12 @@ local function syncHitSound(enabled: boolean)
 				for _, player in Players:GetPlayers() do
 					local char = getCharacter(player)
 					if char and part:IsDescendantOf(char) and isVulnerable(player, char, true) then
-						playSoundId("rbxassetid://12222216", 1)
+						if not hitSoundDebounce then
+							playSoundId(DEFAULT_HIT_SOUNDS[math.random(1, #DEFAULT_HIT_SOUNDS)], Config.HitSoundVolume, Config.HitSoundPitchShift)
+							hitSoundDebounce = task.defer(function()
+								hitSoundDebounce = nil
+							end)
+						end
 						break
 					end
 				end
@@ -2020,6 +2037,10 @@ local function onViewmodelToolAdded(tool: Tool)
 	for _, part in viewmodelClone:GetDescendants() do
 		if part:IsA("BasePart") then
 			part.CanCollide = false
+			if Config.ViewmodelForceField then
+				part.Material = Enum.Material.ForceField
+				part.Color = Config.ViewmodelForceFieldColor
+			end
 		end
 	end
 	for _, part in tool:GetDescendants() do
@@ -2068,15 +2089,14 @@ local function updateViewmodel(dt: number)
 end
 
 local function syncCrosshair(enabled: boolean)
-	if not canDebug or (not gun.Equip and not oldEquipFn) then
+	if not canDebug or not gun.Equip then
 		return
 	end
-	local fn = oldEquipFn or gun.Equip
-	if not fn then
-		return
-	end
+	local image = if enabled
+		then (if Config.CrosshairImage ~= "" then Config.CrosshairImage else "")
+		else "rbxassetid://98794608762931"
 	pcall(function()
-		debug.setconstant(fn, 30, if enabled then "" else "rbxassetid://98794608762931")
+		debug.setconstant(gun.Equip, 30, image)
 	end)
 end
 
@@ -2335,19 +2355,30 @@ local function runCheatDetector()
 	end
 end
 
+local function styleC4Highlight(highlight: Highlight)
+	highlight.FillColor = Config.C4ESPFillColor
+	highlight.OutlineColor = Config.C4ESPOutlineColor
+	highlight.FillTransparency = Config.C4ESPFillTransparency
+	highlight.OutlineTransparency = Config.C4ESPOutlineTransparency
+end
+
 local function addC4Highlight(obj: Instance)
 	if c4Highlights[obj] then
+		styleC4Highlight(c4Highlights[obj])
 		return
 	end
 	local highlight = Instance.new("Highlight")
 	highlight.Adornee = obj
 	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	highlight.FillColor = Color3.fromRGB(255, 72, 72)
-	highlight.OutlineColor = Color3.fromRGB(255, 200, 80)
-	highlight.FillTransparency = 0.5
-	highlight.OutlineTransparency = 0.2
+	styleC4Highlight(highlight)
 	highlight.Parent = c4Folder
 	c4Highlights[obj] = highlight
+end
+
+local function refreshC4HighlightStyles()
+	for _, highlight in c4Highlights do
+		styleC4Highlight(highlight)
+	end
 end
 
 local function removeC4Highlight(obj: Instance)
@@ -2665,7 +2696,7 @@ genv.__PrisonLifeUnload = function()
 	end
 	table.clear(armorPickups)
 	table.clear(pickupSeen)
-	table.clear(toolAttrBackup)
+	syncArrestCooldownBar(false)
 	table.clear(spawnTimes)
 	localC4 = nil
 end
@@ -2692,6 +2723,7 @@ UILib.create({
 						{ type = "toggle", key = "ArrestHandCheck", label = "Handcuffs Only", hud = "Handcuffs" },
 						{ type = "toggle", key = "ArrestInmates", label = "Arrest Inmates", hud = "Arrest Inmates" },
 						{ type = "toggle", key = "ArrestCriminals", label = "Arrest Criminals", hud = "Arrest Criminals" },
+						{ type = "toggle", key = "AutoArrestCooldownBar", label = "Cooldown Bar", hud = "Arrest CD" },
 					},
 				},
 				{
@@ -2707,10 +2739,9 @@ UILib.create({
 						{ type = "toggle", key = "SilentAimWallCheck", label = "Wall Check", hud = "Wall Check" },
 						{ type = "toggle", key = "SilentAimWallbang", label = "Wallbang", hud = "Wallbang" },
 						{ type = "toggle", key = "SilentAimRangeCircle", label = "Range Circle", hud = "Aim Circle" },
-						{ type = "toggle", key = "GunMods", label = "Gun Mods", hud = "Gun Mods" },
-						{ type = "toggle", key = "GunNoSpread", label = "No Spread", hud = "No Spread" },
-						{ type = "slider", key = "GunFireRate", label = "Fire Rate %", min = 1, max = 100, step = 1 },
-						{ type = "toggle", key = "GunAutomatic", label = "Full Auto", hud = "Full Auto" },
+						{ type = "color", key = "SilentAimCircleColor", label = "Circle Color" },
+						{ type = "slider", key = "SilentAimCircleTransparency", label = "Circle Alpha", min = 0, max = 1, step = 0.05 },
+						{ type = "toggle", key = "SilentAimCircleFilled", label = "Circle Filled", hud = "Circle Fill" },
 						{ type = "toggle", key = "AutoReload", label = "Auto Reload", hud = "Auto Reload" },
 						{ type = "toggle", key = "AutoReloadSwap", label = "Reload Weapon Swap", hud = "Reload Swap" },
 						{ type = "toggle", key = "AutoFire", label = "Auto Fire", hud = "Auto Fire" },
@@ -2827,6 +2858,21 @@ UILib.create({
 						{ type = "toggle", key = "AutoDetonateSafe", label = "C4 Safety Check", hud = "C4 Safe" },
 						{ type = "toggle", key = "AntiRiotShield", label = "Anti Riot Shield", hud = "Anti Shield" },
 						{ type = "toggle", key = "C4ESP", label = "C4 ESP", hud = "C4 ESP" },
+						{ type = "color", key = "C4ESPFillColor", label = "C4 Fill" },
+						{ type = "color", key = "C4ESPOutlineColor", label = "C4 Outline" },
+						{ type = "slider", key = "C4ESPFillTransparency", label = "C4 Fill Alpha", min = 0, max = 1, step = 0.05 },
+						{ type = "slider", key = "C4ESPOutlineTransparency", label = "C4 Outline Alpha", min = 0, max = 1, step = 0.05 },
+					},
+				},
+				{
+					title = "PICKUP PRIORITY",
+					items = {
+						{ type = "select", key = "GuardPickup1", label = "Guard #1", options = PICKUP_WEAPON_OPTIONS },
+						{ type = "select", key = "GuardPickup2", label = "Guard #2", options = PICKUP_WEAPON_OPTIONS },
+						{ type = "select", key = "PrisonerPickup1", label = "Prisoner #1", options = PICKUP_WEAPON_OPTIONS },
+						{ type = "select", key = "PrisonerPickup2", label = "Prisoner #2", options = PICKUP_WEAPON_OPTIONS },
+						{ type = "select", key = "CriminalPickup1", label = "Criminal #1", options = PICKUP_WEAPON_OPTIONS },
+						{ type = "select", key = "CriminalPickup2", label = "Criminal #2", options = PICKUP_WEAPON_OPTIONS },
 					},
 				},
 			},
@@ -2855,18 +2901,29 @@ UILib.create({
 					items = {
 						{ type = "toggle", key = "BulletTracers", label = "Bullet Tracers", hud = "Tracers" },
 						{ type = "toggle", key = "BulletTracerDrawing", label = "Drawing Tracers", hud = "Draw Tracers" },
+						{ type = "select", key = "BulletTracerMaterial", label = "Tracer Material", options = {
+							"SmoothPlastic", "Neon", "Glass", "Metal", "ForceField", "Plastic", "Wood", "Concrete",
+						} },
 						{ type = "slider", key = "BulletTracerLifetime", label = "Tracer Life", min = 0.05, max = 0.5, step = 0.05 },
 						{ type = "toggle", key = "BulletTracerFade", label = "Tracer Fade", hud = "Tracer Fade" },
 						{ type = "color", key = "BulletTracerColor", label = "Tracer Color" },
 						{ type = "toggle", key = "DamageIndicator", label = "Damage Indicator", hud = "Dmg Ind" },
+						{ type = "color", key = "DamageIndicatorColor", label = "Damage Color" },
 						{ type = "toggle", key = "HitSound", label = "Hit Sound", hud = "Hit Sound" },
+						{ type = "slider", key = "HitSoundVolume", label = "Hit Volume", min = 0, max = 2, step = 0.1 },
+						{ type = "toggle", key = "HitSoundPitchShift", label = "Hit Pitch Shift", hud = "Hit Pitch" },
 						{ type = "toggle", key = "KillSound", label = "Kill Sound", hud = "Kill Sound" },
+						{ type = "slider", key = "KillSoundVolume", label = "Kill Volume", min = 0, max = 2, step = 0.1 },
+						{ type = "toggle", key = "KillSoundPitchShift", label = "Kill Pitch Shift", hud = "Kill Pitch" },
 						{ type = "toggle", key = "Viewmodel", label = "Viewmodel", hud = "Viewmodel" },
 						{ type = "slider", key = "ViewmodelDepth", label = "VM Depth", min = 0, max = 3, step = 0.1 },
 						{ type = "slider", key = "ViewmodelHorizontal", label = "VM Horizontal", min = 0, max = 2, step = 0.1 },
 						{ type = "slider", key = "ViewmodelVertical", label = "VM Vertical", min = -1.5, max = 2, step = 0.1 },
 						{ type = "toggle", key = "ViewmodelSway", label = "VM Sway", hud = "VM Sway" },
+						{ type = "toggle", key = "ViewmodelForceField", label = "VM ForceField", hud = "VM FF" },
+						{ type = "color", key = "ViewmodelForceFieldColor", label = "VM FF Color" },
 						{ type = "toggle", key = "Crosshair", label = "Custom Crosshair", hud = "Crosshair" },
+						{ type = "hint", text = "Crosshair image: set CrosshairImage in config (rbxassetid) when custom crosshair is enabled." },
 					},
 				},
 			},
@@ -2888,15 +2945,11 @@ UILib.create({
 		then
 			syncMovementDisabler()
 		end
-		if
-			key == "SilentAim"
-			or key == "GunMods"
-			or key == "AutoReload"
-			or key == "AutoReloadSwap"
-			or key == "GunNoSpread"
-			or key == "GunAutomatic"
-		then
+		if key == "SilentAim" or key == "AutoReload" or key == "AutoReloadSwap" then
 			refreshGunFeatures()
+		end
+		if key == "AutoArrestCooldownBar" then
+			syncArrestCooldownBar(value)
 		end
 		if key == "C4ESP" then
 			syncC4ESP()
@@ -2937,16 +2990,48 @@ UILib.create({
 		if key == "Crosshair" then
 			syncCrosshair(value)
 		end
-		if key == "SilentAimRangeCircle" then
+		if key == "SilentAimRangeCircle" or key == "SilentAimMode" then
 			syncSilentAimCircle()
+		end
+		if key == "ViewmodelForceField" and Config.Viewmodel and viewmodelRealTool then
+			onViewmodelToolAdded(viewmodelRealTool)
 		end
 	end,
 	onChange = function(key)
 		if key == "WalkSpeed" or key == "JumpPower" then
 			applyMovement()
 		end
-		if key == "GunFireRate" or key == "GunNoSpread" or key == "GunAutomatic" then
-			modifyGunData()
+		if
+			key == "SilentAimCircleColor"
+			or key == "SilentAimCircleTransparency"
+			or key == "SilentAimCircleFilled"
+			or key == "SilentAimRange"
+		then
+			syncSilentAimCircle()
+		end
+		if
+			key == "C4ESPFillColor"
+			or key == "C4ESPOutlineColor"
+			or key == "C4ESPFillTransparency"
+			or key == "C4ESPOutlineTransparency"
+		then
+			refreshC4HighlightStyles()
+		end
+		if
+			key == "GuardPickup1"
+			or key == "GuardPickup2"
+			or key == "PrisonerPickup1"
+			or key == "PrisonerPickup2"
+			or key == "CriminalPickup1"
+			or key == "CriminalPickup2"
+		then
+			rebuildSortedPickups()
+		end
+		if key == "BulletTracerMaterial" and Config.BulletTracers then
+			syncBulletTracers(true)
+		end
+		if key == "ViewmodelForceFieldColor" and Config.Viewmodel and viewmodelRealTool then
+			onViewmodelToolAdded(viewmodelRealTool)
 		end
 	end,
 })
@@ -3014,6 +3099,7 @@ table.insert(connections, workspace.ChildAdded:Connect(function(obj)
 	end
 end))
 table.insert(connections, workspace.ChildRemoved:Connect(unregisterPickup))
+rebuildSortedPickups()
 refreshPickupIndex()
 
 table.insert(connections, CollectionService:GetInstanceAddedSignal("C4"):Connect(function(obj)
@@ -3044,7 +3130,11 @@ if killfeed then
 			local victim = text:sub(victimStart + 7, victimEnd - 1)
 			notifyKillfeed(killer, victim)
 			if Config.KillSound and killer == LocalPlayer.Name then
-				playSoundId("rbxassetid://12222235", 1)
+				playSoundId(
+					DEFAULT_KILL_SOUNDS[math.random(1, #DEFAULT_KILL_SOUNDS)],
+					Config.KillSoundVolume,
+					Config.KillSoundPitchShift
+				)
 			end
 		end
 	end))
@@ -3158,6 +3248,7 @@ task.defer(function()
 	syncCameraPhase(Config.CameraPhase)
 	syncVehicleFly(Config.VehicleFly)
 	syncSilentAimCircle()
+	syncArrestCooldownBar(Config.AutoArrestCooldownBar)
 	for _, obj in CollectionService:GetTagged("C4") do
 		if obj:GetAttribute("UserId") == LocalPlayer.UserId then
 			localC4 = obj
