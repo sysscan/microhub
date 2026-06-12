@@ -365,6 +365,7 @@ local ok, err = pcall(function()
 	end
 
 	loaderUI.setStep("Matched game", entry.name, 0.22)
+	warn("[MicroHub] v" .. VERSION .. " @ " .. sha:sub(1, 7) .. " -> " .. entry.name)
 
 	loaderUI.setStep("Loading UI framework", nil, 0.38)
 	local juanita = runSource("lib/juanita/Library.lua")
@@ -385,6 +386,7 @@ local ok, err = pcall(function()
 	loaderUI.setStep("Loading " .. entry.name, nil, 0.72)
 	runSource(entry.path)
 
+	warn("[MicroHub] ready — UI " .. uiVersion)
 	loaderUI.success(entry.name, uiVersion)
 end)
 
@@ -394,9 +396,8 @@ if instantSplash then
 end
 
 if not ok then
+	warn("[MicroHub]", err)
 	if loaderUI then
 		loaderUI.fail(tostring(err))
-	else
-		warn("[MicroHub]", err)
 	end
 end

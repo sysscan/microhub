@@ -15,6 +15,11 @@ local gethui = gethui or function()
 	return CoreGui
 end
 
+local CARD_WIDTH = 380
+local PAD_TOP, PAD_RIGHT, PAD_BOTTOM, PAD_LEFT = 18, 20, 18, 20
+local SECTION_GAP = 10
+local MAX_STEPS_HEIGHT = 108
+
 local THEME = {
 	Background = Color3.fromRGB(12, 12, 12),
 	Inline = Color3.fromRGB(19, 19, 19),
@@ -95,20 +100,39 @@ function LoaderUI.create(options)
 	card.Name = "Card"
 	card.AnchorPoint = Vector2.new(0.5, 0.5)
 	card.Position = UDim2.fromScale(0.5, 0.5)
-	card.Size = UDim2.fromOffset(380, 196)
+	card.Size = UDim2.fromOffset(CARD_WIDTH, 0)
+	card.AutomaticSize = Enum.AutomaticSize.Y
 	card.BackgroundColor3 = THEME.Background
 	card.BorderSizePixel = 0
 	card.Parent = dim
 	corner(card, 10)
 	stroke(card, THEME.Outline, 1)
 
-	padding(card, 18, 20, 18, 20)
+	local sizeConstraint = Instance.new("UISizeConstraint")
+	sizeConstraint.MinSize = Vector2.new(CARD_WIDTH, 0)
+	sizeConstraint.MaxSize = Vector2.new(CARD_WIDTH, 420)
+	sizeConstraint.Parent = card
+
+	local content = Instance.new("Frame")
+	content.Name = "Content"
+	content.BackgroundTransparency = 1
+	content.Size = UDim2.new(1, 0, 0, 0)
+	content.AutomaticSize = Enum.AutomaticSize.Y
+	content.Parent = card
+	padding(content, PAD_TOP, PAD_RIGHT, PAD_BOTTOM, PAD_LEFT)
+
+	local contentLayout = Instance.new("UIListLayout")
+	contentLayout.FillDirection = Enum.FillDirection.Vertical
+	contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	contentLayout.Padding = UDim.new(0, SECTION_GAP)
+	contentLayout.Parent = content
 
 	local header = Instance.new("Frame")
 	header.Name = "Header"
 	header.BackgroundTransparency = 1
 	header.Size = UDim2.new(1, 0, 0, 28)
-	header.Parent = card
+	header.LayoutOrder = 1
+	header.Parent = content
 
 	local title = Instance.new("TextLabel")
 	title.Name = "Title"
@@ -139,9 +163,9 @@ function LoaderUI.create(options)
 	local statusRow = Instance.new("Frame")
 	statusRow.Name = "StatusRow"
 	statusRow.BackgroundTransparency = 1
-	statusRow.Position = UDim2.new(0, 0, 0, 40)
 	statusRow.Size = UDim2.new(1, 0, 0, 24)
-	statusRow.Parent = card
+	statusRow.LayoutOrder = 2
+	statusRow.Parent = content
 
 	local spinner = Instance.new("Frame")
 	spinner.Name = "Spinner"
@@ -194,24 +218,27 @@ function LoaderUI.create(options)
 	local detailText = Instance.new("TextLabel")
 	detailText.Name = "Detail"
 	detailText.BackgroundTransparency = 1
-	detailText.Position = UDim2.new(0, 0, 0, 68)
-	detailText.Size = UDim2.new(1, 0, 0, 18)
+	detailText.Size = UDim2.new(1, 0, 0, 0)
+	detailText.AutomaticSize = Enum.AutomaticSize.Y
 	detailText.Font = Enum.Font.Gotham
 	detailText.TextSize = 12
 	detailText.TextXAlignment = Enum.TextXAlignment.Left
+	detailText.TextYAlignment = Enum.TextYAlignment.Top
+	detailText.TextWrapped = true
 	detailText.TextColor3 = THEME.Muted
 	detailText.Text = ""
-	detailText.TextTruncate = Enum.TextTruncate.AtEnd
-	detailText.Parent = card
+	detailText.Visible = false
+	detailText.LayoutOrder = 3
+	detailText.Parent = content
 
 	local barTrack = Instance.new("Frame")
 	barTrack.Name = "ProgressTrack"
-	barTrack.Position = UDim2.new(0, 0, 0, 98)
 	barTrack.Size = UDim2.new(1, 0, 0, 6)
 	barTrack.BackgroundColor3 = THEME.Bar
 	barTrack.BorderSizePixel = 0
 	barTrack.ClipsDescendants = true
-	barTrack.Parent = card
+	barTrack.LayoutOrder = 4
+	barTrack.Parent = content
 	corner(barTrack, 3)
 
 	local barFill = Instance.new("Frame")
@@ -222,12 +249,25 @@ function LoaderUI.create(options)
 	barFill.Parent = barTrack
 	corner(barFill, 3)
 
+	local stepsScroll = Instance.new("ScrollingFrame")
+	stepsScroll.Name = "StepsScroll"
+	stepsScroll.BackgroundTransparency = 1
+	stepsScroll.BorderSizePixel = 0
+	stepsScroll.ScrollBarThickness = 3
+	stepsScroll.ScrollBarImageColor3 = THEME.Outline
+	stepsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	stepsScroll.CanvasSize = UDim2.new()
+	stepsScroll.Size = UDim2.new(1, 0, 0, 0)
+	stepsScroll.Visible = false
+	stepsScroll.LayoutOrder = 5
+	stepsScroll.Parent = content
+
 	local stepsFrame = Instance.new("Frame")
 	stepsFrame.Name = "Steps"
 	stepsFrame.BackgroundTransparency = 1
-	stepsFrame.Position = UDim2.new(0, 0, 0, 116)
-	stepsFrame.Size = UDim2.new(1, 0, 0, 44)
-	stepsFrame.Parent = card
+	stepsFrame.Size = UDim2.new(1, 0, 0, 0)
+	stepsFrame.AutomaticSize = Enum.AutomaticSize.Y
+	stepsFrame.Parent = stepsScroll
 
 	local stepsLayout = Instance.new("UIListLayout")
 	stepsLayout.FillDirection = Enum.FillDirection.Vertical
@@ -235,14 +275,9 @@ function LoaderUI.create(options)
 	stepsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	stepsLayout.Parent = stepsFrame
 
-	local stepLabels = {}
-	local stepOrder = 0
-
 	local dismissButton = Instance.new("TextButton")
 	dismissButton.Name = "Dismiss"
-	dismissButton.AnchorPoint = Vector2.new(0.5, 1)
-	dismissButton.Position = UDim2.new(0.5, 0, 1, -14)
-	dismissButton.Size = UDim2.fromOffset(120, 30)
+	dismissButton.Size = UDim2.new(1, 0, 0, 30)
 	dismissButton.BackgroundColor3 = THEME.Inline
 	dismissButton.BorderSizePixel = 0
 	dismissButton.AutoButtonColor = false
@@ -251,12 +286,19 @@ function LoaderUI.create(options)
 	dismissButton.TextColor3 = THEME.Text
 	dismissButton.Text = "Dismiss"
 	dismissButton.Visible = false
-	dismissButton.Parent = card
+	dismissButton.LayoutOrder = 6
+	dismissButton.Parent = content
 	corner(dismissButton, 6)
 	stroke(dismissButton, THEME.Outline, 1)
 
-	local function setCardHeight(height)
-		tween(card, { Size = UDim2.fromOffset(380, height) })
+	local stepLabels = {}
+	local stepOrder = 0
+
+	local function updateStepsScrollHeight()
+		local contentHeight = stepsLayout.AbsoluteContentSize.Y
+		local height = math.min(contentHeight, MAX_STEPS_HEIGHT)
+		stepsScroll.Visible = height > 0
+		stepsScroll.Size = UDim2.new(1, 0, 0, height)
 	end
 
 	local function destroySelf()
@@ -301,10 +343,13 @@ function LoaderUI.create(options)
 		local row = Instance.new("TextLabel")
 		row.Name = "Step" .. tostring(stepOrder)
 		row.BackgroundTransparency = 1
-		row.Size = UDim2.new(1, 0, 0, 16)
+		row.Size = UDim2.new(1, 0, 0, 0)
+		row.AutomaticSize = Enum.AutomaticSize.Y
 		row.Font = Enum.Font.Gotham
 		row.TextSize = 12
 		row.TextXAlignment = Enum.TextXAlignment.Left
+		row.TextYAlignment = Enum.TextYAlignment.Top
+		row.TextWrapped = true
 		row.LayoutOrder = stepOrder
 		row.Parent = stepsFrame
 
@@ -324,6 +369,7 @@ function LoaderUI.create(options)
 		row.TextColor3 = color
 		row.Text = prefix .. text
 		stepLabels[#stepLabels + 1] = row
+		task.defer(updateStepsScrollHeight)
 		return row
 	end
 
@@ -346,6 +392,7 @@ function LoaderUI.create(options)
 		addStep(text, "active")
 		statusText.Text = text
 		detailText.Text = detail or ""
+		detailText.Visible = detailText.Text ~= ""
 		if typeof(progress) == "number" then
 			targetProgress = math.clamp(progress, 0, 1)
 		end
@@ -369,7 +416,10 @@ function LoaderUI.create(options)
 		statusIcon.Text = "✓"
 		statusIcon.TextColor3 = THEME.Success
 		statusText.Text = gameName .. " loaded"
-		detailText.Text = uiVersion and ("UI " .. tostring(uiVersion)) or ""
+		local detail = uiVersion and ("UI " .. tostring(uiVersion)) or ""
+		detailText.Text = detail
+		detailText.Visible = detail ~= ""
+		detailText.TextColor3 = THEME.Muted
 		targetProgress = 1
 		barFill.BackgroundColor3 = THEME.Success
 		fadeOut(1.6)
@@ -387,11 +437,12 @@ function LoaderUI.create(options)
 		statusIcon.TextColor3 = THEME.Error
 		statusText.Text = "Load failed"
 		detailText.Text = tostring(message)
+		detailText.Visible = true
 		detailText.TextColor3 = THEME.Error
 		targetProgress = 1
 		barFill.BackgroundColor3 = THEME.Error
 		dismissButton.Visible = true
-		setCardHeight(228)
+		task.defer(updateStepsScrollHeight)
 	end
 
 	function api.destroy()
@@ -399,6 +450,7 @@ function LoaderUI.create(options)
 	end
 
 	table.insert(connections, dismissButton.MouseButton1Click:Connect(destroySelf))
+	table.insert(connections, stepsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateStepsScrollHeight))
 
 	table.insert(
 		connections,
