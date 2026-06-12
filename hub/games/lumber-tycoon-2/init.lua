@@ -15,6 +15,7 @@ local MovementLib = require("games/lumber-tycoon-2/movement.lua")
 local TeleportLib = require("games/lumber-tycoon-2/teleport.lua")
 local ChopLib = require("games/lumber-tycoon-2/chop.lua")
 local WoodLib = require("games/lumber-tycoon-2/wood.lua")
+local ExtrasLib = require("games/lumber-tycoon-2/extras.lua")
 local ESPLib = require("games/lumber-tycoon-2/esp.lua")
 local UILibDef = require("games/lumber-tycoon-2/ui.lua")
 local BootstrapLib = require("games/lumber-tycoon-2/bootstrap.lua")
@@ -38,6 +39,7 @@ function M.run()
 
 	local remotes = RemotesLib.create({
 		replicatedStorage = ReplicatedStorage,
+		localPlayer = LocalPlayer,
 	})
 
 	local movement = MovementLib.create({
@@ -56,6 +58,7 @@ function M.run()
 
 	local chop = ChopLib.create({
 		config = Config,
+		constants = Constants,
 		util = Util,
 		remotes = remotes,
 		localPlayer = LocalPlayer,
@@ -63,9 +66,16 @@ function M.run()
 
 	local wood = WoodLib.create({
 		config = Config,
+		constants = Constants,
 		util = Util,
 		remotes = remotes,
 		localPlayer = LocalPlayer,
+	})
+
+	local extras = ExtrasLib.create({
+		config = Config,
+		localPlayer = LocalPlayer,
+		remotes = remotes,
 	})
 
 	local esp = ESPLib.create({
@@ -84,6 +94,7 @@ function M.run()
 		teleport = teleport,
 		wood = wood,
 		chop = chop,
+		extras = extras,
 		remotes = remotes,
 	})
 
@@ -94,6 +105,8 @@ function M.run()
 		chop = chop,
 		wood = wood,
 		esp = esp,
+		extras = extras,
+		remotes = remotes,
 		connections = connections,
 		loopHelpers = loopHelpers,
 	})
@@ -113,6 +126,7 @@ function M.run()
 		table.clear(loops)
 		movement.stopAntiAfk()
 		movement.unload()
+		extras.unload()
 		esp.destroy()
 		local genv = typeof(getgenv) == "function" and getgenv() or _G
 		genv.__LumberTycoon2Unload = nil

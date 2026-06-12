@@ -142,4 +142,101 @@ function M.distance(a: Vector3, b: Vector3): number
 	return (a - b).Magnitude
 end
 
+function M.distanceSq(a: Vector3, b: Vector3): number
+	local delta = a - b
+	return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
+end
+
+function M.raycastFromHead(
+	head: BasePart,
+	target: Vector3,
+	range: number,
+	character: Model?
+): (BasePart?, Vector3?)
+	local origin = head.Position
+	local offset = target - origin
+	if offset.Magnitude < 0.05 then
+		return nil, nil
+	end
+
+	local direction = offset.Unit * range
+	if workspace.Raycast then
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		if character then
+			params.FilterDescendantsInstances = { character }
+		end
+		local result = workspace:Raycast(origin, direction, params)
+		if result then
+			return result.Instance, result.Normal
+		end
+		return nil, nil
+	end
+
+	return workspace:FindPartOnRay(Ray.new(origin, direction), character)
+end
+
+function M.getWoodSection(model: Instance): BasePart?
+	local section = model:FindFirstChild("WoodSection", true)
+	if section and section:IsA("BasePart") then
+		return section
+	end
+	return nil
+end
+
+function M.moveModelWoodTo(model: Model, targetCFrame: CFrame): boolean
+	local section = M.getWoodSection(model)
+	if not section then
+		return false
+	end
+	return pcall(function()
+		if model.PrimaryPart then
+			model:PivotTo(targetCFrame)
+		else
+			section.CFrame = targetCFrame
+		end
+	end)
+end
+
+function M.getLiveSellWoodPosition(): Vector3?
+	local stores = workspace:FindFirstChild("Stores")
+	local woodRus = stores and stores:FindFirstChild("WoodRUs")
+	local sellPart = woodRus and woodRus:FindFirstChild("SELLWOOD", true)
+	if sellPart and sellPart:IsA("BasePart") then
+		return sellPart.Position + Vector3.new(0, 2, 0)
+	end
+	return nil
+end
+
+function M.getOwnedPropertyPosition(player: Player): Vector3?
+	local properties = workspace:FindFirstChild("Properties")
+	if not properties then
+		return nil
+	end
+	for _, property in properties:GetChildren() do
+		local owner = property:FindFirstChild("Owner")
+		if owner and owner:IsA("ObjectValue") and owner.Value == player then
+			local part = property:FindFirstChildWhichIsA("BasePart", true)
+			if part then
+				return part.Position
+			end
+		end
+	end
+	return nil
+end
+
+function M.matchesWoodFilter(className: string?, filter: string): boolean
+	if filter == "Any" or filter == "" then
+		return true
+	end
+	return className == filter
+end
+
+function M.isRareWood(className: string?, rareWoods: { [string]: boolean }): boolean
+	if not className or className == "" or className == "Generic" then
+		return false
+	end
+	return rareWoods[className] == true
+end
+
 return M

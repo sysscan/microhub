@@ -31,7 +31,24 @@ function M.create(opts)
 	end
 
 	local function teleportConfigured()
+		if Config.TeleportLocation == "My Plot" then
+			return teleportToMyPlot()
+		end
 		return teleportNamed(Config.TeleportLocation)
+	end
+
+	local function teleportToMyPlot()
+		local position = Util.getOwnedPropertyPosition(LocalPlayer)
+		if not position then
+			warn("[LT2] no owned plot found")
+			return false
+		end
+		return teleportTo(position)
+	end
+
+	local function teleportToSellWood()
+		local position = Util.getLiveSellWoodPosition() or Constants.SELL_WOOD_POSITION
+		return teleportTo(position)
 	end
 
 	local function teleportNearestPlayer(): boolean
@@ -70,6 +87,8 @@ function M.create(opts)
 		teleportNamed = teleportNamed,
 		teleportConfigured = teleportConfigured,
 		teleportNearestPlayer = teleportNearestPlayer,
+		teleportToMyPlot = teleportToMyPlot,
+		teleportToSellWood = teleportToSellWood,
 	}
 end
 

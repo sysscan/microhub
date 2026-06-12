@@ -2,6 +2,7 @@ local M = {}
 
 function M.create(opts)
 	local ReplicatedStorage = opts.replicatedStorage
+	local LocalPlayer = opts.localPlayer
 
 	local interaction = ReplicatedStorage:WaitForChild("Interaction", 30)
 	local remotes = {
@@ -36,10 +37,46 @@ function M.create(opts)
 		end)
 	end
 
+	local userSettingsModule
+
+	local function getUserSettings()
+		if userSettingsModule ~= nil then
+			return userSettingsModule or nil
+		end
+		local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+		local moduleScript = playerScripts and playerScripts:FindFirstChild("ClientUserSettings")
+		if not moduleScript then
+			userSettingsModule = false
+			return nil
+		end
+		local ok, mod = pcall(require, moduleScript)
+		userSettingsModule = ok and mod or false
+		return ok and mod or nil
+	end
+
+	local function setPlayerPermission(targetPlayer: Player, permissionId: string, allowed: boolean)
+		local settings = getUserSettings()
+		if not settings or typeof(settings.SendUpdate) ~= "function" then
+			return false
+		end
+		return pcall(function()
+			settings.SendUpdate("UserPermission", tostring(targetPlayer.UserId), permissionId, allowed)
+		end)
+	end
+
+	local function blockPlayerVisit(targetPlayer: Player)
+		if setPlayerPermission(targetPlayer, "Visit", false) then
+			return true
+		end
+		return setPlayerPermission(targetPlayer, "Visit Property", false)
+	end
+
 	return {
 		fireChop = fireChop,
 		notifyDragging = notifyDragging,
 		refreshPing = refreshPing,
+		blockPlayerVisit = blockPlayerVisit,
+		setPlayerPermission = setPlayerPermission,
 		getPing = function()
 			return ping
 		end,

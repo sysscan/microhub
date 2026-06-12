@@ -14,6 +14,7 @@ function M.create(opts)
 	local woodLabels = {}
 	local woodScanAt = 0
 	local woodTargets = {}
+	local MAX_WOOD_ESP_TARGETS = 80
 
 	local function getCamera()
 		return workspace.CurrentCamera or opts.camera
@@ -68,7 +69,13 @@ function M.create(opts)
 	end
 
 	local function shouldShowWood(className: string?): boolean
-		if not className or className == "" or className == "Generic" then
+		if not className or className == "" then
+			return false
+		end
+		if Config.WoodESPAll then
+			return true
+		end
+		if className == "Generic" then
 			return false
 		end
 		return Constants.RARE_WOODS[className] == true
@@ -119,6 +126,20 @@ function M.create(opts)
 				consider(child)
 			end
 		end
+
+		local playerModels = workspace:FindFirstChild("PlayerModels")
+		if playerModels then
+			for _, child in playerModels:GetChildren() do
+				consider(child)
+			end
+		end
+
+		table.sort(woodTargets, function(a, b)
+			return Util.distanceSq(origin, a.part.Position) < Util.distanceSq(origin, b.part.Position)
+		end)
+		while #woodTargets > MAX_WOOD_ESP_TARGETS do
+			table.remove(woodTargets)
+		end
 	end
 
 	local function drawWoodEsp()
@@ -167,6 +188,10 @@ function M.create(opts)
 			label.Color = Constants.WOOD_ESP_COLORS[target.className] or Color3.fromRGB(255, 220, 120)
 			label.Visible = true
 		end
+	end
+
+	local function needsEspTick()
+		return Config.ESP or Config.WoodESP
 	end
 
 	local function tick()

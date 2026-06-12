@@ -14,6 +14,9 @@ function M.create(opts)
 	local antiAfkThread = nil
 	local lightingBackup = nil
 	local flyVelocity = nil
+	local flyWasActive = false
+	local jumpConn: RBXScriptConnection? = nil
+	local infiniteJumpEnabled = false
 	local humanoidDefaults = nil
 	local defaultsCharacter = nil
 
@@ -97,14 +100,72 @@ function M.create(opts)
 			flyVelocity:Destroy()
 			flyVelocity = nil
 		end
-		if humanoid then
-			humanoid.PlatformStand = false
-		end
 		if root then
 			local existing = root:FindFirstChild("MicroHubLT2Fly")
 			if existing then
 				existing:Destroy()
 			end
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
+		if humanoid then
+			humanoid.PlatformStand = false
+			humanoid.AutoRotate = true
+		end
+		flyWasActive = false
+	end
+
+	local function setInfiniteJump(enabled: boolean)
+		if infiniteJumpEnabled == enabled then
+			return
+		end
+		infiniteJumpEnabled = enabled
+		if jumpConn then
+			jumpConn:Disconnect()
+			jumpConn = nil
+		end
+		if not enabled then
+			return
+		end
+		jumpConn = UserInputService.JumpRequest:Connect(function()
+			if not Config.InfiniteJump then
+				return
+			end
+			local humanoid = getHumanoid()
+			if humanoid and humanoid.Health > 0 then
+				humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end)
+	end
+
+	local function syncMovementState()
+		local root = getRoot()
+		local humanoid = getHumanoid()
+		local flyInstance = root and root:FindFirstChild("MicroHubLT2Fly")
+
+		if not Config.Fly and (flyWasActive or flyVelocity or flyInstance) then
+			clearFly()
+			if humanoid then
+				restoreHumanoidStats(humanoid)
+			end
+		end
+
+		setInfiniteJump(Config.InfiniteJump == true)
+
+		if not Config.NoClip and noclipEnabled then
+			setNoClip(false)
+		end
+
+		if not Config.FullBright and lightingBackup then
+			restoreLighting()
+		end
+
+		if Config.AntiAfk then
+			if not antiAfkThread then
+				startAntiAfk()
+			end
+		else
+			stopAntiAfk()
 		end
 	end
 
@@ -202,11 +263,14 @@ function M.create(opts)
 			or Config.NoClip
 			or Config.SpeedBoost
 			or Config.JumpBoost
+			or Config.InfiniteJump
 			or Config.FullBright
 			or (Config.CameraFOV and tonumber(Config.CameraFOV) ~= 70)
 	end
 
 	local function tickMovement()
+		syncMovementState()
+
 		if not needsMovementTick() then
 			return
 		end
@@ -219,9 +283,9 @@ function M.create(opts)
 		captureDefaults(humanoid)
 
 		if Config.Fly then
+			flyWasActive = true
 			applyFly()
 		else
-			clearFly()
 			if Config.SpeedBoost then
 				humanoid.WalkSpeed = math.clamp(tonumber(Config.WalkSpeed) or 32, 16, Constants.MAX_SAFE_WALKSPEED)
 			else
@@ -268,6 +332,7 @@ function M.create(opts)
 
 	local function unload()
 		stopAntiAfk()
+		setInfiniteJump(false)
 		clearFly()
 		setNoClip(false)
 		restoreCollision()

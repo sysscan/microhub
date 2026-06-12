@@ -7,46 +7,52 @@ function M.create(opts)
 	local chop = opts.chop
 	local wood = opts.wood
 	local esp = opts.esp
+	local extras = opts.extras
+	local remotes = opts.remotes
 	local connections = opts.connections
 	local loopHelpers = opts.loopHelpers
+	local lastPingAt = 0
 
-	local function needsMovementTick()
-		return Config.Fly
-			or Config.NoClip
-			or Config.SpeedBoost
-			or Config.JumpBoost
-			or Config.FullBright
-			or (Config.CameraFOV and tonumber(Config.CameraFOV) ~= 70)
+	local function needsWoodTick()
+		return Config.BringLogs or Config.AutoSellWood or Config.BringPlanks
 	end
 
 	local function needsEspTick()
 		return Config.ESP or Config.WoodESP
 	end
 
+	local function needsExtrasTick()
+		return Config.AntiBlacklistWalls or Config.AutoBlockVisitors
+	end
+
 	table.insert(connections, RunService.Heartbeat:Connect(function()
-		if needsMovementTick() then
-			movement.tickMovement()
-		end
+		movement.tickMovement()
 		if needsEspTick() then
 			esp.tick()
+		end
+		if needsExtrasTick() then
+			extras.tickExtras()
 		end
 	end))
 
 	loopHelpers.start(function()
+		remotes.refreshPing()
 		while true do
+			local now = os.clock()
+			if now - lastPingAt >= 20 then
+				lastPingAt = now
+				remotes.refreshPing()
+			end
+
 			if Config.AutoChop then
 				chop.tryAutoChop()
 			end
-			if Config.BringLogs then
+			if needsWoodTick() then
 				wood.tickWood()
 			end
 			task.wait(tonumber(Config.TickInterval) or 0.25)
 		end
 	end)
-
-	if Config.AntiAfk then
-		movement.startAntiAfk()
-	end
 end
 
 return M

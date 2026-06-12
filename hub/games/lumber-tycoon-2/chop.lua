@@ -2,48 +2,110 @@ local M = {}
 
 function M.create(opts)
 	local Config = opts.config
+	local Constants = opts.constants
 	local Util = opts.util
 	local Remotes = opts.remotes
 	local LocalPlayer = opts.localPlayer
 
 	local treeRegion = workspace:WaitForChild("TreeRegion", 30)
 	local lastChopAt = 0
+	local sectionCache = {}
+	local sectionCacheAt = 0
+	local sectionCachePlayerWood = false
+	local SECTION_CACHE_TTL = 0.55
 
-	local function getNearestSection(origin: Vector3, maxRange: number)
-		local bestSection = nil
-		local bestModel = nil
-		local bestDist = maxRange
+	local function getSearchFolders(): { Instance }
+		local folders = { treeRegion }
+		local playerModels = workspace:FindFirstChild("PlayerModels")
+		if Config.ChopPlayerWood and playerModels then
+			table.insert(folders, playerModels)
+		end
+		return folders
+	end
 
-		for _, model in treeRegion:GetChildren() do
-			if not model:IsA("Model") then
-				continue
-			end
-			local cutEvent = model:FindFirstChild("CutEvent")
-			if not cutEvent then
-				continue
-			end
-			for _, descendant in model:GetDescendants() do
-				if descendant:IsA("BasePart") and descendant:FindFirstChild("ID") then
-					local dist = Util.distance(origin, descendant.Position)
-					if dist < bestDist then
-						bestDist = dist
-						bestSection = descendant
-						bestModel = model
+	local function rebuildSectionCache()
+		local now = os.clock()
+		local includePlayerWood = Config.ChopPlayerWood == true
+		if (now - sectionCacheAt) < SECTION_CACHE_TTL and sectionCachePlayerWood == includePlayerWood then
+			return
+		end
+
+		sectionCacheAt = now
+		sectionCachePlayerWood = includePlayerWood
+		table.clear(sectionCache)
+
+		for _, folder in getSearchFolders() do
+			for _, model in folder:GetChildren() do
+				if not model:IsA("Model") then
+					continue
+				end
+				local cutEvent = model:FindFirstChild("CutEvent")
+				if not cutEvent then
+					continue
+				end
+				local className = Util.getTreeClass(model)
+				for _, descendant in model:GetDescendants() do
+					if descendant:IsA("BasePart") then
+						local idValue = descendant:FindFirstChild("ID")
+						if idValue and idValue:IsA("IntValue") then
+							table.insert(sectionCache, {
+								section = descendant,
+								model = model,
+								className = className,
+							})
+						end
 					end
 				end
 			end
 		end
-
-		return bestSection, bestModel, bestDist
 	end
 
-	local function buildFaceVector(section: BasePart, head: BasePart, surfaceNormal: Vector3): Vector3?
+	local function getNearestSection(origin: Vector3, maxRange: number, options: { filter: string?, rareOnly: boolean? }?)
+		rebuildSectionCache()
+
+		local bestSection = nil
+		local bestModel = nil
+		local bestDistSq = maxRange * maxRange
+		local filter = (options and options.filter) or Config.ChopWoodType or "Any"
+		local rareOnly = if options and options.rareOnly ~= nil then options.rareOnly else Config.ChopRareOnly == true
+
+		for _, entry in sectionCache do
+			if rareOnly and not Util.isRareWood(entry.className, Constants.RARE_WOODS) then
+				continue
+			end
+			if not Util.matchesWoodFilter(entry.className, filter) then
+				continue
+			end
+			local distSq = Util.distanceSq(origin, entry.section.Position)
+			if distSq < bestDistSq then
+				bestDistSq = distSq
+				bestSection = entry.section
+				bestModel = entry.model
+			end
+		end
+
+		if not bestSection then
+			return nil, nil, maxRange
+		end
+		return bestSection, bestModel, math.sqrt(bestDistSq)
+	end
+
+	local function getChopHeight(section: BasePart, hitPoint: Vector3): number
+		local height = section.CFrame:PointToObjectSpace(hitPoint).Y + section.Size.Y / 2
+		return math.clamp(height, 0, section.Size.Y)
+	end
+
+	local function getChopTarget(section: BasePart, height: number): Vector3
+		return (section.CFrame * CFrame.new(0, height - section.Size.Y / 2, 0)).Position
+	end
+
+	local function buildFaceVector(section: BasePart, head: BasePart, surfaceNormal: Vector3, lookPoint: Vector3): Vector3?
 		local faceVector = Util.fixVector(section.CFrame:VectorToObjectSpace(surfaceNormal))
 		if faceVector.Y ~= 0 then
 			return nil
 		end
 
-		local lookAt = CFrame.new(head.Position, section.Position)
+		local lookAt = CFrame.new(head.Position, lookPoint)
 		local relative = lookAt:ToObjectSpace(section.CFrame * CFrame.Angles(math.pi / 2, 0, 0))
 		local sign = if relative.LookVector.Y >= 0 then 1 else -1
 
@@ -61,8 +123,8 @@ function M.create(opts)
 
 	local function chopSection(section: BasePart, treeModel: Model, tool: Tool): boolean
 		local head = Util.getHead(LocalPlayer)
-		local root = Util.getRoot(LocalPlayer)
-		if not (head and root) then
+		local character = Util.getCharacter(LocalPlayer)
+		if not (head and character) then
 			return false
 		end
 
@@ -74,26 +136,23 @@ function M.create(opts)
 
 		local stats = Util.getAxeStats(tool)
 		local range = stats.Range
-		local targetPos = section.Position
-		local height = section.CFrame:PointToObjectSpace(targetPos).Y + section.Size.Y / 2
+		local lookPoint = section.Position
+		local height = getChopHeight(section, lookPoint)
+		local rayTarget = getChopTarget(section, height)
 
-		local rayDirection = (targetPos - head.Position)
-		if rayDirection.Magnitude < 0.05 then
-			return false
-		end
-
-		local rayResult, surfaceNormal = workspace:FindPartOnRay(
-			Ray.new(head.Position, rayDirection.Unit * range),
-			LocalPlayer.Character
-		)
+		local rayResult, surfaceNormal = Util.raycastFromHead(head, rayTarget, range, character)
 		if rayResult ~= section and (not rayResult or rayResult.Parent ~= treeModel) then
-			return false
+			local closeEnough = Util.distance(head.Position, section.Position) <= range * 0.9
+			if not closeEnough then
+				return false
+			end
+			surfaceNormal = (head.Position - section.Position).Unit
 		end
 		if not surfaceNormal then
-			surfaceNormal = -rayDirection.Unit
+			surfaceNormal = (head.Position - rayTarget).Unit
 		end
 
-		local faceVector = buildFaceVector(section, head, surfaceNormal)
+		local faceVector = buildFaceVector(section, head, surfaceNormal, lookPoint)
 		if not faceVector then
 			return false
 		end
@@ -134,17 +193,17 @@ function M.create(opts)
 			return
 		end
 
-		local range = math.clamp(tonumber(Config.ChopRange) or 24, 8, 80)
+		local stats = Util.getAxeStats(tool)
+		local range = math.clamp(tonumber(Config.ChopRange) or 24, 8, 120)
 		local section, treeModel, dist = getNearestSection(root.Position, range)
 		if not (section and treeModel) then
 			return
 		end
 
-		if Config.ChopTeleport and dist > (Util.getAxeStats(tool).Range * 0.8) then
+		if Config.ChopTeleport and dist > (stats.Range * 0.8) then
 			pcall(function()
 				root.CFrame = CFrame.new(section.Position + Vector3.new(0, 3, 0), section.Position)
 			end)
-			task.wait(0.05)
 		end
 
 		if chopSection(section, treeModel, tool) then
@@ -152,8 +211,34 @@ function M.create(opts)
 		end
 	end
 
+	local function findNearestRareWood(maxRange: number?)
+		local root = Util.getRoot(LocalPlayer)
+		if not root then
+			return nil
+		end
+		local range = maxRange or math.clamp(tonumber(Config.WoodESPRange) or 400, 50, 5000)
+		return select(1, getNearestSection(root.Position, range, {
+			filter = "Any",
+			rareOnly = true,
+		}))
+	end
+
+	local function teleportToNearestRareWood()
+		local section = findNearestRareWood()
+		local root = Util.getRoot(LocalPlayer)
+		if not (section and root) then
+			warn("[LT2] no rare wood found in range")
+			return false
+		end
+		return pcall(function()
+			root.CFrame = CFrame.new(section.Position + Vector3.new(0, 5, 0), section.Position)
+		end)
+	end
+
 	return {
 		tryAutoChop = tryAutoChop,
+		findNearestRareWood = findNearestRareWood,
+		teleportToNearestRareWood = teleportToNearestRareWood,
 	}
 end
 

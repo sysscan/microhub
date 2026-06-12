@@ -1,12 +1,40 @@
 return {
-	GAME_BUILD = "1-lt2",
+	GAME_BUILD = "2-features-opt",
 	PLACE_ID = 13822889,
 	MAX_SAFE_WALKSPEED = 80,
 	MAX_SAFE_JUMP = 120,
 	MAX_FLY_SPEED = 150,
 
+	SELL_WOOD_POSITION = Vector3.new(255.7, 4.5, 66.1),
+	WOOD_DROPOFF_POSITION = Vector3.new(322.5, 12, 97.1),
+
+	CHOP_WOOD_TYPES = {
+		"Any",
+		"Generic",
+		"Oak",
+		"Birch",
+		"Cherry",
+		"Walnut",
+		"Koa",
+		"Gold",
+		"Spook",
+		"Sinister",
+		"Cavecrawler",
+		"SnowGlow",
+		"Frost",
+		"Phantom",
+		"LoneCave",
+		"Palm",
+		"Redwood",
+		"GreenSwampy",
+		"BlueSpruce",
+	},
+
 	TELEPORT_LOCATIONS = {
 		"Spawn",
+		"Sell Wood",
+		"Wood Dropoff",
+		"My Plot",
 		"Wood R Us",
 		"Land Store",
 		"Furniture Store",
@@ -30,6 +58,8 @@ return {
 
 	WAYPOINTS = {
 		Spawn = Vector3.new(155.4, 5, 58),
+		["Sell Wood"] = Vector3.new(255.7, 4.5, 66.1),
+		["Wood Dropoff"] = Vector3.new(322.5, 12, 97.1),
 		["Wood R Us"] = Vector3.new(301, 13, 58),
 		["Land Store"] = Vector3.new(297, 10, -99),
 		["Furniture Store"] = Vector3.new(477, 5, -1722),
@@ -68,6 +98,11 @@ return {
 	},
 
 	WOOD_ESP_COLORS = {
+		Generic = Color3.fromRGB(160, 130, 90),
+		Oak = Color3.fromRGB(150, 120, 70),
+		Birch = Color3.fromRGB(220, 220, 200),
+		Cherry = Color3.fromRGB(180, 80, 80),
+		Walnut = Color3.fromRGB(120, 80, 50),
 		Cavecrawler = Color3.fromRGB(80, 255, 120),
 		Sinister = Color3.fromRGB(120, 0, 180),
 		Spook = Color3.fromRGB(200, 200, 255),
