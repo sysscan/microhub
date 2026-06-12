@@ -20,6 +20,7 @@ local ESPLib = require("games/vv-ultimatum/esp.lua")
 local UILibDef = require("games/vv-ultimatum/ui.lua")
 local BootstrapLib = require("games/vv-ultimatum/bootstrap.lua")
 local Safety = require("games/vv-ultimatum/safety.lua")
+local DebuggerLib = require("games/vv-ultimatum/debugger.lua")
 
 local M = {}
 
@@ -49,6 +50,12 @@ function M._run()
 		replicatedStorage = ReplicatedStorage,
 	})
 
+	local debugger = DebuggerLib.create({
+		config = Config,
+	})
+	debugger.hookRemotes(remotes)
+	debugger.start(LocalPlayer)
+
 	local playerData = PlayerDataLib.create({
 		replicatedStorage = ReplicatedStorage,
 		localPlayer = LocalPlayer,
@@ -66,7 +73,7 @@ function M._run()
 	local movement = MovementLib.create({
 		config = Config,
 		localPlayer = LocalPlayer,
-		remotes = remotes,
+		debugger = debugger,
 	})
 
 	local combat = CombatLib.create({
@@ -90,6 +97,7 @@ function M._run()
 		constants = Constants,
 		remotes = remotes,
 		playerData = playerData,
+		debugger = debugger,
 	})
 
 	local esp = ESPLib.create({
@@ -108,6 +116,7 @@ function M._run()
 		uiLib = UILib,
 		teleport = teleport,
 		playerData = playerData,
+		debugger = debugger,
 	})
 
 	BootstrapLib.create({
@@ -141,10 +150,12 @@ function M._run()
 		combat.destroy()
 		esp.destroy()
 		movement.destroy()
+		debugger.destroy()
 	end
 
 	local genv = typeof(getgenv) == "function" and getgenv() or _G
 	genv.__VVUltimatumUnload = unload
+	genv.__VVUltimatumDebug = debugger
 
 	print("[MicroHub] VV Ultimatum", Constants.GAME_BUILD, "— Drawing:", canDraw)
 end

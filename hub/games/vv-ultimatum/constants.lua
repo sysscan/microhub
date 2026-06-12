@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "3-hardened",
+	GAME_BUILD = "5-optimized",
 	GAME_ID = 7932544707,
 
 	-- ReplicatedStorage.SharedAssets.Info.PlaceIds.IDMap.MainGame
@@ -72,4 +72,6 @@ return {
 
 	MAX_ESP_DIST = 2500,
 	FARM_RANGE = 400,
+
+	FARM_MOVE_MODES = { "safe", "step", "walk" },
 }

@@ -17,8 +17,8 @@ function M.create(opts)
 		esp.update()
 	end)))
 
-	table.insert(connections, RunService.Heartbeat:Connect(Safety.guard(function()
-		movement.tickMovement()
+	table.insert(connections, RunService.Heartbeat:Connect(Safety.guard(function(dt)
+		movement.tickMovement(dt)
 		if not Config.AutoFarm then
 			combat.tickCombat()
 		end

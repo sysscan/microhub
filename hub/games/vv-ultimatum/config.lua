@@ -34,7 +34,19 @@ return {
 	Flight = false,
 	Noclip = false,
 	WalkSpeed = 24,
+	FlightSpeed = 48,
+
+	-- Farm movement (safe = limit Y drop per TP, step = hop in studs, walk = Humanoid:MoveTo)
+	FarmMoveMode = "safe",
+	FarmStepStuds = 14,
+	FarmWalkArrive = 14,
+	FarmMoveCooldown = 0.35,
+	TeleportMaxDrop = 12,
 
 	-- Teleport
 	TeleportPlace = "HumanWorld",
+
+	-- Debugger
+	DebugMonitorAC = true,
+	DebugLivePrint = false,
 }

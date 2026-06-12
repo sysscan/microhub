@@ -5,8 +5,15 @@ function M.create(opts)
 	local Constants = opts.constants
 	local remotes = opts.remotes
 	local playerData = opts.playerData
+	local debugger = opts.debugger
 
 	local hopping = false
+
+	local function dbg(tag, detail)
+		if debugger then
+			debugger.log(tag, detail)
+		end
+	end
 
 	local function joinServer(jobId: string): boolean
 		if type(jobId) ~= "string" or jobId == "" or jobId == game.JobId then
@@ -24,8 +31,10 @@ function M.create(opts)
 		end
 
 		hopping = true
+		dbg("world_teleport_start", { place = placeName })
 
 		local function finish(result: boolean): boolean
+			dbg("world_teleport_finish", { place = placeName, ok = result })
 			hopping = false
 			return result
 		end

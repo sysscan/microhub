@@ -6,6 +6,7 @@ function M.create(opts)
 	local UILib = opts.uiLib
 	local teleport = opts.teleport
 	local playerData = opts.playerData
+	local debugger = opts.debugger
 
 	UILib.create({
 		title = "VV ULTIMATUM",
@@ -102,8 +103,51 @@ function M.create(opts)
 								max = 80,
 								step = 1,
 							},
-							{ type = "toggle", key = "Flight", label = "Toggle Flight", hud = "Flight" },
+							{ type = "toggle", key = "Flight", label = "Flight (CFrame)", hud = "Flight" },
+							{
+								type = "slider",
+								key = "FlightSpeed",
+								label = "Flight Speed",
+								min = 16,
+								max = 120,
+								step = 4,
+							},
 							{ type = "toggle", key = "Noclip", label = "Noclip", hud = "Noclip" },
+						},
+					},
+					{
+						title = "Farm Travel",
+						items = {
+							{
+								type = "select",
+								key = "FarmMoveMode",
+								label = "Approach Mode",
+								options = Constants.FARM_MOVE_MODES,
+							},
+							{
+								type = "slider",
+								key = "FarmStepStuds",
+								label = "Step Studs",
+								min = 8,
+								max = 30,
+								step = 2,
+							},
+							{
+								type = "slider",
+								key = "TeleportMaxDrop",
+								label = "Max Y Drop / TP",
+								min = 4,
+								max = 16,
+								step = 1,
+							},
+							{
+								type = "slider",
+								key = "FarmMoveCooldown",
+								label = "Move Cooldown",
+								min = 0.15,
+								max = 1.5,
+								step = 0.05,
+							},
 						},
 					},
 				},
@@ -148,6 +192,31 @@ function M.create(opts)
 										print("[VV Ultimatum]", summary.Race, "L" .. tostring(summary.Level), summary.Faction)
 									else
 										warn("[VV Ultimatum] Character data not ready")
+									end
+								end,
+							},
+						},
+					},
+					{
+						title = "Debugger",
+						items = {
+							{ type = "toggle", key = "DebugMonitorAC", label = "Monitor AC Signals", hud = "AC Mon" },
+							{ type = "toggle", key = "DebugLivePrint", label = "Live Print Events", hud = "Dbg Print" },
+							{
+								type = "button",
+								label = "Dump Debug Log",
+								callback = function()
+									if debugger then
+										debugger.dump()
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "Clear Debug Log",
+								callback = function()
+									if debugger then
+										debugger.clear()
 									end
 								end,
 							},

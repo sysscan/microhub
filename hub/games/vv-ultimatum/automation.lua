@@ -12,6 +12,7 @@ function M.create(opts)
 	local lastSecondaryMission = 0
 	local lastQuestScan = 0
 	local lastMeditate = 0
+	local lastFarmMove = 0
 
 	local function tickAutomation()
 		local now = os.clock()
@@ -65,16 +66,22 @@ function M.create(opts)
 			return
 		end
 
+		local now = os.clock()
 		local range = tonumber(Config.FarmRange) or Constants.FARM_RANGE
 		local target, dist = combat.nearestEnemy(range)
 		if not target or not dist then
 			return
 		end
 
-		if dist > 12 then
+		local arriveDist = tonumber(Config.FarmWalkArrive) or 14
+		if dist > arriveDist then
 			local mobRoot = target:FindFirstChild("HumanoidRootPart")
 			if mobRoot and mobRoot:IsA("BasePart") then
-				movement.teleportNear(mobRoot.Position, 8)
+				local cooldown = tonumber(Config.FarmMoveCooldown) or 0.35
+				if now - lastFarmMove >= cooldown then
+					lastFarmMove = now
+					movement.farmApproach(mobRoot.Position, 8)
+				end
 			end
 			return
 		end
