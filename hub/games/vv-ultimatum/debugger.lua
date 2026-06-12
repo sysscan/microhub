@@ -13,6 +13,27 @@ function M.create(opts)
 	local savedRemotes: { packet: any, fire: any, invoke: any }? = nil
 	local hooked = false
 
+	local function formatDetail(detail: any): string
+		if detail == nil then
+			return ""
+		end
+		if type(detail) ~= "table" then
+			return tostring(detail)
+		end
+		local keys = {}
+		for k in detail do
+			table.insert(keys, k)
+		end
+		table.sort(keys, function(a, b)
+			return tostring(a) < tostring(b)
+		end)
+		local parts = {}
+		for _, k in keys do
+			table.insert(parts, tostring(k) .. "=" .. tostring(detail[k]))
+		end
+		return table.concat(parts, ", ")
+	end
+
 	local function log(tag: string, detail: any?)
 		local row = {
 			t = os.clock(),
@@ -24,20 +45,12 @@ function M.create(opts)
 			table.remove(entries, 1)
 		end
 		if Config.DebugLivePrint then
-			warn("[VV-DBG]", tag, detail)
+			warn("[VV-DBG]", tag, formatDetail(detail))
 		end
 	end
 
 	local function formatEntry(row)
-		local detail = row.detail
-		if type(detail) == "table" then
-			local parts = {}
-			for k, v in detail do
-				table.insert(parts, tostring(k) .. "=" .. tostring(v))
-			end
-			detail = table.concat(parts, ", ")
-		end
-		return string.format("[%.2f] %s | %s", row.t, row.tag, tostring(detail))
+		return string.format("[%.2f] %s | %s", row.t, row.tag, formatDetail(row.detail))
 	end
 
 	local function dump()
@@ -172,6 +185,14 @@ function M.create(opts)
 
 		table.insert(globalConnections, localPlayer.OnTeleport:Connect(function(state)
 			log("OnTeleport", { state = tostring(state) })
+		end))
+
+		table.insert(globalConnections, localPlayer.CharacterRemoving:Connect(function(char)
+			local root = char:FindFirstChild("HumanoidRootPart")
+			log("CharacterRemoving", {
+				reason = "kick_or_reset",
+				y = root and math.floor(root.Position.Y) or "nil",
+			})
 		end))
 
 		if localPlayer.Character then

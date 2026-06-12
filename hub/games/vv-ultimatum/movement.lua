@@ -39,6 +39,10 @@ function M.create(opts)
 		return char:FindFirstChildOfClass("Humanoid")
 	end
 
+	local function maxHorizStep(): number
+		return tonumber(Config.FarmStepStuds) or 12
+	end
+
 	local function captureBaseWalkSpeed(hum: Humanoid)
 		if baseWalkSpeed == nil then
 			baseWalkSpeed = hum.WalkSpeed
@@ -214,12 +218,23 @@ function M.create(opts)
 		end
 	end
 
-	local function placeAt(root: BasePart, dest: Vector3, lookAt: Vector3)
+	local function placeAt(root: BasePart, dest: Vector3, lookAt: Vector3, tag: string?)
+		local from = root.Position
+		local delta = (dest - from).Magnitude
 		zeroVelocity(root)
 		root.CFrame = CFrame.new(dest, lookAt)
+
+		if debugger and tag then
+			debugger.log(tag, {
+				delta = math.floor(delta * 10) / 10,
+				horiz = math.floor(horizDist(from, dest)),
+				fromY = math.floor(from.Y),
+				toY = math.floor(dest.Y),
+			})
+		end
 	end
 
-	local function teleportNear(targetPos: Vector3, standoff: number?)
+	local function applyStandoffCFrame(targetPos: Vector3, standoff: number?, horizCap: number?)
 		local root = getRoot()
 		if not root then
 			return false
@@ -227,59 +242,29 @@ function M.create(opts)
 
 		local from = root.Position
 		local dest, dist = computeStandoffPos(from, targetPos, standoff)
+		local cap = horizCap or maxHorizStep()
+
+		if dist > cap then
+			local delta = dest - from
+			local flat = Vector3.new(delta.X, 0, delta.Z)
+			dest = from + flat.Unit * cap
+			dist = cap
+		end
+
 		local ground = groundYAt(dest)
 		local newY = resolveSafeY(from.Y, dest, ground, dist)
 		dest = Vector3.new(dest.X, newY, dest.Z)
 
-		placeAt(root, dest, Vector3.new(targetPos.X, newY, targetPos.Z))
-
-		if debugger then
-			debugger.log("teleportNear", {
-				horiz = math.floor(dist),
-				fromY = math.floor(from.Y),
-				toY = math.floor(newY),
-				groundY = ground and math.floor(ground) or "nil",
-				drop = math.floor(from.Y - (ground or dest.Y)),
-			})
-		end
-
-		return true
+		placeAt(root, dest, Vector3.new(targetPos.X, newY, targetPos.Z), "farm_move")
+		return dist <= cap + 0.5
 	end
 
-	local function stepHorizToward(targetPos: Vector3, standoff: number?, maxStep: number): boolean
-		local root = getRoot()
-		if not root then
-			return false
-		end
-
-		local from = root.Position
-		local finalDest, dist = computeStandoffPos(from, targetPos, standoff)
-		if dist <= maxStep then
-			teleportNear(targetPos, standoff)
-			return true
-		end
-
-		local delta = finalDest - from
-		local flat = Vector3.new(delta.X, 0, delta.Z)
-		local stepDest = from + flat.Unit * maxStep
-		local ground = groundYAt(stepDest)
-		local newY = resolveSafeY(from.Y, stepDest, ground, dist - maxStep)
-		stepDest = Vector3.new(stepDest.X, newY, stepDest.Z)
-		placeAt(root, stepDest, stepDest + flat.Unit)
-
-		if debugger then
-			debugger.log("stepHoriz", {
-				step = math.floor(maxStep),
-				left = math.floor(dist - maxStep),
-				toY = math.floor(newY),
-			})
-		end
-
-		return false
+	local function teleportNear(targetPos: Vector3, standoff: number?)
+		return applyStandoffCFrame(targetPos, standoff, maxHorizStep())
 	end
 
 	local function farmApproach(targetPos: Vector3, standoff: number?)
-		local mode = Config.FarmMoveMode or "safe"
+		local mode = Config.FarmMoveMode or "step"
 		local root = getRoot()
 		if not root then
 			return false
@@ -299,17 +284,18 @@ function M.create(opts)
 				if hum then
 					hum:MoveTo(dest)
 				end
+				if debugger then
+					debugger.log("farm_walk", {
+						horiz = math.floor(dist),
+						destY = math.floor(dest.Y),
+					})
+				end
 			end
 			return dist <= arrive
 		end
 
-		if mode == "step" then
-			local step = tonumber(Config.FarmStepStuds) or 14
-			return stepHorizToward(targetPos, standoff, step)
-		end
-
-		teleportNear(targetPos, standoff)
-		return dist <= arrive
+		-- step + safe: capped horizontal hops (never full-distance snap)
+		return applyStandoffCFrame(targetPos, standoff, maxHorizStep())
 	end
 
 	local function tickMovement(dt: number)

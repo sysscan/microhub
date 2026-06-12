@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "5-optimized",
+	GAME_BUILD = "6-farm-kickfix",
 	GAME_ID = 7932544707,
 
 	-- ReplicatedStorage.SharedAssets.Info.PlaceIds.IDMap.MainGame

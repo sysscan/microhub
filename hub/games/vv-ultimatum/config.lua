@@ -36,11 +36,11 @@ return {
 	WalkSpeed = 24,
 	FlightSpeed = 48,
 
-	-- Farm movement (safe = limit Y drop per TP, step = hop in studs, walk = Humanoid:MoveTo)
-	FarmMoveMode = "safe",
-	FarmStepStuds = 14,
+	-- Farm movement (step/safe = capped hops, walk = Humanoid:MoveTo)
+	FarmMoveMode = "step",
+	FarmStepStuds = 12,
 	FarmWalkArrive = 14,
-	FarmMoveCooldown = 0.35,
+	FarmMoveCooldown = 0.55,
 	TeleportMaxDrop = 12,
 
 	-- Teleport

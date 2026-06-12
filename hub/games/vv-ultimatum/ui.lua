@@ -127,10 +127,10 @@ function M.create(opts)
 							{
 								type = "slider",
 								key = "FarmStepStuds",
-								label = "Step Studs",
-								min = 8,
-								max = 30,
-								step = 2,
+								label = "Max Studs / Hop",
+								min = 6,
+								max = 20,
+								step = 1,
 							},
 							{
 								type = "slider",
