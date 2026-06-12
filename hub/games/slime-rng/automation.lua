@@ -193,7 +193,15 @@ function M.create(opts)
 			if layersA ~= layersB then
 				return layersA < layersB
 			end
-			return (a.coords or 0) < (b.coords or 0)
+			local coordsA = a.coords
+			local coordsB = b.coords
+			if typeof(coordsA) == "Vector2" and typeof(coordsB) == "Vector2" then
+				if coordsA.X ~= coordsB.X then
+					return coordsA.X < coordsB.X
+				end
+				return coordsA.Y < coordsB.Y
+			end
+			return tostring(a.id) < tostring(b.id)
 		end)
 
 		local nextUpgrade = candidates[1]

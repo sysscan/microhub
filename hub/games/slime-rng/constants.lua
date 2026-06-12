@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "2-extras",
+	GAME_BUILD = "2-extras-fix",
 	PLACE_ID = 92416421522960,
 	MAX_SAFE_WALKSPEED = 120,
 	MAX_SAFE_JUMP = 120,

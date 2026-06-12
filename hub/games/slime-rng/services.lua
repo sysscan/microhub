@@ -133,6 +133,9 @@ function M.create(opts)
 		getGoopGunService = function()
 			return get("GoopGunServiceClient", "Features", "GoopGun", "GoopGunServiceClient")
 		end,
+		getGoopGunUtils = function()
+			return get("GoopGunServiceUtils", "Features", "GoopGun", "GoopGunServiceUtils")
+		end,
 	}
 
 	return api
