@@ -1,0 +1,41 @@
+return {
+	GAME_BUILD = "2-full",
+	PLACE_ID = 9534337535,
+	MAX_SAFE_WALKSPEED = 120,
+	MAX_SAFE_JUMP = 120,
+	MAX_FLY_SPEED = 150,
+	QUEST_KEYS = {
+		"Survival",
+		"Kill Entities",
+		"Discover Level",
+		"Trap Entity",
+		"Search Lockers",
+	},
+	TELEPORT_LEVELS = {
+		"Lobby",
+		"Level 1",
+		"Level 2",
+		"Level 3",
+		"Level 4",
+		"Level 5",
+		"Motion",
+	},
+	TOOL_SHOP_ITEMS = {
+		"Pistol",
+		"Assault Rifle",
+		"Shotgun",
+		"SMG",
+		"BFG",
+	},
+	SPIN_SUBTYPES = {
+		"Classic Box",
+		"Brainrot Box",
+		"67 Box",
+		"Waffle Box",
+	},
+	ROBUX_BOX_PACKS = {
+		{ box = "Classic Box", pack = "1 Boxes" },
+		{ box = "Classic Box", pack = "3 Boxes" },
+		{ box = "Classic Box", pack = "10 Boxes" },
+	},
+}
