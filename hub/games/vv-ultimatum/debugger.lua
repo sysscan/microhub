@@ -2,7 +2,7 @@
 
 local M = {}
 
-local MAX_ENTRIES = 250
+local MAX_ENTRIES = 400
 
 function M.create(opts)
 	local Config = opts.config
@@ -12,6 +12,7 @@ function M.create(opts)
 	local remotesRef = nil
 	local savedRemotes: { packet: any, fire: any, invoke: any }? = nil
 	local hooked = false
+	local instantTpTimes: { number } = {}
 
 	local function formatDetail(detail: any): string
 		if detail == nil then
@@ -49,6 +50,56 @@ function M.create(opts)
 		end
 	end
 
+	local function recentInstantCount(window: number?): number
+		local w = window or 5
+		local now = os.clock()
+		local n = 0
+		for i = #instantTpTimes, 1, -1 do
+			if now - instantTpTimes[i] > w then
+				table.remove(instantTpTimes, i)
+			else
+				n += 1
+			end
+		end
+		return n
+	end
+
+	local function recordInstantTp(detail: { [string]: any })
+		table.insert(instantTpTimes, os.clock())
+		local enriched = {}
+		for k, v in detail do
+			enriched[k] = v
+		end
+		enriched.recent5s = recentInstantCount(5)
+		enriched.recent10s = recentInstantCount(10)
+		log("instant_tp", enriched)
+	end
+
+	local function snapshotAfterTp(label: string, healthBefore: number?)
+		task.delay(1.5, function()
+			local player = game:GetService("Players").LocalPlayer
+			local char = player and player.Character
+			if not char then
+				log("tp_snapshot", { label = label, status = "no_character" })
+				return
+			end
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			local status = char:FindFirstChild("Status")
+			local effects = {}
+			if status then
+				for _, child in status:GetChildren() do
+					table.insert(effects, child.Name)
+				end
+			end
+			log("tp_snapshot", {
+				label = label,
+				health = hum and math.floor(hum.Health) or "nil",
+				healthDelta = if hum and healthBefore then math.floor(hum.Health - healthBefore) else "nil",
+				effects = table.concat(effects, ","),
+			})
+		end)
+	end
+
 	local function formatEntry(row)
 		return string.format("[%.2f] %s | %s", row.t, row.tag, formatDetail(row.detail))
 	end
@@ -58,10 +109,12 @@ function M.create(opts)
 		for _, row in entries do
 			print(formatEntry(row))
 		end
+		print("[VV Ultimatum] instant TPs in last 10s:", recentInstantCount(10))
 	end
 
 	local function clear()
 		table.clear(entries)
+		table.clear(instantTpTimes)
 	end
 
 	local function clearCharConnections()
@@ -130,12 +183,17 @@ function M.create(opts)
 		end
 
 		remotes.fire = function(name, ...)
+			local a1, a2, a3 = ...
 			if name == "TakeDamage" then
-				log("TakeDamage", { amount = ... })
+				log("TakeDamage", { amount = a1 })
 			elseif name == "ToggleFlight" then
-				log("ToggleFlight", { active = ... })
+				log("ToggleFlight", { active = a1 })
+			elseif name == "FlashStep" then
+				log("FlashStep", {})
+			elseif name == "Combat" then
+				log("Combat", { action = tostring(a1), arg = tostring(a2) })
 			elseif name == "FX_Server" then
-				local payload = ...
+				local payload = a1
 				if type(payload) == "table" and payload.Type == "FallFX" then
 					log("FallFX", {
 						distance = payload.FallDistance,
@@ -149,7 +207,7 @@ function M.create(opts)
 		remotes.invoke = function(name, ...)
 			local t0 = os.clock()
 			local ok, result = savedRemotes.invoke(name, ...)
-			if name == "FinishLoading" or name == "TeleportToServer" or name == "GetServerList" then
+			if name == "FinishLoading" or name == "TeleportToServer" or name == "GetServerList" or name == "Dash" then
 				log("invoke_" .. name, {
 					ok = ok,
 					result = if ok then tostring(result) else "err",
@@ -192,6 +250,7 @@ function M.create(opts)
 			log("CharacterRemoving", {
 				reason = "kick_or_reset",
 				y = root and math.floor(root.Position.Y) or "nil",
+				instant10s = recentInstantCount(10),
 			})
 		end))
 
@@ -211,10 +270,13 @@ function M.create(opts)
 		table.clear(globalConnections)
 		unhookRemotes()
 		table.clear(entries)
+		table.clear(instantTpTimes)
 	end
 
 	return {
 		log = log,
+		recordInstantTp = recordInstantTp,
+		snapshotAfterTp = snapshotAfterTp,
 		dump = dump,
 		clear = clear,
 		getEntries = function()

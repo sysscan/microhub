@@ -218,20 +218,73 @@ function M.create(opts)
 		end
 	end
 
-	local function placeAt(root: BasePart, dest: Vector3, lookAt: Vector3, tag: string?)
+	local function logMove(tag: string, from: Vector3, dest: Vector3, extra: { [string]: any }?)
+		if not debugger then
+			return
+		end
+		local detail = {
+			delta = math.floor((dest - from).Magnitude * 10) / 10,
+			horiz = math.floor(horizDist(from, dest)),
+			yDelta = math.floor(dest.Y - from.Y),
+			fromY = math.floor(from.Y),
+			toY = math.floor(dest.Y),
+		}
+		if extra then
+			for k, v in extra do
+				detail[k] = v
+			end
+		end
+		if tag == "instant_tp" then
+			debugger.recordInstantTp(detail)
+		else
+			debugger.log(tag, detail)
+		end
+	end
+
+	local function placeAt(root: BasePart, dest: Vector3, lookAt: Vector3, tag: string?, extra: { [string]: any }?)
 		local from = root.Position
-		local delta = (dest - from).Magnitude
 		zeroVelocity(root)
 		root.CFrame = CFrame.new(dest, lookAt)
-
-		if debugger and tag then
-			debugger.log(tag, {
-				delta = math.floor(delta * 10) / 10,
-				horiz = math.floor(horizDist(from, dest)),
-				fromY = math.floor(from.Y),
-				toY = math.floor(dest.Y),
-			})
+		if tag then
+			logMove(tag, from, dest, extra)
 		end
+	end
+
+	local function resolveInstantY(fromY: number, dest: Vector3, targetPos: Vector3, variant: string): number
+		if variant == "flat" then
+			return fromY
+		end
+		if variant == "mob_y" then
+			return targetPos.Y
+		end
+		if variant == "ground" then
+			return groundYAt(dest) or dest.Y
+		end
+		-- raw: standoff XZ at target Y (no ground raycast, no player Y lock)
+		return targetPos.Y
+	end
+
+	local function instantTeleportNear(targetPos: Vector3, standoff: number?, variant: string?)
+		local root = getRoot()
+		local hum = getHumanoid()
+		if not root then
+			return false
+		end
+
+		local from = root.Position
+		local healthBefore = hum and hum.Health
+		local v = variant or Config.InstantTpVariant or "flat"
+		local dest, horiz = computeStandoffPos(from, targetPos, standoff)
+		local newY = resolveInstantY(from.Y, dest, targetPos, v)
+		dest = Vector3.new(dest.X, newY, dest.Z)
+
+		placeAt(root, dest, Vector3.new(targetPos.X, newY, targetPos.Z), "instant_tp", { variant = v })
+
+		if debugger then
+			debugger.snapshotAfterTp("instant_" .. v, healthBefore)
+		end
+
+		return true
 	end
 
 	local function applyStandoffCFrame(targetPos: Vector3, standoff: number?, horizCap: number?)
@@ -272,6 +325,10 @@ function M.create(opts)
 
 		local dist = horizDist(root.Position, targetPos)
 		local arrive = tonumber(Config.FarmWalkArrive) or 14
+
+		if mode == "instant" then
+			return instantTeleportNear(targetPos, standoff, Config.InstantTpVariant)
+		end
 
 		if mode == "walk" then
 			local dest, _ = computeStandoffPos(root.Position, targetPos, standoff)
@@ -347,10 +404,35 @@ function M.create(opts)
 		end
 	end
 
+	local function testInstantTp(targetPos: Vector3, standoff: number?)
+		warn("[VV-TP-LAB] single instant TP | variant:", Config.InstantTpVariant or "flat")
+		return instantTeleportNear(targetPos, standoff or 8, Config.InstantTpVariant)
+	end
+
+	local function testInstantTpBurst(targetPos: Vector3, count: number?, delay: number?)
+		local n = tonumber(count) or 5
+		local gap = tonumber(delay) or 0.35
+		warn("[VV-TP-LAB] burst x" .. tostring(n) .. " | variant:", Config.InstantTpVariant or "flat")
+		task.spawn(function()
+			for i = 1, n do
+				if not getRoot() then
+					break
+				end
+				instantTeleportNear(targetPos, 8, Config.InstantTpVariant)
+				if i < n then
+					task.wait(gap)
+				end
+			end
+		end)
+	end
+
 	return {
 		tickMovement = tickMovement,
 		teleportNear = teleportNear,
+		instantTeleportNear = instantTeleportNear,
 		farmApproach = farmApproach,
+		testInstantTp = testInstantTp,
+		testInstantTpBurst = testInstantTpBurst,
 		getRoot = getRoot,
 		onCharacterAdded = onCharacterAdded,
 		destroy = destroy,

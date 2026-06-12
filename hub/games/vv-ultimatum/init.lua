@@ -117,6 +117,8 @@ function M._run()
 		teleport = teleport,
 		playerData = playerData,
 		debugger = debugger,
+		movement = movement,
+		combat = combat,
 	})
 
 	BootstrapLib.create({

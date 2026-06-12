@@ -7,6 +7,8 @@ function M.create(opts)
 	local teleport = opts.teleport
 	local playerData = opts.playerData
 	local debugger = opts.debugger
+	local movement = opts.movement
+	local combat = opts.combat
 
 	UILib.create({
 		title = "VV ULTIMATUM",
@@ -192,6 +194,59 @@ function M.create(opts)
 										print("[VV Ultimatum]", summary.Race, "L" .. tostring(summary.Level), summary.Faction)
 									else
 										warn("[VV Ultimatum] Character data not ready")
+									end
+								end,
+							},
+						},
+					},
+					{
+						title = "TP Lab",
+						items = {
+							{
+								type = "select",
+								key = "InstantTpVariant",
+								label = "Instant Y Mode",
+								options = Constants.INSTANT_TP_VARIANTS,
+							},
+							{
+								type = "hint",
+								text = "flat=keep Y | mob_y=snap to mob | ground=raycast | raw=mob Y no ray",
+							},
+							{
+								type = "button",
+								label = "Instant TP → Nearest Mob",
+								callback = function()
+									if not movement or not combat then
+										return
+									end
+									local range = tonumber(Config.FarmRange) or 400
+									local target = combat.nearestEnemy(range)
+									if not target then
+										warn("[VV-TP-LAB] no target in range")
+										return
+									end
+									local root = target:FindFirstChild("HumanoidRootPart")
+									if root and root:IsA("BasePart") then
+										movement.testInstantTp(root.Position, 8)
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "Burst Instant TP ×5",
+								callback = function()
+									if not movement or not combat then
+										return
+									end
+									local range = tonumber(Config.FarmRange) or 400
+									local target = combat.nearestEnemy(range)
+									if not target then
+										warn("[VV-TP-LAB] no target in range")
+										return
+									end
+									local root = target:FindFirstChild("HumanoidRootPart")
+									if root and root:IsA("BasePart") then
+										movement.testInstantTpBurst(root.Position, 5, 0.35)
 									end
 								end,
 							},

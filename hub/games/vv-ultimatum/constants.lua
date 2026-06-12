@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "6-farm-kickfix",
+	GAME_BUILD = "7-tp-lab",
 	GAME_ID = 7932544707,
 
 	-- ReplicatedStorage.SharedAssets.Info.PlaceIds.IDMap.MainGame
@@ -73,5 +73,6 @@ return {
 	MAX_ESP_DIST = 2500,
 	FARM_RANGE = 400,
 
-	FARM_MOVE_MODES = { "safe", "step", "walk" },
+	FARM_MOVE_MODES = { "step", "walk", "instant" },
+	INSTANT_TP_VARIANTS = { "flat", "mob_y", "ground", "raw" },
 }

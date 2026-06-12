@@ -42,6 +42,7 @@ return {
 	FarmWalkArrive = 14,
 	FarmMoveCooldown = 0.55,
 	TeleportMaxDrop = 12,
+	InstantTpVariant = "flat",
 
 	-- Teleport
 	TeleportPlace = "HumanWorld",
