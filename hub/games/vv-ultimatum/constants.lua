@@ -1,5 +1,6 @@
 return {
-	GAME_BUILD = "7-tp-lab",
+	GAME_BUILD = "9-instant-kill",
+	SIMULATION_RADIUS = 112412400000,
 	GAME_ID = 7932544707,
 
 	-- ReplicatedStorage.SharedAssets.Info.PlaceIds.IDMap.MainGame

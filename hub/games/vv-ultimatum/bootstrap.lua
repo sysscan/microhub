@@ -10,6 +10,7 @@ function M.create(opts)
 	local combat = opts.combat
 	local automation = opts.automation
 	local movement = opts.movement
+	local exploits = opts.exploits
 	local connections = opts.connections
 	local loopHelpers = opts.loopHelpers
 
@@ -19,6 +20,9 @@ function M.create(opts)
 
 	table.insert(connections, RunService.Heartbeat:Connect(Safety.guard(function(dt)
 		movement.tickMovement(dt)
+		if exploits then
+			exploits.tickExploits()
+		end
 		if not Config.AutoFarm then
 			combat.tickCombat()
 		end

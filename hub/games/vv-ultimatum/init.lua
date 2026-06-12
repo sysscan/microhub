@@ -21,6 +21,8 @@ local UILibDef = require("games/vv-ultimatum/ui.lua")
 local BootstrapLib = require("games/vv-ultimatum/bootstrap.lua")
 local Safety = require("games/vv-ultimatum/safety.lua")
 local DebuggerLib = require("games/vv-ultimatum/debugger.lua")
+local BypassLib = require("games/vv-ultimatum/bypass.lua")
+local ExploitsLib = require("games/vv-ultimatum/exploits.lua")
 
 local M = {}
 
@@ -50,6 +52,11 @@ function M._run()
 		replicatedStorage = ReplicatedStorage,
 	})
 
+	local bypass = BypassLib.create({
+		config = Config,
+		replicatedStorage = ReplicatedStorage,
+	})
+
 	local debugger = DebuggerLib.create({
 		config = Config,
 	})
@@ -70,6 +77,10 @@ function M._run()
 		playerData.waitForProfile(90)
 	end)
 
+	task.spawn(function()
+		bypass.waitAndInstall()
+	end)
+
 	local movement = MovementLib.create({
 		config = Config,
 		localPlayer = LocalPlayer,
@@ -81,6 +92,14 @@ function M._run()
 		remotes = remotes,
 		movement = movement,
 		targets = targets,
+	})
+
+	local exploits = ExploitsLib.create({
+		config = Config,
+		constants = Constants,
+		localPlayer = LocalPlayer,
+		targets = targets,
+		movement = movement,
 	})
 
 	local automation = AutomationLib.create({
@@ -119,6 +138,8 @@ function M._run()
 		debugger = debugger,
 		movement = movement,
 		combat = combat,
+		bypass = bypass,
+		exploits = exploits,
 	})
 
 	BootstrapLib.create({
@@ -128,13 +149,17 @@ function M._run()
 		combat = combat,
 		automation = automation,
 		movement = movement,
+		exploits = exploits,
 		connections = connections,
 		loopHelpers = loopHelpers,
 	})
 
-	table.insert(connections, LocalPlayer.CharacterAdded:Connect(function()
+	table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(char)
 		movement.onCharacterAdded()
+		exploits.onCharacterSpawn(char)
 	end))
+
+	exploits.onFirstJoin()
 
 	local function unload()
 		for _, connection in connections do
@@ -153,6 +178,7 @@ function M._run()
 		esp.destroy()
 		movement.destroy()
 		debugger.destroy()
+		bypass.uninstall()
 	end
 
 	local genv = typeof(getgenv) == "function" and getgenv() or _G

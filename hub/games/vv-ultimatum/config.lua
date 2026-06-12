@@ -11,11 +11,18 @@ return {
 	ESPAllyColor = Color3.fromRGB(72, 168, 255),
 
 	-- Combat
+	BlockProcessDamage = true,
 	AutoAttack = false,
 	AutoBlock = false,
 	AutoFlashStep = false,
 	AutoGrip = false,
 	AttackInterval = 0.55,
+
+	ExtendSimulationRadius = false,
+	AutoInstantKill = false,
+	InstantKillRange = 400,
+	InstantKillInterval = 0.35,
+	SpawnBypassTeleport = true,
 
 	-- Automation
 	AutoFarm = false,

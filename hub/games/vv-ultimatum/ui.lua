@@ -9,6 +9,8 @@ function M.create(opts)
 	local debugger = opts.debugger
 	local movement = opts.movement
 	local combat = opts.combat
+	local bypass = opts.bypass
+	local exploits = opts.exploits
 
 	UILib.create({
 		title = "VV ULTIMATUM",
@@ -39,6 +41,12 @@ function M.create(opts)
 					{
 						title = "Assist",
 						items = {
+							{
+								type = "toggle",
+								key = "BlockProcessDamage",
+								label = "Block ProcessDamage (AC)",
+								hud = "No Dmg AC",
+							},
 							{ type = "toggle", key = "AutoAttack", label = "Auto Attack", hud = "Auto M1" },
 							{ type = "toggle", key = "AutoBlock", label = "Auto Block", hud = "Block" },
 							{ type = "toggle", key = "AutoFlashStep", label = "Auto Flash Step", hud = "Flash Step" },
@@ -50,6 +58,49 @@ function M.create(opts)
 								min = 0.3,
 								max = 1.5,
 								step = 0.05,
+							},
+						},
+					},
+					{
+						title = "Exploits",
+						items = {
+							{
+								type = "toggle",
+								key = "ExtendSimulationRadius",
+								label = "Extend SimulationRadius",
+								hud = "Sim Radius",
+							},
+							{
+								type = "toggle",
+								key = "AutoInstantKill",
+								label = "Auto Instant Kill",
+								hud = "Insta Kill",
+							},
+							{
+								type = "slider",
+								key = "InstantKillRange",
+								label = "Kill Range",
+								min = 50,
+								max = 2000,
+								step = 25,
+							},
+							{
+								type = "slider",
+								key = "InstantKillInterval",
+								label = "Kill Interval",
+								min = 0.1,
+								max = 2,
+								step = 0.05,
+							},
+							{
+								type = "button",
+								label = "Kill Nearby Now",
+								callback = function()
+									if exploits then
+										local n = exploits.killAllNearby()
+										print("[VVUltimatum] instant kill attempts:", n)
+									end
+								end,
 							},
 						},
 					},
@@ -200,6 +251,57 @@ function M.create(opts)
 						},
 					},
 					{
+						title = "Spawn TP Bypass",
+						items = {
+							{
+								type = "toggle",
+								key = "SpawnBypassTeleport",
+								label = "TP On Spawn / Respawn",
+								hud = "Spawn TP",
+							},
+							{
+								type = "hint",
+								text = "Mark a spot, respawn, and you TP there during the brief anti-TP grace window.",
+							},
+							{
+								type = "button",
+								label = "Mark Current Position",
+								callback = function()
+									if exploits then
+										exploits.markSpawnPosition()
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "Respawn → Mark",
+								callback = function()
+									if exploits then
+										exploits.respawnToMark()
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "TP To Nearest Mob (Mark)",
+								callback = function()
+									if not exploits or not combat or not movement then
+										return
+									end
+									local range = tonumber(Config.FarmRange) or 400
+									local target = combat.nearestEnemy(range)
+									local root = target and target:FindFirstChild("HumanoidRootPart")
+									if root and root:IsA("BasePart") then
+										exploits.setSpawnTarget(root.Position)
+										movement.instantTeleportNear(root.Position, 8, Config.InstantTpVariant)
+									else
+										warn("[VVUltimatum] no mob in range to mark")
+									end
+								end,
+							},
+						},
+					},
+					{
 						title = "TP Lab",
 						items = {
 							{
@@ -281,6 +383,14 @@ function M.create(opts)
 			},
 		},
 		hud = { showKey = "ShowHUD" },
+		onToggle = function(key, value)
+			if key == "BlockProcessDamage" and value and bypass and not bypass.isInstalled() then
+				bypass.install()
+			end
+			if key == "ExtendSimulationRadius" and value and exploits then
+				exploits.applySimulationRadius()
+			end
+		end,
 	})
 end
 
