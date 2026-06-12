@@ -27,41 +27,45 @@ function M.create(opts)
 
 	local api = {
 		fireNetwork = function(name, ...)
+			local args = table.pack(...)
 			local net = getNetwork()
 			if not net then
 				return false
 			end
 			return pcall(function()
-				net:FireServer(name, ...)
+				net:FireServer(name, table.unpack(args, 1, args.n))
 			end)
 		end,
 		invokeNetwork = function(name, ...)
+			local args = table.pack(...)
 			local net = getNetwork()
 			if not net then
 				return false
 			end
 			return pcall(function()
-				return net:InvokeServer(name, ...)
+				return net:InvokeServer(name, table.unpack(args, 1, args.n))
 			end)
 		end,
 		fireRemote = function(name, ...)
+			local args = table.pack(...)
 			local folder = getRemotes()
 			local remote = folder and folder:FindFirstChild(name)
 			if not remote then
 				return false
 			end
 			return pcall(function()
-				remote:FireServer(...)
+				remote:FireServer(table.unpack(args, 1, args.n))
 			end)
 		end,
 		invokeRemote = function(name, ...)
+			local args = table.pack(...)
 			local folder = getRemotes()
 			local remote = folder and folder:FindFirstChild(name)
 			if not remote then
 				return false
 			end
 			return pcall(function()
-				return remote:InvokeServer(...)
+				return remote:InvokeServer(table.unpack(args, 1, args.n))
 			end)
 		end,
 		redeemCode = function(code)
