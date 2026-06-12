@@ -12,6 +12,7 @@ local GAMES = {
 	{ name = "Gunfight Arena", path = "games/gunfight-arena.lua", placeIds = { 15514727567, 14518422161 } },
 	{ name = "Prison Life", path = "games/prison-life.lua", placeIds = { 155615604, 4669040 } },
 	{ name = "Stud Incremental", path = "games/stud-incremental.lua", placeIds = { 127675063398240 } },
+	{ name = "Slime RNG", path = "games/slime-rng.lua", placeIds = { 92416421522960 } },
 }
 
 local resolvedSha = nil
