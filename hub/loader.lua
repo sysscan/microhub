@@ -25,16 +25,6 @@ local function getGenv()
 	return _G
 end
 
-local function notify(title, text, duration)
-	pcall(function()
-		game:GetService("StarterGui"):SetCore("SendNotification", {
-			Title = title,
-			Text = text,
-			Duration = duration or 5,
-		})
-	end)
-end
-
 local function kind(value)
 	if typeof then
 		return typeof(value)
@@ -251,8 +241,61 @@ local function findGame(placeId)
 	return nil
 end
 
+local function destroyLoaderUI()
+	local genv = getGenv()
+	if typeof(genv.__MicroHubLoaderUIDestroy) == "function" then
+		pcall(genv.__MicroHubLoaderUIDestroy)
+	end
+	genv.__MicroHubLoaderUIDestroy = nil
+end
+
+local function createInstantSplash()
+	local ok, splash = pcall(function()
+		local gethui = gethui or function()
+			return game:GetService("CoreGui")
+		end
+
+		local screen = Instance.new("ScreenGui")
+		screen.Name = "MicroHubLoaderInstant"
+		screen.ResetOnSpawn = false
+		screen.IgnoreGuiInset = true
+		screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		screen.DisplayOrder = 9999
+		screen.Parent = gethui()
+
+		local dim = Instance.new("Frame")
+		dim.BackgroundColor3 = Color3.new(0, 0, 0)
+		dim.BackgroundTransparency = 0.45
+		dim.BorderSizePixel = 0
+		dim.Size = UDim2.fromScale(1, 1)
+		dim.Parent = screen
+
+		local label = Instance.new("TextLabel")
+		label.AnchorPoint = Vector2.new(0.5, 0.5)
+		label.Position = UDim2.fromScale(0.5, 0.5)
+		label.Size = UDim2.fromOffset(220, 28)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.GothamBold
+		label.TextSize = 18
+		label.TextColor3 = Color3.fromRGB(208, 207, 227)
+		label.Text = "MicroHub"
+		label.Parent = dim
+
+		return {
+			destroy = function()
+				if screen.Parent then
+					screen:Destroy()
+				end
+			end,
+		}
+	end)
+
+	return ok and splash or nil
+end
+
 local function unloadOld()
 	local genv = getGenv()
+	destroyLoaderUI()
 	if typeof(genv.__PrisonLifeUnload) == "function" then
 		pcall(genv.__PrisonLifeUnload)
 	end
@@ -289,23 +332,48 @@ local function unloadOld()
 	moduleCache = {}
 end
 
+local loaderUI = nil
+local instantSplash = createInstantSplash()
+
 local ok, err = pcall(function()
 	unloadOld()
 	local sha = resolveLatestSha()
+
+	local LoaderUIModule = runSource("lib/loader-ui.lua")
+	if typeof(LoaderUIModule) ~= "table" or typeof(LoaderUIModule.create) ~= "function" then
+		error("lib/loader-ui.lua did not return a loader UI module", 0)
+	end
+
+	if instantSplash then
+		instantSplash.destroy()
+		instantSplash = nil
+	end
+
+	loaderUI = LoaderUIModule.create({ version = VERSION })
+	getGenv().__MicroHubLoaderUIDestroy = function()
+		if loaderUI then
+			loaderUI.destroy()
+			loaderUI = nil
+		end
+	end
+
+	loaderUI.setStep("Version resolved", "commit " .. sha:sub(1, 7), 0.12)
 
 	local entry = findGame(game.PlaceId)
 	if not entry then
 		error("unsupported PlaceId: " .. tostring(game.PlaceId), 0)
 	end
 
-	warn("[MicroHub] v" .. VERSION .. " @ " .. sha:sub(1, 7) .. " -> " .. entry.name)
+	loaderUI.setStep("Matched game", entry.name, 0.22)
 
+	loaderUI.setStep("Loading UI framework", nil, 0.38)
 	local juanita = runSource("lib/juanita/Library.lua")
 	if typeof(juanita) ~= "table" then
 		error("lib/juanita/Library.lua did not return a UI library", 0)
 	end
 	shared.__JuanitaLibrary = juanita
 
+	loaderUI.setStep("Loading hub UI", nil, 0.55)
 	local ui = runSource("lib/ui.lua")
 	if typeof(ui) ~= "table" or typeof(ui.create) ~= "function" then
 		error("lib/ui.lua did not return a UI library", 0)
@@ -314,13 +382,21 @@ local ok, err = pcall(function()
 	shared[UI_KEY] = ui
 	shared.__MicroHubRequire = hubRequire
 
+	loaderUI.setStep("Loading " .. entry.name, nil, 0.72)
 	runSource(entry.path)
 
-	warn("[MicroHub] ready — UI " .. uiVersion)
-	notify("MicroHub", entry.name .. " loaded")
+	loaderUI.success(entry.name, uiVersion)
 end)
 
+if instantSplash then
+	instantSplash.destroy()
+	instantSplash = nil
+end
+
 if not ok then
-	warn("[MicroHub]", err)
-	notify("MicroHub", tostring(err))
+	if loaderUI then
+		loaderUI.fail(tostring(err))
+	else
+		warn("[MicroHub]", err)
+	end
 end
