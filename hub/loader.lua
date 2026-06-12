@@ -14,6 +14,7 @@ local GAMES = {
 	{ name = "Stud Incremental", path = "games/stud-incremental.lua", placeIds = { 127675063398240 } },
 	{ name = "Slime RNG", path = "games/slime-rng.lua", placeIds = { 92416421522960 } },
 	{ name = "Shrek In the Backrooms", path = "games/shrek-backrooms.lua", placeIds = { 9534337535 } },
+	{ name = "Lumber Tycoon 2", path = "games/lumber-tycoon-2.lua", placeIds = { 13822889 } },
 }
 
 local resolvedSha = nil
@@ -314,12 +315,16 @@ local function unloadOld()
 	if typeof(genv.__ShrekBackroomsUnload) == "function" then
 		pcall(genv.__ShrekBackroomsUnload)
 	end
+	if typeof(genv.__LumberTycoon2Unload) == "function" then
+		pcall(genv.__LumberTycoon2Unload)
+	end
 	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
 	genv.__WarfareUnload = nil
 	genv.__StudIncrementalUnload = nil
 	genv.__SlimeRNGUnload = nil
 	genv.__ShrekBackroomsUnload = nil
+	genv.__LumberTycoon2Unload = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
 			genv.Library:Exit()
