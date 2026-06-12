@@ -1,13 +1,20 @@
+local hubRequire = shared.__MicroHubRequire
+local MonstersLib = hubRequire("games/shrek-backrooms/monsters.lua")
+local PlayerESP = hubRequire("lib/esp/player-v2.lua")
+
 local M = {}
 
 function M.create(opts)
 	local Config = opts.config
 	local LocalPlayer = opts.localPlayer
-	local Camera = opts.camera
 	local canDraw = opts.canDraw == true
 	local drawings = {}
 	local playerEsp
 	local aimCircle
+
+	local function getCamera()
+		return workspace.CurrentCamera or opts.camera
+	end
 
 	local function mk(kind, props)
 		local d = Drawing.new(kind)
@@ -19,11 +26,9 @@ function M.create(opts)
 	end
 
 	if canDraw then
-		local hubRequire = shared.__MicroHubRequire
-		local PlayerESP = hubRequire("lib/esp/player-v2.lua")
 		playerEsp = PlayerESP.create({
 			config = Config,
-			camera = Camera,
+			camera = getCamera(),
 			localPlayer = LocalPlayer,
 			canDraw = true,
 			getCharacter = function(player)
@@ -77,11 +82,16 @@ function M.create(opts)
 	end
 
 	local function worldToScreen(position)
-		local screen, onScreen = Camera:WorldToViewportPoint(position)
+		local camera = getCamera()
+		if not camera then
+			return nil, false
+		end
+		local screen, onScreen = camera:WorldToViewportPoint(position)
 		return Vector2.new(screen.X, screen.Y), onScreen and screen.Z > 0
 	end
 
 	local function drawMarker(key, position, color)
+		hidePrefix(key .. "_")
 		local line = ensureDrawing(key, "Line")
 		if not line then
 			return
@@ -97,34 +107,76 @@ function M.create(opts)
 		line.Visible = true
 	end
 
-	local function drawBox(key, part, color)
-		if not part then
-			return
+	local function getModelScreenBox(model)
+		local camera = getCamera()
+		if not camera then
+			return nil
 		end
-		local cf = part.CFrame
-		local size = part.Size
-		local corners = {
-			cf * Vector3.new(-size.X, size.Y, -size.Z) / 2,
-			cf * Vector3.new(size.X, size.Y, -size.Z) / 2,
-			cf * Vector3.new(size.X, size.Y, size.Z) / 2,
-			cf * Vector3.new(-size.X, size.Y, size.Z) / 2,
+
+		local ok, cf, size = pcall(model.GetBoundingBox, model)
+		if ok and typeof(cf) == "CFrame" and typeof(size) == "Vector3" then
+			local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
+			local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+			local anyVisible = false
+
+			for sx = -1, 1, 2 do
+				for sy = -1, 1, 2 do
+					for sz = -1, 1, 2 do
+						local world = (cf * CFrame.new(hx * sx, hy * sy, hz * sz)).Position
+						local screen, onScreen = camera:WorldToViewportPoint(world)
+						if onScreen and screen.Z > 0 then
+							anyVisible = true
+							minX = math.min(minX, screen.X)
+							minY = math.min(minY, screen.Y)
+							maxX = math.max(maxX, screen.X)
+							maxY = math.max(maxY, screen.Y)
+						end
+					end
+				end
+			end
+
+			if anyVisible then
+				return minX, minY, maxX - minX, maxY - minY
+			end
+		end
+
+		local root = MonstersLib.getRoot(model)
+		if not root then
+			return nil
+		end
+
+		local screenPos, onScreen = worldToScreen(root.Position)
+		if not onScreen then
+			return nil
+		end
+
+		return screenPos.X - 28, screenPos.Y - 56, 56, 112
+	end
+
+	local function drawScreenBox(key, x, y, w, h, color)
+		local topLeft = Vector2.new(x, y)
+		local topRight = Vector2.new(x + w, y)
+		local bottomRight = Vector2.new(x + w, y + h)
+		local bottomLeft = Vector2.new(x, y + h)
+		local segments = {
+			{ topLeft, topRight },
+			{ topRight, bottomRight },
+			{ bottomRight, bottomLeft },
+			{ bottomLeft, topLeft },
 		}
-		local screenCorners = {}
-		for i, corner in corners do
-			local pos, onScreen = worldToScreen(corner)
-			if not onScreen then
-				hidePrefix(key)
+
+		local marker = drawings[key]
+		if marker then
+			marker.Visible = false
+		end
+
+		for i, segment in segments do
+			local line = ensureDrawing(key .. "_" .. i, "Line")
+			if not line then
 				return
 			end
-			screenCorners[i] = pos
-		end
-		local edges = {
-			{ 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 },
-		}
-		for i, edge in edges do
-			local line = ensureDrawing(key .. "_" .. i, "Line")
-			line.From = screenCorners[edge[1]]
-			line.To = screenCorners[edge[2]]
+			line.From = segment[1]
+			line.To = segment[2]
 			line.Color = color
 			line.Visible = true
 		end
@@ -136,25 +188,28 @@ function M.create(opts)
 			return
 		end
 
-		local monsters = workspace:FindFirstChild("Monsters")
-		if not monsters then
+		if not canDraw then
 			return
 		end
 
 		local index = 0
-		for _, model in monsters:GetDescendants() do
-			if model:IsA("Model") and (model:FindFirstChild("Enemy") or model:GetAttribute("ClientEntity")) then
-				local part = model:FindFirstChild("HumanoidRootPart")
-					or model:FindFirstChild("RootPart")
-					or model.PrimaryPart
-				if part then
-					index += 1
-					local color = Color3.fromRGB(180, 60, 255)
-					if Config.MonsterESPBoxes then
-						drawBox("monster_" .. index, part, color)
-					elseif Config.MonsterESP then
-						drawMarker("monster_" .. index, part.Position + Vector3.new(0, 3, 0), color)
+		for _, model in MonstersLib.collect() do
+			local boundsX, boundsY, boundsW, boundsH = getModelScreenBox(model)
+			if boundsX then
+				index += 1
+				local color = Color3.fromRGB(180, 60, 255)
+				local key = "monster_" .. index
+				if Config.MonsterESPBoxes then
+					drawScreenBox(key, boundsX, boundsY, boundsW, boundsH, color)
+				else
+					hidePrefix(key .. "_")
+					local root = MonstersLib.getRoot(model)
+					local markerPos = root and (root.Position + Vector3.new(0, 3, 0))
+					if not markerPos then
+						local ok, cf, size = pcall(model.GetBoundingBox, model)
+						markerPos = ok and (cf.Position + Vector3.new(0, size.Y * 0.5, 0)) or model:GetPivot().Position
 					end
+					drawMarker(key, markerPos, color)
 				end
 			end
 		end
@@ -172,13 +227,17 @@ function M.create(opts)
 
 		local folder = workspace:FindFirstChild("SearchItems")
 		if not folder then
+			hidePrefix("search")
 			return
 		end
 
 		local index = 0
-		for _, item in folder:GetChildren() do
-			index += 1
-			drawMarker("search_" .. index, item:GetPivot().Position, Color3.fromRGB(255, 210, 80))
+		for _, item in folder:GetDescendants() do
+			if item:IsA("Model") or item:IsA("BasePart") then
+				index += 1
+				local position = item:IsA("Model") and item:GetPivot().Position or item.Position
+				drawMarker("search_" .. index, position, Color3.fromRGB(255, 210, 80))
+			end
 		end
 
 		for i = index + 1, index + 30 do
@@ -195,12 +254,13 @@ function M.create(opts)
 		local coins = workspace:FindFirstChild("Coins")
 		coins = coins and coins:FindFirstChild("Coins")
 		if not coins then
+			hidePrefix("coin")
 			return
 		end
 
 		local index = 0
 		for _, coin in coins:GetChildren() do
-			local root = coin:FindFirstChild("HumanoidRootPart") or coin.PrimaryPart
+			local root = coin:FindFirstChild("HumanoidRootPart", true) or coin.PrimaryPart
 			if root then
 				index += 1
 				drawMarker("coin_" .. index, root.Position + Vector3.new(0, 2, 0), Color3.fromRGB(80, 220, 120))
@@ -221,6 +281,7 @@ function M.create(opts)
 		local lobby = workspace:FindFirstChild("Lobby")
 		local boxes = lobby and lobby:FindFirstChild("MysteryBoxes")
 		if not boxes then
+			hidePrefix("mbox")
 			return
 		end
 
@@ -246,15 +307,20 @@ function M.create(opts)
 			aimCircle.Visible = false
 			return
 		end
+		local camera = getCamera()
+		if not camera then
+			aimCircle.Visible = false
+			return
+		end
 		local radius = tonumber(Config.AimFOV) or 120
-		local center = Camera.ViewportSize * 0.5
+		local center = camera.ViewportSize * 0.5
 		aimCircle.Position = center
 		aimCircle.Radius = radius
 		aimCircle.Visible = true
 	end
 
 	local function tick()
-		if playerEsp then
+		if playerEsp and Config.ESP then
 			playerEsp.update()
 		end
 		tickMonsterEsp()

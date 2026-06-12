@@ -13,10 +13,31 @@ function M.create(opts)
 	local connections = opts.connections
 	local loopHelpers = opts.loopHelpers
 
+	local lastLevelRefresh = 0
+
+	local function needsCombatTick()
+		return Config.AutoAttack or Config.AutoEquipBest or (Config.AimAssist and Config.ShowAimFOV)
+	end
+
+	local function needsEspTick()
+		return Config.ESP
+			or Config.ESPSnaplines
+			or Config.MonsterESP
+			or Config.MonsterESPBoxes
+			or Config.SearchESP
+			or Config.CoinESP
+			or Config.MysteryBoxESP
+			or (Config.ShowAimFOV and (Config.AimAssist or Config.AutoAttack))
+	end
+
 	table.insert(connections, RunService.Heartbeat:Connect(function()
 		movement.tickMovement()
-		combat.tickCombat()
-		esp.tick()
+		if needsCombatTick() then
+			combat.tickCombat()
+		end
+		if needsEspTick() then
+			esp.tick()
+		end
 	end))
 
 	loopHelpers.start(function()
@@ -24,6 +45,13 @@ function M.create(opts)
 			automation.tickAutomation()
 			shop.tickShop()
 			extras.tickExtras()
+
+			local now = os.clock()
+			if now - lastLevelRefresh >= 60 then
+				lastLevelRefresh = now
+				task.spawn(teleport.refreshLevels)
+			end
+
 			task.wait(tonumber(Config.TickInterval) or 0.2)
 		end
 	end)
@@ -32,9 +60,7 @@ function M.create(opts)
 		movement.startAntiAfk()
 	end
 
-	task.defer(function()
-		teleport.refreshLevels()
-	end)
+	task.defer(teleport.refreshLevels)
 end
 
 return M

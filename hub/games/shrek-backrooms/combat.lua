@@ -1,3 +1,6 @@
+local hubRequire = shared.__MicroHubRequire
+local MonstersLib = hubRequire("games/shrek-backrooms/monsters.lua")
+
 local M = {}
 
 function M.create(opts)
@@ -5,10 +8,13 @@ function M.create(opts)
 	local remotes = opts.remotes
 	local LocalPlayer = opts.localPlayer
 	local movement = opts.movement
-	local Camera = opts.camera
 
 	local lastAttackAt = 0
 	local lastEquipAt = 0
+
+	local function getCamera()
+		return workspace.CurrentCamera
+	end
 
 	local function getToolDamage(tool)
 		if not tool then
@@ -22,6 +28,16 @@ function M.create(opts)
 			end
 		end
 		return 0
+	end
+
+	local function isCombatTool(tool)
+		if not tool or not tool:IsA("Tool") then
+			return false
+		end
+		if tool:GetAttribute("serial") then
+			return false
+		end
+		return getToolDamage(tool) > 0
 	end
 
 	local function getAllTools()
@@ -67,11 +83,14 @@ function M.create(opts)
 		local bestTool = nil
 		local bestDamage = -1
 		for _, tool in getAllTools() do
+			if not isCombatTool(tool) then
+				continue
+			end
 			local damage = getToolDamage(tool)
 			if damage > bestDamage then
 				bestDamage = damage
 				bestTool = tool
-			elseif damage == bestDamage and bestTool and #tool.Name > #bestTool.Name then
+			elseif damage == bestDamage and bestTool and tool.Name < bestTool.Name then
 				bestTool = tool
 			end
 		end
@@ -83,61 +102,34 @@ function M.create(opts)
 		end
 	end
 
-	local function isMonsterModel(model)
-		if not model or not model:IsA("Model") then
-			return false
-		end
-		if model:FindFirstChild("Enemy") then
-			return true
-		end
-		if model:GetAttribute("ClientEntity") then
-			return true
-		end
-		return false
-	end
-
-	local function getMonsterRoot(model)
-		return model:FindFirstChild("HumanoidRootPart")
-			or model:FindFirstChild("RootPart")
-			or model.PrimaryPart
-			or model:FindFirstChildWhichIsA("BasePart")
-	end
-
 	local function getNearestMonster(range)
 		local root = movement.getRoot()
 		if not root then
 			return nil
 		end
 
-		local monsters = workspace:FindFirstChild("Monsters")
-		if not monsters then
-			return nil
-		end
-
 		local bestModel = nil
 		local bestDist = math.huge
-		local camera = Camera or workspace.CurrentCamera
+		local camera = getCamera()
 
-		for _, child in monsters:GetDescendants() do
-			if child:IsA("Model") and isMonsterModel(child) then
-				local humanoid = child:FindFirstChildOfClass("Humanoid")
-				if not humanoid or humanoid.Health > 0 then
-					local part = getMonsterRoot(child)
-					if part then
-						local dist = (part.Position - root.Position).Magnitude
-						if dist <= range and dist < bestDist then
-							if Config.AimAssist and camera then
-								local screenPos = camera:WorldToViewportPoint(part.Position)
-								local center = camera.ViewportSize * 0.5
-								local fov = tonumber(Config.AimFOV) or 120
-								if (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude > fov then
-									continue
-								end
-							end
-							bestDist = dist
-							bestModel = child
+		for _, child in MonstersLib.collect() do
+			local part = MonstersLib.getRoot(child)
+			if part then
+				local dist = (part.Position - root.Position).Magnitude
+				if dist <= range and dist < bestDist then
+					if Config.AimAssist and camera then
+						local screenPos, onScreen = camera:WorldToViewportPoint(part.Position)
+						if not onScreen or screenPos.Z <= 0 then
+							continue
+						end
+						local center = camera.ViewportSize * 0.5
+						local fov = tonumber(Config.AimFOV) or 120
+						if (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude > fov then
+							continue
 						end
 					end
+					bestDist = dist
+					bestModel = child
 				end
 			end
 		end
@@ -147,7 +139,7 @@ function M.create(opts)
 
 	local function faceTarget(model)
 		local root = movement.getRoot()
-		local part = model and getMonsterRoot(model)
+		local part = model and MonstersLib.getRoot(model)
 		if not (root and part) then
 			return
 		end
@@ -159,7 +151,7 @@ function M.create(opts)
 	end
 
 	local function attackMonster(model, tool)
-		local part = getMonsterRoot(model)
+		local part = MonstersLib.getRoot(model)
 		if not (part and tool) then
 			return
 		end
@@ -168,12 +160,12 @@ function M.create(opts)
 			faceTarget(model)
 		end
 
-		if model:FindFirstChild("Enemy") then
+		if model:FindFirstChild("Enemy", true) then
 			remotes.damageMonster(tool, part, part.Position)
 			return
 		end
 
-		remotes.meleeMonster(tool, part.Parent)
+		remotes.meleeMonster(tool, model)
 	end
 
 	local function tickCombat()
@@ -197,7 +189,7 @@ function M.create(opts)
 			equipBestTool()
 			tool = getEquippedTool()
 		end
-		if not tool then
+		if not tool or not isCombatTool(tool) then
 			return
 		end
 

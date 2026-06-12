@@ -8,6 +8,7 @@ function M.create(opts)
 	local Config = opts.config
 
 	local cachedLevels = nil
+	local teleportToPlayer
 
 	local function getMapHandler()
 		local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
@@ -66,6 +67,17 @@ function M.create(opts)
 		return levels
 	end
 
+	teleportToPlayer = function(player)
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		local targetRoot = player and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not (root and targetRoot) then
+			return false
+		end
+		return pcall(function()
+			root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
+		end)
+	end
+
 	local function teleportNearestPlayer()
 		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 		if not root then
@@ -92,17 +104,6 @@ function M.create(opts)
 			return false
 		end
 		return teleportToPlayer(bestPlayer)
-	end
-
-	local function teleportToPlayer(player)
-		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-		local targetRoot = player and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-		if not (root and targetRoot) then
-			return false
-		end
-		return pcall(function()
-			root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
-		end)
 	end
 
 	return {

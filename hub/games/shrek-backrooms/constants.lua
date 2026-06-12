@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "2-full",
+	GAME_BUILD = "4-optimized",
 	PLACE_ID = 9534337535,
 	MAX_SAFE_WALKSPEED = 120,
 	MAX_SAFE_JUMP = 120,

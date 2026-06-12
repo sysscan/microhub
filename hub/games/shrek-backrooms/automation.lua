@@ -1,3 +1,5 @@
+local Players = game:GetService("Players")
+
 local M = {}
 
 function M.create(opts)
@@ -6,10 +8,16 @@ function M.create(opts)
 	local remotes = opts.remotes
 	local movement = opts.movement
 
+	local LocalPlayer = Players.LocalPlayer
 	local lastSearchAt = 0
 	local lastDailyAt = 0
 	local lastRedeemCode = nil
 	local searchedTags = {}
+	local dailyRunning = false
+
+	LocalPlayer.CharacterAdded:Connect(function()
+		table.clear(searchedTags)
+	end)
 
 	local function redeemNow()
 		local genv = typeof(getgenv) == "function" and getgenv() or _G
@@ -35,6 +43,22 @@ function M.create(opts)
 		end
 	end
 
+	local function runDailyTasks()
+		if dailyRunning then
+			return
+		end
+		dailyRunning = true
+		task.spawn(function()
+			if Config.AutoDailyReward then
+				pcall(tryDailyReward)
+			end
+			if Config.AutoDailyQuest then
+				pcall(tryDailyQuests)
+			end
+			dailyRunning = false
+		end)
+	end
+
 	local function getSearchFolder()
 		return workspace:FindFirstChild("SearchItems")
 	end
@@ -53,12 +77,16 @@ function M.create(opts)
 		end
 
 		local range = tonumber(Config.SearchRange) or 18
-		for _, item in folder:GetChildren() do
+		for _, item in folder:GetDescendants() do
+			if not (item:IsA("Model") or item:IsA("BasePart")) then
+				continue
+			end
 			local tag = item:GetAttribute("Tag")
 			if tag and not searchedTags[tag] then
-				local pivot = item:GetPivot().Position
+				local pivot = item:IsA("Model") and item:GetPivot().Position or item.Position
 				if (pivot - root.Position).Magnitude <= range then
-					if remotes.searchTag(tag) then
+					local ok = remotes.searchTag(tag)
+					if ok then
 						searchedTags[tag] = true
 					end
 				end
@@ -76,16 +104,13 @@ function M.create(opts)
 				end
 			end
 		end
+
 		local now = os.clock()
 		if (Config.AutoDailyReward or Config.AutoDailyQuest) and now - lastDailyAt >= 30 then
 			lastDailyAt = now
-			if Config.AutoDailyReward then
-				tryDailyReward()
-			end
-			if Config.AutoDailyQuest then
-				tryDailyQuests()
-			end
+			runDailyTasks()
 		end
+
 		if Config.AutoSearch then
 			trySearch()
 		end

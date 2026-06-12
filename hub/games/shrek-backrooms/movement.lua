@@ -11,9 +11,11 @@ function M.create(opts)
 
 	local noclipConn = nil
 	local noclipEnabled = false
-	local antiAfkStarted = false
+	local antiAfkThread = nil
 	local lightingBackup = nil
 	local flyVelocity = nil
+	local humanoidDefaults = nil
+	local defaultsCharacter = nil
 
 	local function getHumanoid()
 		local character = LocalPlayer.Character
@@ -23,6 +25,43 @@ function M.create(opts)
 	local function getRoot()
 		local character = LocalPlayer.Character
 		return character and character:FindFirstChild("HumanoidRootPart")
+	end
+
+	local function captureDefaults(humanoid)
+		local character = LocalPlayer.Character
+		if humanoidDefaults and defaultsCharacter == character then
+			return
+		end
+		defaultsCharacter = character
+		humanoidDefaults = {
+			WalkSpeed = humanoid.WalkSpeed,
+			JumpPower = humanoid.JumpPower,
+			UseJumpPower = humanoid.UseJumpPower,
+		}
+	end
+
+	local function restoreHumanoidStats(humanoid)
+		if not humanoid then
+			return
+		end
+		captureDefaults(humanoid)
+		if humanoidDefaults then
+			humanoid.WalkSpeed = humanoidDefaults.WalkSpeed
+			humanoid.JumpPower = humanoidDefaults.JumpPower
+			humanoid.UseJumpPower = humanoidDefaults.UseJumpPower
+		end
+	end
+
+	local function restoreCollision()
+		local character = LocalPlayer.Character
+		if not character then
+			return
+		end
+		for _, part in character:GetDescendants() do
+			if part:IsA("BasePart") then
+				part.CanCollide = true
+			end
+		end
 	end
 
 	local function setNoClip(enabled)
@@ -35,15 +74,19 @@ function M.create(opts)
 			noclipConn = nil
 		end
 		if not enabled then
+			restoreCollision()
 			return
 		end
-		noclipConn = RunService.Stepped:Connect(function()
+		noclipConn = RunService.Heartbeat:Connect(function()
+			if not Config.NoClip then
+				return
+			end
 			local character = LocalPlayer.Character
 			if not character then
 				return
 			end
 			for _, part in character:GetDescendants() do
-				if part:IsA("BasePart") then
+				if part:IsA("BasePart") and part.CanCollide then
 					part.CanCollide = false
 				end
 			end
@@ -81,7 +124,6 @@ function M.create(opts)
 			return
 		end
 
-		humanoid.PlatformStand = true
 		local body = root:FindFirstChild("MicroHubFly")
 		if not body then
 			body = Instance.new("BodyVelocity")
@@ -114,8 +156,19 @@ function M.create(opts)
 		local speed = math.clamp(tonumber(Config.FlySpeed) or 50, 10, Constants.MAX_FLY_SPEED)
 		if move.Magnitude > 0 then
 			body.Velocity = move.Unit * speed
+			humanoid.PlatformStand = true
 		else
 			body.Velocity = Vector3.zero
+			humanoid.PlatformStand = false
+		end
+	end
+
+	local function restoreLighting()
+		if lightingBackup then
+			for key, value in lightingBackup do
+				Lighting[key] = value
+			end
+			lightingBackup = nil
 		end
 	end
 
@@ -135,11 +188,8 @@ function M.create(opts)
 			Lighting.FogEnd = 100000
 			Lighting.GlobalShadows = false
 			Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
-		elseif lightingBackup then
-			for key, value in lightingBackup do
-				Lighting[key] = value
-			end
-			lightingBackup = nil
+		else
+			restoreLighting()
 		end
 	end
 
@@ -150,11 +200,27 @@ function M.create(opts)
 		end
 	end
 
+	local function needsMovementTick()
+		return Config.Fly
+			or Config.NoClip
+			or Config.SpeedBoost
+			or Config.AlwaysSprint
+			or Config.JumpBoost
+			or Config.FullBright
+			or (Config.CameraFOV and tonumber(Config.CameraFOV) ~= 70)
+	end
+
 	local function tickMovement()
+		if not needsMovementTick() then
+			return
+		end
+
 		local humanoid = getHumanoid()
 		if not humanoid or humanoid.Health <= 0 then
 			return
 		end
+
+		captureDefaults(humanoid)
 
 		if Config.Fly then
 			applyFly()
@@ -164,11 +230,18 @@ function M.create(opts)
 				humanoid.WalkSpeed = math.clamp(tonumber(Config.WalkSpeed) or 32, 16, Constants.MAX_SAFE_WALKSPEED)
 			elseif Config.AlwaysSprint then
 				humanoid.WalkSpeed = math.clamp(tonumber(Config.SprintSpeed) or 23, 16, Constants.MAX_SAFE_WALKSPEED)
+			else
+				restoreHumanoidStats(humanoid)
 			end
 
 			if Config.JumpBoost then
 				humanoid.JumpPower = math.clamp(tonumber(Config.JumpPower) or 50, 16, Constants.MAX_SAFE_JUMP)
 				humanoid.UseJumpPower = true
+			else
+				if humanoidDefaults then
+					humanoid.JumpPower = humanoidDefaults.JumpPower
+					humanoid.UseJumpPower = humanoidDefaults.UseJumpPower
+				end
 			end
 		end
 
@@ -177,12 +250,19 @@ function M.create(opts)
 		applyCamera()
 	end
 
+	local function stopAntiAfk()
+		if antiAfkThread then
+			task.cancel(antiAfkThread)
+			antiAfkThread = nil
+		end
+	end
+
 	local function startAntiAfk()
-		if not Config.AntiAfk or antiAfkStarted then
+		stopAntiAfk()
+		if not Config.AntiAfk then
 			return
 		end
-		antiAfkStarted = true
-		task.spawn(function()
+		antiAfkThread = task.spawn(function()
 			local VirtualUser = game:GetService("VirtualUser")
 			while Config.AntiAfk do
 				pcall(function()
@@ -195,14 +275,19 @@ function M.create(opts)
 	end
 
 	local function unload()
+		stopAntiAfk()
 		clearFly()
 		setNoClip(false)
-		applyFullBright()
+		restoreCollision()
+		restoreLighting()
+		humanoidDefaults = nil
+		defaultsCharacter = nil
 	end
 
 	return {
 		tickMovement = tickMovement,
 		startAntiAfk = startAntiAfk,
+		stopAntiAfk = stopAntiAfk,
 		getHumanoid = getHumanoid,
 		getRoot = getRoot,
 		setNoClip = setNoClip,

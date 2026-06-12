@@ -2,12 +2,12 @@ local M = {}
 
 function M.create(opts)
 	local Config = opts.config
-	local Constants = opts.constants
 	local remotes = opts.remotes
 	local LocalPlayer = opts.localPlayer
 
 	local lastShopAt = 0
 	local openedSerials = {}
+	local shopRunning = false
 
 	local function getBoxTools()
 		local tools = {}
@@ -30,7 +30,8 @@ function M.create(opts)
 		for _, tool in getBoxTools() do
 			local serial = tool:GetAttribute("serial")
 			if serial and not openedSerials[serial] then
-				if remotes.openBox(serial) then
+				local ok = remotes.openBox(serial)
+				if ok then
 					openedSerials[serial] = true
 				end
 			end
@@ -56,6 +57,28 @@ function M.create(opts)
 		remotes.requestBoxPurchase(Config.RobuxBoxName, Config.RobuxBoxPack)
 	end
 
+	local function runShopActions()
+		if shopRunning then
+			return
+		end
+		shopRunning = true
+		task.spawn(function()
+			if Config.AutoOpenBoxes then
+				pcall(tryOpenBoxes)
+			end
+			if Config.AutoSpinWheel then
+				pcall(trySpinWheel)
+			end
+			if Config.AutoToolShopBuy then
+				pcall(tryToolShopBuy)
+			end
+			if Config.AutoBuyRobuxBoxes then
+				pcall(tryRobuxBoxBuy)
+			end
+			shopRunning = false
+		end)
+	end
+
 	local function tickShop()
 		local now = os.clock()
 		if now - lastShopAt < (tonumber(Config.ShopInterval) or 2) then
@@ -63,17 +86,8 @@ function M.create(opts)
 		end
 		lastShopAt = now
 
-		if Config.AutoOpenBoxes then
-			tryOpenBoxes()
-		end
-		if Config.AutoSpinWheel then
-			trySpinWheel()
-		end
-		if Config.AutoToolShopBuy then
-			tryToolShopBuy()
-		end
-		if Config.AutoBuyRobuxBoxes then
-			tryRobuxBoxBuy()
+		if Config.AutoOpenBoxes or Config.AutoSpinWheel or Config.AutoToolShopBuy or Config.AutoBuyRobuxBoxes then
+			runShopActions()
 		end
 	end
 

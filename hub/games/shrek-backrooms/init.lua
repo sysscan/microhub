@@ -136,8 +136,11 @@ function M.run()
 			end)
 		end
 		table.clear(loops)
+		movement.stopAntiAfk()
 		movement.unload()
 		esp.destroy()
+		genv.__MicroHubShrekRedeem = nil
+		genv.__ShrekBackroomsUnload = nil
 	end
 
 	genv.__ShrekBackroomsUnload = unload
