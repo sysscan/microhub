@@ -15,6 +15,33 @@ local GAMES = {
 	{ name = "Slime RNG", path = "games/slime-rng.lua", placeIds = { 92416421522960 } },
 	{ name = "Shrek In the Backrooms", path = "games/shrek-backrooms.lua", placeIds = { 9534337535 } },
 	{ name = "Lumber Tycoon 2", path = "games/lumber-tycoon-2.lua", placeIds = { 13822889 } },
+	{
+		name = "VV Ultimatum",
+		path = "games/vv-ultimatum.lua",
+		placeIds = {
+			6270290407,
+			9861495985,
+			10626511620,
+			14219489601,
+			119777193083785,
+			14218523102,
+			14321102147,
+			15079707729,
+			15645525857,
+			18972283841,
+			11131834995,
+			11780443293,
+			12337012844,
+			11127942816,
+			13229243486,
+			16914874220,
+			17083682617,
+			95787471190312,
+			121345602945775,
+			102123868363969,
+			132224751888154,
+		},
+	},
 }
 
 local resolvedSha = nil
@@ -318,6 +345,9 @@ local function unloadOld()
 	if typeof(genv.__LumberTycoon2Unload) == "function" then
 		pcall(genv.__LumberTycoon2Unload)
 	end
+	if typeof(genv.__VVUltimatumUnload) == "function" then
+		pcall(genv.__VVUltimatumUnload)
+	end
 	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
 	genv.__WarfareUnload = nil
@@ -325,6 +355,7 @@ local function unloadOld()
 	genv.__SlimeRNGUnload = nil
 	genv.__ShrekBackroomsUnload = nil
 	genv.__LumberTycoon2Unload = nil
+	genv.__VVUltimatumUnload = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
 			genv.Library:Exit()
