@@ -76,6 +76,21 @@ function M.create(opts)
 		root.AssemblyAngularVelocity = Vector3.zero
 	end
 
+	local function prepareTeleport(root: BasePart)
+		if typeof(sethiddenproperty) == "function" then
+			pcall(function()
+				sethiddenproperty(LocalPlayer, "SimulationRadius", 112412400000)
+				sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 112412400000)
+			end)
+		end
+		pcall(function()
+			if root:GetNetworkOwner() ~= LocalPlayer then
+				root:SetNetworkOwner(LocalPlayer)
+			end
+		end)
+		zeroVelocity(root)
+	end
+
 	local function horizDist(a: Vector3, b: Vector3): number
 		local d = a - b
 		return Vector3.new(d.X, 0, d.Z).Magnitude
@@ -196,7 +211,15 @@ function M.create(opts)
 		end
 	end
 
-	local function tickFlight(dt: number)
+	local function frameDelta(dt: any): number
+		local n = tonumber(dt)
+		if n and n > 0 and n < 2 then
+			return n
+		end
+		return 1 / 60
+	end
+
+	local function tickFlight(dt: number?)
 		if not flightActive then
 			return
 		end
@@ -213,7 +236,7 @@ function M.create(opts)
 		local dir = getFlightInput()
 		if dir.Magnitude > 0 then
 			local speed = tonumber(Config.FlightSpeed) or 48
-			root.CFrame += dir * speed * dt
+			root.CFrame += dir * speed * frameDelta(dt)
 			zeroVelocity(root)
 		end
 	end
@@ -243,8 +266,21 @@ function M.create(opts)
 
 	local function placeAt(root: BasePart, dest: Vector3, lookAt: Vector3, tag: string?, extra: { [string]: any }?)
 		local from = root.Position
+		local char = getChar()
+		prepareTeleport(root)
+
+		local flatLook = Vector3.new(lookAt.X, dest.Y, lookAt.Z)
+		local cf = if (flatLook - dest).Magnitude > 0.05 then CFrame.new(dest, flatLook) else CFrame.new(dest)
+
+		if char then
+			pcall(function()
+				char:PivotTo(cf)
+			end)
+		else
+			root.CFrame = cf
+		end
+
 		zeroVelocity(root)
-		root.CFrame = CFrame.new(dest, lookAt)
 		if tag then
 			logMove(tag, from, dest, extra)
 		end
@@ -355,7 +391,7 @@ function M.create(opts)
 		return applyStandoffCFrame(targetPos, standoff, maxHorizStep())
 	end
 
-	local function tickMovement(dt: number)
+	local function tickMovement(dt: number?)
 		local wantFlight = Config.Flight == true
 		local wantNoclip = Config.Noclip == true or wantFlight
 

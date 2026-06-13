@@ -21,8 +21,13 @@ local UILibDef = require("games/vv-ultimatum/ui.lua")
 local BootstrapLib = require("games/vv-ultimatum/bootstrap.lua")
 local Safety = require("games/vv-ultimatum/safety.lua")
 local DebuggerLib = require("games/vv-ultimatum/debugger.lua")
+local EarlyBypassLib = require("games/vv-ultimatum/early-bypass.lua")
 local BypassLib = require("games/vv-ultimatum/bypass.lua")
+local GodmodeLib = require("games/vv-ultimatum/godmode.lua")
 local ExploitsLib = require("games/vv-ultimatum/exploits.lua")
+
+local genv = typeof(getgenv) == "function" and getgenv() or _G
+genv.__VVUltimatumConfig = Config
 
 local M = {}
 
@@ -48,14 +53,23 @@ function M._run()
 	local loops: { thread } = {}
 	local loopHelpers = LoopsLib.create(loops)
 
+	local bypass = BypassLib.create({
+		config = Config,
+		replicatedStorage = ReplicatedStorage,
+		earlyBypass = EarlyBypassLib,
+	})
+	bypass.waitAndInstall(12)
+
 	local remotes = RemotesLib.create({
 		replicatedStorage = ReplicatedStorage,
 	})
 
-	local bypass = BypassLib.create({
+	local godmode = GodmodeLib.create({
 		config = Config,
-		replicatedStorage = ReplicatedStorage,
+		localPlayer = LocalPlayer,
+		remotes = remotes,
 	})
+	godmode.hookRemotes()
 
 	local debugger = DebuggerLib.create({
 		config = Config,
@@ -75,10 +89,6 @@ function M._run()
 
 	task.spawn(function()
 		playerData.waitForProfile(90)
-	end)
-
-	task.spawn(function()
-		bypass.waitAndInstall()
 	end)
 
 	local movement = MovementLib.create({
@@ -117,6 +127,7 @@ function M._run()
 		remotes = remotes,
 		playerData = playerData,
 		debugger = debugger,
+		localPlayer = LocalPlayer,
 	})
 
 	local esp = ESPLib.create({
@@ -140,6 +151,7 @@ function M._run()
 		combat = combat,
 		bypass = bypass,
 		exploits = exploits,
+		godmode = godmode,
 	})
 
 	BootstrapLib.create({
@@ -150,13 +162,19 @@ function M._run()
 		automation = automation,
 		movement = movement,
 		exploits = exploits,
+		godmode = godmode,
 		connections = connections,
 		loopHelpers = loopHelpers,
 	})
 
+	if LocalPlayer.Character then
+		godmode.onCharacterSpawn(LocalPlayer.Character)
+	end
+
 	table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(char)
 		movement.onCharacterAdded()
 		exploits.onCharacterSpawn(char)
+		godmode.onCharacterSpawn(char)
 	end))
 
 	exploits.onFirstJoin()
@@ -177,15 +195,15 @@ function M._run()
 		combat.destroy()
 		esp.destroy()
 		movement.destroy()
+		godmode.destroy()
 		debugger.destroy()
 		bypass.uninstall()
 	end
 
-	local genv = typeof(getgenv) == "function" and getgenv() or _G
 	genv.__VVUltimatumUnload = unload
 	genv.__VVUltimatumDebug = debugger
 
-	print("[MicroHub] VV Ultimatum", Constants.GAME_BUILD, "— Drawing:", canDraw)
+	print("[MicroHub] VV Ultimatum", Constants.GAME_BUILD, "— Drawing:", canDraw, "— AC bypass:", bypass.isInstalled())
 end
 
 return M

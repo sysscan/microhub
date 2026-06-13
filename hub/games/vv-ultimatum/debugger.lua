@@ -46,7 +46,7 @@ function M.create(opts)
 			table.remove(entries, 1)
 		end
 		if Config.DebugLivePrint then
-			warn("[VV-DBG]", tag, formatDetail(detail))
+			print("[VV-DBG]", tag, formatDetail(detail))
 		end
 	end
 

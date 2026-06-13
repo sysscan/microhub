@@ -11,6 +11,7 @@ function M.create(opts)
 	local automation = opts.automation
 	local movement = opts.movement
 	local exploits = opts.exploits
+	local godmode = opts.godmode
 	local connections = opts.connections
 	local loopHelpers = opts.loopHelpers
 
@@ -20,6 +21,9 @@ function M.create(opts)
 
 	table.insert(connections, RunService.Heartbeat:Connect(Safety.guard(function(dt)
 		movement.tickMovement(dt)
+		if godmode then
+			godmode.tickGodmode()
+		end
 		if exploits then
 			exploits.tickExploits()
 		end

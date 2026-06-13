@@ -5,10 +5,17 @@ local M = {}
 function M.create(opts)
 	local Config = opts.config
 	local ReplicatedStorage = opts.replicatedStorage
+	local EarlyBypass = opts.earlyBypass
 
 	local installed = false
 	local oldFireServer = nil
 	local networkManager = nil
+
+	local function debugPrint(...)
+		if Config.DebugLivePrint then
+			print("[VVUltimatum]", ...)
+		end
+	end
 
 	local function getNetworkManager()
 		if networkManager then
@@ -30,9 +37,31 @@ function M.create(opts)
 		return typeof(hookfunction) == "function"
 	end
 
+	local function adoptEarlyHook()
+		if not EarlyBypass or not EarlyBypass.isInstalled() then
+			return false
+		end
+		local state = EarlyBypass.getHookState()
+		if not state then
+			return false
+		end
+		oldFireServer = state.oldFireServer
+		networkManager = state.networkManager
+		installed = true
+		return true
+	end
+
 	local function install()
-		if installed or not canHook() then
-			return installed
+		if installed then
+			return true
+		end
+
+		if adoptEarlyHook() then
+			return true
+		end
+
+		if not canHook() then
+			return false
 		end
 
 		local nm = getNetworkManager()
@@ -46,9 +75,7 @@ function M.create(opts)
 
 		oldFireServer = hookfunction(nm.FireServer, wrap(function(self, name, ...)
 			if Config.BlockProcessDamage and name == "ProcessDamage" then
-				if Config.DebugLivePrint then
-					warn("[VVUltimatum] blocked ProcessDamage")
-				end
+				debugPrint("blocked ProcessDamage", ...)
 				return
 			end
 			return oldFireServer(self, name, ...)
@@ -81,9 +108,9 @@ function M.create(opts)
 			if install() then
 				return true
 			end
-			task.wait(0.5)
+			task.wait(0.25)
 		end
-		warn("[VVUltimatum] ProcessDamage bypass could not install (NetworkManager missing or no hookfunction)")
+		debugPrint("ProcessDamage bypass could not install (NetworkManager missing or no hookfunction)")
 		return false
 	end
 

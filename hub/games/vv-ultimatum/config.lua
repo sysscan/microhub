@@ -12,6 +12,12 @@ return {
 
 	-- Combat
 	BlockProcessDamage = true,
+	GodMode = false,
+	NoFallDamage = true,
+	BlockTakeDamage = true,
+	SpoofFallFX = true,
+	IntangibleGod = false,
+	HealthLock = false,
 	AutoAttack = false,
 	AutoBlock = false,
 	AutoFlashStep = false,
@@ -56,5 +62,5 @@ return {
 
 	-- Debugger
 	DebugMonitorAC = true,
-	DebugLivePrint = false,
+	DebugLivePrint = true,
 }

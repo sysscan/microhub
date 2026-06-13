@@ -44,9 +44,20 @@ function M.create(opts)
 	local function firePacket(name, ...)
 		local nm = getNetworkManager()
 		if nm and typeof(nm.FireServer) == "function" then
-			return pcall(nm.FireServer, nm, name, ...)
+			local results = { pcall(nm.FireServer, nm, name, ...) }
+			local ok = table.remove(results, 1)
+			if not ok then
+				return false, nil
+			end
+			if #results == 0 then
+				return true, nil
+			end
+			if #results == 1 then
+				return true, results[1]
+			end
+			return true, results
 		end
-		return false
+		return false, nil
 	end
 
 	return {
@@ -118,7 +129,11 @@ function M.create(opts)
 			return invokeRequest("GetSoulTrackerData")
 		end,
 		teleportToPlayer = function(username)
-			return firePacket("TeleportToPlayer", username)
+			local ok, result = firePacket("TeleportToPlayer", username)
+			if not ok then
+				return false, false
+			end
+			return true, result == true
 		end,
 	}
 end

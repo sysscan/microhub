@@ -11,6 +11,7 @@ function M.create(opts)
 	local combat = opts.combat
 	local bypass = opts.bypass
 	local exploits = opts.exploits
+	local godmode = opts.godmode
 
 	UILib.create({
 		title = "VV ULTIMATUM",
@@ -59,6 +60,17 @@ function M.create(opts)
 								max = 1.5,
 								step = 0.05,
 							},
+						},
+					},
+					{
+						title = "God Mode",
+						items = {
+							{ type = "toggle", key = "GodMode", label = "God Mode (All)", hud = "God" },
+							{ type = "toggle", key = "NoFallDamage", label = "No Fall Damage", hud = "No Fall" },
+							{ type = "toggle", key = "BlockTakeDamage", label = "Block TakeDamage Remote", hud = "No TD" },
+							{ type = "toggle", key = "SpoofFallFX", label = "Spoof FallFX", hud = "Fall FX" },
+							{ type = "toggle", key = "IntangibleGod", label = "Intangible Refresh", hud = "Intang" },
+							{ type = "toggle", key = "HealthLock", label = "Health Lock (experimental)", hud = "HP Lock" },
 						},
 					},
 					{
@@ -389,6 +401,9 @@ function M.create(opts)
 			end
 			if key == "ExtendSimulationRadius" and value and exploits then
 				exploits.applySimulationRadius()
+			end
+			if (key == "GodMode" or key == "NoFallDamage") and value and godmode then
+				godmode.applyFallImmunity()
 			end
 		end,
 	})
