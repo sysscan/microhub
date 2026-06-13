@@ -38,4 +38,5 @@ return {
 	TeleportToggle = false,
 
 	DebugLivePrint = false,
+	DebugAC = false,
 }

@@ -19,6 +19,7 @@ local ESPLib = require("games/deadzone-classic/esp.lua")
 local AutomationLib = require("games/deadzone-classic/automation.lua")
 local UILibDef = require("games/deadzone-classic/ui.lua")
 local BootstrapLib = require("games/deadzone-classic/bootstrap.lua")
+local DebuggerLib = require("games/deadzone-classic/debugger.lua")
 
 local genv = typeof(getgenv) == "function" and getgenv() or _G
 genv.__DeadzoneClassicConfig = Config
@@ -98,12 +99,20 @@ function M.run()
 		util = util,
 	})
 
+	local debugger = DebuggerLib.create({
+		config = Config,
+		localPlayer = LocalPlayer,
+		constants = Constants,
+		bypass = bypass,
+	})
+
 	UILibDef.create({
 		config = Config,
 		uiLib = UILib,
 		combat = combat,
 		movement = movement,
 		bypass = bypass,
+		debugger = debugger,
 	})
 
 	bypass.sync()
@@ -141,6 +150,7 @@ function M.run()
 		esp.destroy()
 		movement.destroy()
 		stats.destroy()
+		debugger.destroy()
 		bypass.uninstall()
 	end
 

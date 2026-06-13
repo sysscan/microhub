@@ -11,6 +11,14 @@ local REPORT_MIN = 5
 local AIM_RENDER_STEP = "  "
 local NEUTRALIZE_INTERVAL = 0.5
 local NEUTRALIZE_PASSES = 120
+local NEUTRALIZE_STABLE_PASSES = 3
+local DIAG_CACHE_TTL = 2
+local POSTURE_LOG_INTERVAL = 1
+
+local constantCache: { [any]: { any } } = {}
+local diagCache: { [string]: any }? = nil
+local diagCacheAt = 0
+local postureLogNext: { [string]: number } = {}
 
 local function getConfig(cfg)
 	return cfg or GENV.__DeadzoneClassicConfig
@@ -38,11 +46,17 @@ local function canInspectConnections(): boolean
 		and typeof(debug.getconstants) == "function"
 end
 
+local function invalidateDiagnosticsCache()
+	diagCache = nil
+	diagCacheAt = 0
+end
+
 local function getState()
 	local state = GENV[KEY]
 	if not state then
 		state = {
 			disabledConns = {},
+			disabledSet = {},
 			clientNeutralized = false,
 			aimStepUnbound = false,
 		}
@@ -55,8 +69,14 @@ local function getConstants(fn: any): { any }
 	if typeof(fn) ~= "function" then
 		return {}
 	end
+	local cached = constantCache[fn]
+	if cached then
+		return cached
+	end
 	local ok, constants = pcall(debug.getconstants, fn)
-	return if ok and typeof(constants) == "table" then constants else {}
+	constants = if ok and typeof(constants) == "table" then constants else {}
+	constantCache[fn] = constants
+	return constants
 end
 
 local function hasConstant(fn: any, needle: string): boolean
@@ -76,6 +96,9 @@ local function isMovementAc(fn: any): boolean
 		or hasConstant(fn, "AssemblyLinearVelocity")
 		or hasConstant(fn, "JumpPower")
 		or hasConstant(fn, "HipHeight")
+		or hasConstant(fn, "CamCFrame")
+		or hasConstant(fn, "MaxSlopeAngle")
+		or hasConstant(fn, "LookVector")
 end
 
 local function isInjectionAc(fn: any): boolean
@@ -99,17 +122,8 @@ local function isAcCallback(fn: any): boolean
 	return isMovementAc(fn) or isInjectionAc(fn) or isGuiAc(fn)
 end
 
-local function isTrackedConnection(conn: any, state): boolean
-	for _, tracked in state.disabledConns do
-		if tracked == conn then
-			return true
-		end
-	end
-	return false
-end
-
 local function disableConnection(conn: any, state): boolean
-	if isTrackedConnection(conn, state) then
+	if state.disabledSet[conn] then
 		return false
 	end
 	if conn.Enabled == false then
@@ -126,6 +140,7 @@ local function disableConnection(conn: any, state): boolean
 		return false
 	end
 
+	state.disabledSet[conn] = true
 	table.insert(state.disabledConns, conn)
 	return true
 end
@@ -139,8 +154,10 @@ local function restoreDisabledConnections(state)
 		end)
 	end
 	table.clear(state.disabledConns)
+	table.clear(state.disabledSet)
 	state.clientNeutralized = false
 	state.aimStepUnbound = false
+	invalidateDiagnosticsCache()
 end
 
 local function collectSignals(): { RBXScriptSignal }
@@ -163,6 +180,31 @@ local function collectSignals(): { RBXScriptSignal }
 	return signals
 end
 
+local function countActiveAcConnections(): number
+	if not canInspectConnections() then
+		return 0
+	end
+
+	local activeAc = 0
+	for _, signal in collectSignals() do
+		local ok, connections = pcall(getconnections, signal)
+		if not ok or typeof(connections) ~= "table" then
+			continue
+		end
+		for _, conn in ipairs(connections) do
+			if conn.Enabled
+				and not conn.ForeignState
+				and conn.LuaConnection
+				and typeof(conn.Function) == "function"
+				and isAcCallback(conn.Function)
+			then
+				activeAc += 1
+			end
+		end
+	end
+	return activeAc
+end
+
 local function neutralizeAimRenderStep(state, debugPrint): boolean
 	if state.aimStepUnbound then
 		return false
@@ -177,6 +219,10 @@ local function neutralizeAimRenderStep(state, debugPrint): boolean
 		end
 	end
 	return ok
+end
+
+local function refreshNeutralizedFlag(state)
+	state.clientNeutralized = #state.disabledConns > 0 and countActiveAcConnections() == 0
 end
 
 local function neutralizeClientAc(state, debugPrint): number
@@ -202,10 +248,8 @@ local function neutralizeClientAc(state, debugPrint): number
 	end
 
 	neutralizeAimRenderStep(state, debugPrint)
-
-	if disabledCount > 0 then
-		state.clientNeutralized = true
-	end
+	refreshNeutralizedFlag(state)
+	invalidateDiagnosticsCache()
 
 	return disabledCount
 end
@@ -216,6 +260,7 @@ local function startNeutralizeLoop(state, cfg, debugPrint)
 	end
 
 	state.neutralizeThread = task.spawn(function()
+		local stablePasses = 0
 		for _ = 1, NEUTRALIZE_PASSES do
 			if not getConfig(cfg).ACBypass then
 				break
@@ -223,6 +268,14 @@ local function startNeutralizeLoop(state, cfg, debugPrint)
 			local count = neutralizeClientAc(state, debugPrint)
 			if debugPrint and count > 0 then
 				debugPrint("neutralized client AC connections", count)
+			end
+			if state.clientNeutralized then
+				stablePasses += 1
+				if stablePasses >= NEUTRALIZE_STABLE_PASSES then
+					break
+				end
+			else
+				stablePasses = 0
 			end
 			task.wait(NEUTRALIZE_INTERVAL)
 		end
@@ -237,6 +290,27 @@ local function stopNeutralizeLoop(state)
 	end
 end
 
+local function logPostureDebug(code: any, blocked: boolean, executor: boolean)
+	local dbg = GENV.__DeadzoneClassicDebug
+	if not dbg or typeof(dbg.log) ~= "function" then
+		return
+	end
+	local num = tonumber(code) or 0
+	if num < REPORT_MIN then
+		return
+	end
+	local key = tostring(num) .. if blocked then "b" else "s"
+	local now = os.clock()
+	if postureLogNext[key] and now < postureLogNext[key] then
+		return
+	end
+	postureLogNext[key] = now + POSTURE_LOG_INTERVAL
+	pcall(dbg.log, if blocked then "change_posture_blocked" else "change_posture_sent", {
+		code = num,
+		executor = executor,
+	})
+end
+
 local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): (any?, Instance?)
 	if not changePosture or typeof(changePosture.FireServer) ~= "function" then
 		return nil, nil
@@ -246,15 +320,19 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 	end
 
 	local oldFireServer = hookfunction(changePosture.FireServer, wrap(function(self, code, ...)
-		if isExecutorCall() then
+		local blocked = shouldBlock(code, cfg)
+		local executor = isExecutorCall()
+		if executor then
 			return oldFireServer(self, code, ...)
 		end
-		if shouldBlock(code, cfg) then
+		if blocked then
+			logPostureDebug(code, true, executor)
 			if debugPrint then
 				debugPrint("blocked ChangePosture", code)
 			end
 			return
 		end
+		logPostureDebug(code, false, executor)
 		return oldFireServer(self, code, ...)
 	end))
 
@@ -284,6 +362,26 @@ end
 function M.isClientNeutralized(): boolean
 	local state = GENV[KEY]
 	return state ~= nil and state.clientNeutralized == true
+end
+
+function M.getDiagnostics(forceRefresh: boolean?): { [string]: any }
+	local now = os.clock()
+	if not forceRefresh and diagCache and now - diagCacheAt < DIAG_CACHE_TTL then
+		return diagCache
+	end
+
+	local state = GENV[KEY]
+	diagCache = {
+		hookInstalled = M.isInstalled(),
+		clientNeutralized = M.isClientNeutralized(),
+		disabledCount = if state then #state.disabledConns else 0,
+		activeAcConnections = countActiveAcConnections(),
+		canInspectConnections = canInspectConnections(),
+		canHook = typeof(hookfunction) == "function",
+		aimStepUnbound = state and state.aimStepUnbound == true or false,
+	}
+	diagCacheAt = now
+	return diagCache
 end
 
 function M.sync(opts: {
@@ -383,6 +481,9 @@ function M.uninstall()
 		end
 	end
 
+	table.clear(constantCache)
+	table.clear(postureLogNext)
+	invalidateDiagnosticsCache()
 	GENV[KEY] = nil
 end
 

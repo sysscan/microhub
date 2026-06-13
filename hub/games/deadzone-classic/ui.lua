@@ -6,6 +6,7 @@ function M.create(opts)
 	local combat = opts.combat
 	local movement = opts.movement
 	local bypass = opts.bypass
+	local debugger = opts.debugger
 
 	UILib.create({
 		title = "DEADZONE CLASSIC",
@@ -44,9 +45,15 @@ function M.create(opts)
 						title = "Anti-Cheat",
 						items = {
 							{ type = "toggle", key = "ACBypass", label = "Block AC Reports", hud = "AC Bypass" },
+							{ type = "toggle", key = "DebugAC", label = "AC Debugger", hud = "AC Debug" },
+							{ type = "toggle", key = "DebugLivePrint", label = "Live Console Log", hud = "Live Log" },
 							{
 								type = "hint",
-								text = "Hooks ChangePosture 5–9 and disables client AC loops (Rename1/2/3) via getconnections.",
+								text = "AC Debugger logs ChangePosture, speed, and AC state. Run getgenv().__DeadzoneClassicDebugDump() to print the log.",
+							},
+							{
+								type = "hint",
+								text = "Block AC Reports hooks ChangePosture 5–9 and disables Rename1/2/3 client loops.",
 							},
 						},
 					},
@@ -136,6 +143,10 @@ function M.create(opts)
 				end
 				movement.applyWalkSpeed()
 				movement.ensureSpeedBoost()
+			elseif key == "DebugAC" then
+				if debugger then
+					debugger.setEnabled(value == true)
+				end
 			elseif key == "WalkSpeed" or key == "AlwaysSprint" or key == "SprintSpeed" or key == "JumpPower" then
 				movement.applyWalkSpeed()
 				movement.ensureSpeedBoost()
