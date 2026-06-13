@@ -49,35 +49,11 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 		return oldFireServer(self, code, ...)
 	end))
 
+	if typeof(oldFireServer) ~= "function" then
+		return nil, nil
+	end
+
 	return oldFireServer, changePosture
-end
-
-local function installNamecall(cfg, debugPrint)
-	if typeof(hookmetamethod) ~= "function" or typeof(getnamecallmethod) ~= "function" then
-		return nil
-	end
-
-	local state = getState()
-	if state.namecallOld then
-		return state.namecallOld
-	end
-
-	local oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
-		local method = getnamecallmethod()
-		if method == "FireServer" and typeof(self) == "Instance" and self.Name == "ChangePosture" then
-			local code = ...
-			if shouldBlock(code, cfg) then
-				if debugPrint then
-					debugPrint("blocked ChangePosture (namecall)", code)
-				end
-				return
-			end
-		end
-		return oldNamecall(self, ...)
-	end))
-
-	state.namecallOld = oldNamecall
-	return oldNamecall
 end
 
 local function resolveChangePosture(replicatedStorage: ReplicatedStorage, timeout: number?)
@@ -119,7 +95,6 @@ function M.install(opts: {
 
 	state.fireOld = fireOld
 	state.changePosture = remote
-	installNamecall(cfg, opts.debugPrint)
 
 	if not state.rehookConn and remoteEvents then
 		state.rehookConn = remoteEvents.ChildAdded:Connect(function(child)
@@ -139,37 +114,11 @@ end
 
 function M.isInstalled(): boolean
 	local state = GENV[KEY]
-	return state ~= nil and state.fireOld ~= nil and state.changePosture ~= nil and state.changePosture.Parent ~= nil
+	return state ~= nil and typeof(state.fireOld) == "function" and state.changePosture ~= nil and state.changePosture.Parent ~= nil
 end
 
 function M.getState()
 	return GENV[KEY]
-end
-
-function M.protectCharacter(char: Model?, cfg)
-	cfg = getConfig(cfg)
-	if not char or not cfg.ACBypass or typeof(hookfunction) ~= "function" then
-		return
-	end
-
-	local state = getState()
-	state.protected = state.protected or {}
-
-	if state.protected[char] then
-		return
-	end
-
-	local oldDestroy = hookfunction(char.Destroy, wrap(function(self, ...)
-		if self == char and cfg.ACBypass then
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			if hum and hum.Health > 0 then
-				return
-			end
-		end
-		return oldDestroy(self, ...)
-	end))
-
-	state.protected[char] = oldDestroy
 end
 
 function M.uninstall()
@@ -189,10 +138,6 @@ function M.uninstall()
 		else
 			pcall(hookfunction, state.changePosture.FireServer, state.fireOld)
 		end
-	end
-
-	if state.namecallOld and typeof(restorefunction) == "function" then
-		pcall(restorefunction, state.namecallOld)
 	end
 
 	GENV[KEY] = nil

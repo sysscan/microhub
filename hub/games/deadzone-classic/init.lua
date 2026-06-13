@@ -118,13 +118,9 @@ function M.run()
 	})
 
 	if LocalPlayer.Character then
-		bypass.protectCharacter(LocalPlayer.Character)
 		movement.onCharacterAdded()
 	end
-	table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(char)
-		bypass.protectCharacter(char)
-		movement.onCharacterAdded()
-	end))
+	table.insert(connections, LocalPlayer.CharacterAdded:Connect(movement.onCharacterAdded))
 
 	genv.__DeadzoneClassicUnload = function()
 		for _, conn in connections do

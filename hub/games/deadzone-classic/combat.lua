@@ -175,6 +175,10 @@ function M.create(opts)
 			end
 			return fireOld(self, tag, aimCf, ...)
 		end))
+		if typeof(fireOld) ~= "function" then
+			fireOld = nil
+			return false
+		end
 		fireHooked = true
 		return true
 	end

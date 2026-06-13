@@ -41,9 +41,6 @@ function M.create(opts)
 		uninstall = ACLib.uninstall,
 		waitAndInstall = waitAndInstall,
 		isInstalled = ACLib.isInstalled,
-		protectCharacter = function(char)
-			ACLib.protectCharacter(char, Config)
-		end,
 	}
 end
 

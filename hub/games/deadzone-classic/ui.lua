@@ -45,7 +45,7 @@ function M.create(opts)
 							{ type = "toggle", key = "ACBypass", label = "Block AC Reports", hud = "AC Bypass" },
 							{
 								type = "hint",
-								text = "Blocks ChangePosture codes 5–9 via FireServer + namecall hooks. Protects alive character from injection AC destroy.",
+								text = "Blocks ChangePosture codes 5–9 via FireServer hook only (executor-safe).",
 							},
 						},
 					},
