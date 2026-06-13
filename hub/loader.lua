@@ -16,6 +16,11 @@ local GAMES = {
 	{ name = "Shrek In the Backrooms", path = "games/shrek-backrooms.lua", placeIds = { 9534337535 } },
 	{ name = "Lumber Tycoon 2", path = "games/lumber-tycoon-2.lua", placeIds = { 13822889 } },
 	{
+		name = "Deadzone Classic",
+		path = "games/deadzone-classic.lua",
+		placeIds = { 3221241066, 17772691665, 86444118656057 },
+	},
+	{
 		name = "VV Ultimatum",
 		path = "games/vv-ultimatum.lua",
 		placeIds = {
