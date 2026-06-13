@@ -16,12 +16,20 @@ function M.create(opts)
 		end
 	end
 
-	local function install()
-		return ACLib.install({
+	local function installOpts()
+		return {
 			config = Config,
 			replicatedStorage = ReplicatedStorage,
 			debugPrint = if Config.DebugLivePrint then debugPrint else nil,
-		})
+		}
+	end
+
+	local function install()
+		return ACLib.install(installOpts())
+	end
+
+	local function sync()
+		ACLib.sync(installOpts())
 	end
 
 	local function waitAndInstall(maxAttempts: number?)
@@ -38,9 +46,11 @@ function M.create(opts)
 
 	return {
 		install = install,
+		sync = sync,
 		uninstall = ACLib.uninstall,
 		waitAndInstall = waitAndInstall,
 		isInstalled = ACLib.isInstalled,
+		isClientNeutralized = ACLib.isClientNeutralized,
 	}
 end
 

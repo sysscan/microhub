@@ -103,7 +103,11 @@ function M.run()
 		uiLib = UILib,
 		combat = combat,
 		movement = movement,
+		bypass = bypass,
 	})
+
+	bypass.sync()
+	movement.applyWalkSpeed()
 
 	BootstrapLib.create({
 		config = Config,
@@ -116,6 +120,8 @@ function M.run()
 		connections = connections,
 		loopHelpers = loopHelpers,
 	})
+
+	movement.ensureSpeedBoost()
 
 	if LocalPlayer.Character then
 		movement.onCharacterAdded()
@@ -138,7 +144,16 @@ function M.run()
 		bypass.uninstall()
 	end
 
-	print("[MicroHub] Deadzone Classic", Constants.GAME_BUILD, "— Drawing:", canDraw, "— AC bypass:", bypass.isInstalled())
+	print(
+		"[MicroHub] Deadzone Classic",
+		Constants.GAME_BUILD,
+		"— Drawing:",
+		canDraw,
+		"— AC hook:",
+		bypass.isInstalled(),
+		"— client AC off:",
+		bypass.isClientNeutralized()
+	)
 end
 
 return M

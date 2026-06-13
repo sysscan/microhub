@@ -1,6 +1,9 @@
 local Lighting = game:GetService("Lighting")
 local RunService = game:GetService("RunService")
 
+local require = shared.__MicroHubRequire
+local ACLib = require("games/deadzone-classic/ac.lua")
+
 local M = {}
 
 local SPEED_RENDER_STEP = "MicroHubDZSpeed"
@@ -93,14 +96,25 @@ function M.create(opts)
 		targetMoveSpeed = desired
 
 		local jump = tonumber(Config.JumpPower) or Constants.MAX_SAFE_JUMP
-		if Config.ACBypass then
-			-- Client AC (Rename1) kicks on WalkSpeed > 22.1 via ChangePosture(6).
+		if Config.ACBypass and ACLib.isClientNeutralized() then
+			hum.WalkSpeed = desired
+			hum.JumpPower = jump
+			unbindSpeedBoost()
+		elseif Config.ACBypass then
+			-- Fallback when getconnections cannot disable Rename1: stay under 22.1 WalkSpeed.
 			hum.WalkSpeed = math.min(desired, Constants.MAX_SAFE_WALK)
 			hum.JumpPower = jump
-			bindSpeedBoost()
 		else
 			hum.WalkSpeed = math.min(desired, Constants.MAX_SAFE_WALK)
 			hum.JumpPower = math.min(jump, Constants.MAX_SAFE_JUMP)
+			unbindSpeedBoost()
+		end
+	end
+
+	local function ensureSpeedBoost()
+		if Config.ACBypass and not ACLib.isClientNeutralized() and getDesiredSpeed() > Constants.MAX_SAFE_WALK then
+			bindSpeedBoost()
+		else
 			unbindSpeedBoost()
 		end
 	end
@@ -167,6 +181,7 @@ function M.create(opts)
 	local function onCharacterAdded()
 		task.defer(function()
 			applyWalkSpeed()
+			ensureSpeedBoost()
 			setNoClip(Config.NoClip == true)
 			applyFullBright()
 		end)
@@ -181,6 +196,7 @@ function M.create(opts)
 	return {
 		tickMovement = applyWalkSpeed,
 		onCharacterAdded = onCharacterAdded,
+		ensureSpeedBoost = ensureSpeedBoost,
 		setNoClip = setNoClip,
 		applyFullBright = applyFullBright,
 		applyWalkSpeed = applyWalkSpeed,

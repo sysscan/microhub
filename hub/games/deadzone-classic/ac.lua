@@ -2,9 +2,15 @@
 
 local M = {}
 
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
 local GENV = typeof(getgenv) == "function" and getgenv() or _G
 local KEY = "__DeadzoneClassicAC"
 local REPORT_MIN = 5
+local AIM_RENDER_STEP = "  "
+local NEUTRALIZE_INTERVAL = 0.5
+local NEUTRALIZE_PASSES = 120
 
 local function getConfig(cfg)
 	return cfg or GENV.__DeadzoneClassicConfig
@@ -22,20 +28,179 @@ local function wrap(fn)
 	return if typeof(newcclosure) == "function" then newcclosure(fn) else fn
 end
 
-local function cloneInstance(inst: Instance): Instance
-	if typeof(cloneref) == "function" then
-		return cloneref(inst)
-	end
-	return inst
-end
-
 local function getState()
 	local state = GENV[KEY]
 	if not state then
-		state = {}
+		state = {
+			disabled = {},
+			clientNeutralized = false,
+			aimStepUnbound = false,
+		}
 		GENV[KEY] = state
 	end
 	return state
+end
+
+local function getConstants(fn: any): { any }
+	if typeof(fn) ~= "function" or typeof(debug) ~= "table" or typeof(debug.getconstants) ~= "function" then
+		return {}
+	end
+	local ok, constants = pcall(debug.getconstants, fn)
+	return if ok and typeof(constants) == "table" then constants else {}
+end
+
+local function hasConstant(fn: any, needle: string): boolean
+	for _, value in getConstants(fn) do
+		if value == needle then
+			return true
+		end
+	end
+	return false
+end
+
+local function isMovementAc(fn: any): boolean
+	if not hasConstant(fn, "ChangePosture") then
+		return false
+	end
+	return hasConstant(fn, "WalkSpeed")
+		or hasConstant(fn, "AssemblyLinearVelocity")
+		or hasConstant(fn, "JumpPower")
+		or hasConstant(fn, "HipHeight")
+end
+
+local function isInjectionAc(fn: any): boolean
+	return hasConstant(fn, "ChangePosture") and hasConstant(fn, "Destroy")
+end
+
+local function isGuiAc(fn: any): boolean
+	if not hasConstant(fn, "ChangePosture") then
+		return false
+	end
+	return hasConstant(fn, "TouchGui")
+		or hasConstant(fn, "BackpackGui")
+		or hasConstant(fn, "Highlight")
+		or hasConstant(fn, "ScreenGui")
+end
+
+local function isAcCallback(fn: any): boolean
+	return isMovementAc(fn) or isInjectionAc(fn) or isGuiAc(fn)
+end
+
+local function disableConnection(conn: any, state): boolean
+	if typeof(conn) ~= "table" or state.disabled[conn] then
+		return false
+	end
+	if conn.Enabled == false then
+		return false
+	end
+	local ok = pcall(function()
+		conn:Disable()
+	end)
+	if ok then
+		state.disabled[conn] = true
+		return true
+	end
+	return false
+end
+
+local function restoreDisabledConnections(state)
+	for conn in state.disabled do
+		pcall(function()
+			conn:Enable()
+		end)
+	end
+	table.clear(state.disabled)
+	state.clientNeutralized = false
+	state.aimStepUnbound = false
+end
+
+local function collectSignals(): { RBXScriptSignal }
+	local signals: { RBXScriptSignal } = {
+		RunService.RenderStepped,
+		game.DescendantAdded,
+		workspace.DescendantAdded,
+	}
+
+	local localPlayer = Players.LocalPlayer
+	if localPlayer then
+		table.insert(signals, localPlayer.DescendantAdded)
+	end
+
+	local camera = workspace.CurrentCamera
+	if camera then
+		table.insert(signals, camera.DescendantAdded)
+	end
+
+	return signals
+end
+
+local function neutralizeAimRenderStep(state, debugPrint): boolean
+	local ok = pcall(RunService.UnbindFromRenderStep, RunService, AIM_RENDER_STEP)
+	if ok then
+		state.aimStepUnbound = true
+		if debugPrint then
+			debugPrint("unbound silent-aim RenderStep")
+		end
+	end
+	return ok
+end
+
+local function neutralizeClientAc(state, debugPrint): number
+	if typeof(getconnections) ~= "function" then
+		return 0
+	end
+
+	local disabledCount = 0
+	for _, signal in collectSignals() do
+		local ok, connections = pcall(getconnections, signal)
+		if not ok or typeof(connections) ~= "table" then
+			continue
+		end
+
+		for _, conn in connections do
+			local fn = conn.Function
+			if fn and isAcCallback(fn) and disableConnection(conn, state) then
+				disabledCount += 1
+			end
+		end
+	end
+
+	if neutralizeAimRenderStep(state, debugPrint) then
+		disabledCount += 1
+	end
+
+	if disabledCount > 0 then
+		state.clientNeutralized = true
+	end
+
+	return disabledCount
+end
+
+local function startNeutralizeLoop(state, cfg, debugPrint)
+	if state.neutralizeThread then
+		return
+	end
+
+	state.neutralizeThread = task.spawn(function()
+		for _ = 1, NEUTRALIZE_PASSES do
+			if not getConfig(cfg).ACBypass then
+				break
+			end
+			local count = neutralizeClientAc(state, debugPrint)
+			if debugPrint and count > 0 then
+				debugPrint("neutralized client AC connections", count)
+			end
+			task.wait(NEUTRALIZE_INTERVAL)
+		end
+		state.neutralizeThread = nil
+	end)
+end
+
+local function stopNeutralizeLoop(state)
+	if state.neutralizeThread then
+		pcall(task.cancel, state.neutralizeThread)
+		state.neutralizeThread = nil
+	end
 end
 
 local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): (any?, Instance?)
@@ -46,9 +211,7 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 		return nil, nil
 	end
 
-	local remote = cloneInstance(changePosture)
-
-	local oldFireServer = hookfunction(remote.FireServer, wrap(function(self, code, ...)
+	local oldFireServer = hookfunction(changePosture.FireServer, wrap(function(self, code, ...)
 		if shouldBlock(code, cfg) then
 			if debugPrint then
 				debugPrint("blocked ChangePosture", code)
@@ -62,33 +225,7 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 		return nil, nil
 	end
 
-	return oldFireServer, remote
-end
-
-local function installInstanceNamecall(changePosture: Instance, cfg, debugPrint): any?
-	if typeof(hookmetamethod) ~= "function" or typeof(getnamecallmethod) ~= "function" then
-		return nil
-	end
-
-	local remote = cloneInstance(changePosture)
-	local oldNamecall = hookmetamethod(remote, "__namecall", wrap(function(self, ...)
-		if self == remote and getnamecallmethod() == "FireServer" then
-			local code = ...
-			if shouldBlock(code, cfg) then
-				if debugPrint then
-					debugPrint("blocked ChangePosture (namecall)", code)
-				end
-				return
-			end
-		end
-		return oldNamecall(self, ...)
-	end))
-
-	if typeof(oldNamecall) ~= "function" then
-		return nil
-	end
-
-	return oldNamecall
+	return oldFireServer, changePosture
 end
 
 local function resolveChangePosture(replicatedStorage: ReplicatedStorage, timeout: number?)
@@ -107,6 +244,30 @@ local function resolveChangePosture(replicatedStorage: ReplicatedStorage, timeou
 	return changePosture, remoteEvents
 end
 
+function M.isClientNeutralized(): boolean
+	local state = GENV[KEY]
+	return state ~= nil and state.clientNeutralized == true
+end
+
+function M.sync(opts: {
+	config: { [string]: any }?,
+	replicatedStorage: ReplicatedStorage?,
+	debugPrint: ((...any) -> ())?,
+}?)
+	opts = opts or {}
+	local cfg = getConfig(opts.config)
+	local state = getState()
+
+	if not cfg.ACBypass then
+		stopNeutralizeLoop(state)
+		restoreDisabledConnections(state)
+		return
+	end
+
+	neutralizeClientAc(state, opts.debugPrint)
+	startNeutralizeLoop(state, cfg, opts.debugPrint)
+end
+
 function M.install(opts: {
 	config: { [string]: any }?,
 	replicatedStorage: ReplicatedStorage?,
@@ -119,6 +280,9 @@ function M.install(opts: {
 	local state = getState()
 
 	if state.fireOld and state.changePosture and state.changePosture.Parent then
+		if cfg.ACBypass then
+			M.sync(opts)
+		end
 		return true
 	end
 
@@ -130,7 +294,6 @@ function M.install(opts: {
 
 	state.fireOld = fireOld
 	state.changePosture = remote
-	state.namecallOld = installInstanceNamecall(changePosture, cfg, opts.debugPrint)
 
 	if not state.rehookConn and remoteEvents then
 		state.rehookConn = remoteEvents.ChildAdded:Connect(function(child)
@@ -141,9 +304,12 @@ function M.install(opts: {
 			if newOld and newRemote then
 				state.fireOld = newOld
 				state.changePosture = newRemote
-				state.namecallOld = installInstanceNamecall(child, cfg, opts.debugPrint)
 			end
 		end)
+	end
+
+	if cfg.ACBypass then
+		M.sync(opts)
 	end
 
 	return true
@@ -163,6 +329,9 @@ function M.uninstall()
 	if not state then
 		return
 	end
+
+	stopNeutralizeLoop(state)
+	restoreDisabledConnections(state)
 
 	if state.rehookConn then
 		state.rehookConn:Disconnect()

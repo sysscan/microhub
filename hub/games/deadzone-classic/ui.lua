@@ -5,6 +5,7 @@ function M.create(opts)
 	local UILib = opts.uiLib
 	local combat = opts.combat
 	local movement = opts.movement
+	local bypass = opts.bypass
 
 	UILib.create({
 		title = "DEADZONE CLASSIC",
@@ -45,7 +46,7 @@ function M.create(opts)
 							{ type = "toggle", key = "ACBypass", label = "Block AC Reports", hud = "AC Bypass" },
 							{
 								type = "hint",
-								text = "Blocks ChangePosture codes 5–9. Speed above 22 keeps safe WalkSpeed and boosts velocity after client AC clamp.",
+								text = "Hooks ChangePosture 5–9 and disables client AC loops (Rename1/2/3) via getconnections.",
 							},
 						},
 					},
@@ -63,7 +64,7 @@ function M.create(opts)
 							{ type = "slider", key = "JumpPower", label = "Jump Power", min = 16, max = 50, step = 1 },
 							{
 								type = "hint",
-								text = "With AC bypass on, WalkSpeed stays at 22.1 so client AC does not kick; extra speed is applied separately.",
+								text = "When client AC is disabled, speed/jump apply directly. Otherwise WalkSpeed stays at 22.1 with a velocity boost.",
 							},
 							{ type = "toggle", key = "NoClip", label = "NoClip", hud = "NoClip" },
 							{ type = "toggle", key = "FullBright", label = "Full Bright", hud = "Bright" },
@@ -129,8 +130,15 @@ function M.create(opts)
 				movement.setNoClip(value == true)
 			elseif key == "FullBright" then
 				movement.applyFullBright()
-			elseif key == "WalkSpeed" or key == "AlwaysSprint" or key == "SprintSpeed" or key == "JumpPower" or key == "ACBypass" then
+			elseif key == "ACBypass" then
+				if bypass then
+					bypass.sync()
+				end
 				movement.applyWalkSpeed()
+				movement.ensureSpeedBoost()
+			elseif key == "WalkSpeed" or key == "AlwaysSprint" or key == "SprintSpeed" or key == "JumpPower" then
+				movement.applyWalkSpeed()
+				movement.ensureSpeedBoost()
 			end
 		end,
 	})
