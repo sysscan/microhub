@@ -22,6 +22,13 @@ local function wrap(fn)
 	return if typeof(newcclosure) == "function" then newcclosure(fn) else fn
 end
 
+local function cloneInstance(inst: Instance): Instance
+	if typeof(cloneref) == "function" then
+		return cloneref(inst)
+	end
+	return inst
+end
+
 local function getState()
 	local state = GENV[KEY]
 	if not state then
@@ -39,7 +46,9 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 		return nil, nil
 	end
 
-	local oldFireServer = hookfunction(changePosture.FireServer, wrap(function(self, code, ...)
+	local remote = cloneInstance(changePosture)
+
+	local oldFireServer = hookfunction(remote.FireServer, wrap(function(self, code, ...)
 		if shouldBlock(code, cfg) then
 			if debugPrint then
 				debugPrint("blocked ChangePosture", code)
@@ -53,7 +62,33 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 		return nil, nil
 	end
 
-	return oldFireServer, changePosture
+	return oldFireServer, remote
+end
+
+local function installInstanceNamecall(changePosture: Instance, cfg, debugPrint): any?
+	if typeof(hookmetamethod) ~= "function" or typeof(getnamecallmethod) ~= "function" then
+		return nil
+	end
+
+	local remote = cloneInstance(changePosture)
+	local oldNamecall = hookmetamethod(remote, "__namecall", wrap(function(self, ...)
+		if self == remote and getnamecallmethod() == "FireServer" then
+			local code = ...
+			if shouldBlock(code, cfg) then
+				if debugPrint then
+					debugPrint("blocked ChangePosture (namecall)", code)
+				end
+				return
+			end
+		end
+		return oldNamecall(self, ...)
+	end))
+
+	if typeof(oldNamecall) ~= "function" then
+		return nil
+	end
+
+	return oldNamecall
 end
 
 local function resolveChangePosture(replicatedStorage: ReplicatedStorage, timeout: number?)
@@ -95,16 +130,18 @@ function M.install(opts: {
 
 	state.fireOld = fireOld
 	state.changePosture = remote
+	state.namecallOld = installInstanceNamecall(changePosture, cfg, opts.debugPrint)
 
 	if not state.rehookConn and remoteEvents then
 		state.rehookConn = remoteEvents.ChildAdded:Connect(function(child)
 			if child.Name ~= "ChangePosture" or not child:IsA("RemoteEvent") then
 				return
 			end
-			local newOld = hookChangePostureFire(child, cfg, opts.debugPrint)
-			if newOld then
+			local newOld, newRemote = hookChangePostureFire(child, cfg, opts.debugPrint)
+			if newOld and newRemote then
 				state.fireOld = newOld
-				state.changePosture = child
+				state.changePosture = newRemote
+				state.namecallOld = installInstanceNamecall(child, cfg, opts.debugPrint)
 			end
 		end)
 	end

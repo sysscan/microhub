@@ -45,7 +45,7 @@ function M.create(opts)
 							{ type = "toggle", key = "ACBypass", label = "Block AC Reports", hud = "AC Bypass" },
 							{
 								type = "hint",
-								text = "Blocks ChangePosture codes 5–9 via FireServer hook only (executor-safe).",
+								text = "Blocks ChangePosture codes 5–9. Speed above 22 keeps safe WalkSpeed and boosts velocity after client AC clamp.",
 							},
 						},
 					},
@@ -61,6 +61,10 @@ function M.create(opts)
 							{ type = "slider", key = "SprintSpeed", label = "Sprint Speed", min = 16, max = 50, step = 1 },
 							{ type = "toggle", key = "AlwaysSprint", label = "Always Sprint", hud = "Sprint" },
 							{ type = "slider", key = "JumpPower", label = "Jump Power", min = 16, max = 50, step = 1 },
+							{
+								type = "hint",
+								text = "With AC bypass on, WalkSpeed stays at 22.1 so client AC does not kick; extra speed is applied separately.",
+							},
 							{ type = "toggle", key = "NoClip", label = "NoClip", hud = "NoClip" },
 							{ type = "toggle", key = "FullBright", label = "Full Bright", hud = "Bright" },
 						},

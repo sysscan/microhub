@@ -3,6 +3,8 @@ local RunService = game:GetService("RunService")
 
 local M = {}
 
+local SPEED_RENDER_STEP = "MicroHubDZSpeed"
+
 function M.create(opts)
 	local Config = opts.config
 	local Constants = opts.constants
@@ -11,10 +13,74 @@ function M.create(opts)
 
 	local noclipConn: RBXScriptConnection? = nil
 	local lightingBackup = nil
+	local speedBoostBound = false
+	local targetMoveSpeed = 16
 
 	local function getHumanoid(): Humanoid?
 		local char = LocalPlayer.Character
 		return char and char:FindFirstChildOfClass("Humanoid")
+	end
+
+	local function getRoot(): BasePart?
+		local char = LocalPlayer.Character
+		if not char then
+			return nil
+		end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		return if root and root:IsA("BasePart") then root else nil
+	end
+
+	local function getDesiredSpeed(): number
+		local speed = tonumber(Config.WalkSpeed) or 16
+		if Config.AlwaysSprint then
+			speed = math.max(speed, tonumber(Config.SprintSpeed) or 22)
+		end
+		return speed
+	end
+
+	local function bindSpeedBoost()
+		if speedBoostBound then
+			return
+		end
+		RunService:BindToRenderStep(SPEED_RENDER_STEP, Enum.RenderPriority.Last.Value, function()
+			if not Config.ACBypass then
+				return
+			end
+
+			local desired = targetMoveSpeed
+			if desired <= Constants.MAX_SAFE_WALK then
+				return
+			end
+
+			local char = LocalPlayer.Character
+			if not char or not util.inCombatZone(char) then
+				return
+			end
+
+			local hum = getHumanoid()
+			local root = getRoot()
+			if not hum or not root or hum.Health <= 0 then
+				return
+			end
+
+			local move = hum.MoveDirection
+			if move.Magnitude < 0.05 then
+				return
+			end
+
+			local vel = root.AssemblyLinearVelocity
+			local horiz = move.Unit * desired
+			root.AssemblyLinearVelocity = Vector3.new(horiz.X, vel.Y, horiz.Z)
+		end)
+		speedBoostBound = true
+	end
+
+	local function unbindSpeedBoost()
+		if not speedBoostBound then
+			return
+		end
+		pcall(RunService.UnbindFromRenderStep, RunService, SPEED_RENDER_STEP)
+		speedBoostBound = false
 	end
 
 	local function applyWalkSpeed()
@@ -23,17 +89,20 @@ function M.create(opts)
 			return
 		end
 
-		local speed = tonumber(Config.WalkSpeed) or 16
-		if Config.AlwaysSprint then
-			speed = math.max(speed, tonumber(Config.SprintSpeed) or 22)
-		end
-		if not Config.ACBypass then
-			speed = math.min(speed, Constants.MAX_SAFE_WALK)
-		end
+		local desired = getDesiredSpeed()
+		targetMoveSpeed = desired
 
-		hum.WalkSpeed = speed
 		local jump = tonumber(Config.JumpPower) or Constants.MAX_SAFE_JUMP
-		hum.JumpPower = if Config.ACBypass then jump else math.min(jump, Constants.MAX_SAFE_JUMP)
+		if Config.ACBypass then
+			-- Client AC (Rename1) kicks on WalkSpeed > 22.1 via ChangePosture(6).
+			hum.WalkSpeed = math.min(desired, Constants.MAX_SAFE_WALK)
+			hum.JumpPower = jump
+			bindSpeedBoost()
+		else
+			hum.WalkSpeed = math.min(desired, Constants.MAX_SAFE_WALK)
+			hum.JumpPower = math.min(jump, Constants.MAX_SAFE_JUMP)
+			unbindSpeedBoost()
+		end
 	end
 
 	local function setNoClip(enabled: boolean)
@@ -104,6 +173,7 @@ function M.create(opts)
 	end
 
 	local function destroy()
+		unbindSpeedBoost()
 		setNoClip(false)
 		applyFullBright()
 	end
