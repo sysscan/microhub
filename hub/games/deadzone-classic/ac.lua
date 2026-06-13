@@ -10,8 +10,8 @@ local KEY = "__DeadzoneClassicAC"
 local REPORT_MIN = 5
 local AIM_RENDER_STEP = "  "
 local NEUTRALIZE_INTERVAL = 0.5
-local NEUTRALIZE_PASSES = 120
-local NEUTRALIZE_STABLE_PASSES = 3
+local NEUTRALIZE_PASSES = 24
+local NEUTRALIZE_WATCHDOG_INTERVAL = 2
 local DIAG_CACHE_TTL = 2
 local POSTURE_LOG_INTERVAL = 1
 
@@ -260,24 +260,23 @@ local function startNeutralizeLoop(state, cfg, debugPrint)
 	end
 
 	state.neutralizeThread = task.spawn(function()
-		local stablePasses = 0
-		for _ = 1, NEUTRALIZE_PASSES do
-			if not getConfig(cfg).ACBypass then
-				break
-			end
+		local function pass(interval: number)
 			local count = neutralizeClientAc(state, debugPrint)
 			if debugPrint and count > 0 then
 				debugPrint("neutralized client AC connections", count)
 			end
-			if state.clientNeutralized then
-				stablePasses += 1
-				if stablePasses >= NEUTRALIZE_STABLE_PASSES then
-					break
-				end
-			else
-				stablePasses = 0
+			task.wait(interval)
+		end
+
+		for _ = 1, NEUTRALIZE_PASSES do
+			if not getConfig(cfg).ACBypass then
+				break
 			end
-			task.wait(NEUTRALIZE_INTERVAL)
+			pass(NEUTRALIZE_INTERVAL)
+		end
+
+		while getConfig(cfg).ACBypass do
+			pass(NEUTRALIZE_WATCHDOG_INTERVAL)
 		end
 		state.neutralizeThread = nil
 	end)

@@ -71,7 +71,7 @@ function M.create(opts)
 							{ type = "slider", key = "JumpPower", label = "Jump Power", min = 16, max = 50, step = 1 },
 							{
 								type = "hint",
-								text = "When client AC is disabled, speed/jump apply directly. Otherwise WalkSpeed stays at 22.1 with a velocity boost.",
+								text = "WalkSpeed stays at 22.1; extra speed uses a capped velocity boost (max 22). Characterizer still owns the Humanoid property.",
 							},
 							{ type = "toggle", key = "NoClip", label = "NoClip", hud = "NoClip" },
 							{ type = "toggle", key = "FullBright", label = "Full Bright", hud = "Bright" },

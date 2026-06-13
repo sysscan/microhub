@@ -1,12 +1,10 @@
 local Lighting = game:GetService("Lighting")
 local RunService = game:GetService("RunService")
 
-local require = shared.__MicroHubRequire
-local ACLib = require("games/deadzone-classic/ac.lua")
-
 local M = {}
 
 local SPEED_RENDER_STEP = "MicroHubDZSpeed"
+local WALK_RENDER_STEP = "MicroHubDZWalk"
 
 function M.create(opts)
 	local Config = opts.config
@@ -17,6 +15,7 @@ function M.create(opts)
 	local noclipConn: RBXScriptConnection? = nil
 	local lightingBackup = nil
 	local speedBoostBound = false
+	local walkApplyBound = false
 	local targetMoveSpeed = 16
 
 	local function getHumanoid(): Humanoid?
@@ -41,11 +40,18 @@ function M.create(opts)
 		return speed
 	end
 
+	local function getBoostTarget(desired: number): number
+		if not Config.ACBypass or desired <= Constants.MAX_SAFE_WALK then
+			return desired
+		end
+		return math.min(desired, Constants.MAX_BOOST_VEL)
+	end
+
 	local function bindSpeedBoost()
 		if speedBoostBound then
 			return
 		end
-		RunService:BindToRenderStep(SPEED_RENDER_STEP, Enum.RenderPriority.Last.Value, function()
+		RunService:BindToRenderStep(SPEED_RENDER_STEP, Enum.RenderPriority.Last.Value + 1, function()
 			if not Config.ACBypass then
 				return
 			end
@@ -95,17 +101,18 @@ function M.create(opts)
 		end
 
 		local desired = getDesiredSpeed()
-		targetMoveSpeed = desired
+		targetMoveSpeed = getBoostTarget(desired)
 
 		local jump = tonumber(Config.JumpPower) or Constants.MAX_SAFE_JUMP
-		if Config.ACBypass and ACLib.isClientNeutralized() then
-			hum.WalkSpeed = desired
-			hum.JumpPower = jump
-			unbindSpeedBoost()
-		elseif Config.ACBypass then
-			-- Fallback when getconnections cannot disable Rename1: stay under 22.1 WalkSpeed.
+		if Config.ACBypass then
+			-- Characterizer resets WalkSpeed every frame via BindToRenderStep; never exceed 22.1.
 			hum.WalkSpeed = math.min(desired, Constants.MAX_SAFE_WALK)
 			hum.JumpPower = jump
+			if desired > Constants.MAX_SAFE_WALK then
+				bindSpeedBoost()
+			else
+				unbindSpeedBoost()
+			end
 		else
 			hum.WalkSpeed = math.min(desired, Constants.MAX_SAFE_WALK)
 			hum.JumpPower = math.min(jump, Constants.MAX_SAFE_JUMP)
@@ -113,8 +120,28 @@ function M.create(opts)
 		end
 	end
 
+	local function bindWalkApply()
+		if walkApplyBound then
+			return
+		end
+		RunService:BindToRenderStep(WALK_RENDER_STEP, Enum.RenderPriority.Last.Value, function()
+			applyWalkSpeed()
+		end)
+		walkApplyBound = true
+	end
+
+	local function unbindWalkApply()
+		if not walkApplyBound then
+			return
+		end
+		pcall(function()
+			RunService:UnbindFromRenderStep(WALK_RENDER_STEP)
+		end)
+		walkApplyBound = false
+	end
+
 	local function ensureSpeedBoost()
-		if Config.ACBypass and not ACLib.isClientNeutralized() and getDesiredSpeed() > Constants.MAX_SAFE_WALK then
+		if Config.ACBypass and getDesiredSpeed() > Constants.MAX_SAFE_WALK then
 			bindSpeedBoost()
 		else
 			unbindSpeedBoost()
@@ -182,6 +209,7 @@ function M.create(opts)
 
 	local function onCharacterAdded()
 		task.defer(function()
+			bindWalkApply()
 			applyWalkSpeed()
 			ensureSpeedBoost()
 			setNoClip(Config.NoClip == true)
@@ -190,10 +218,13 @@ function M.create(opts)
 	end
 
 	local function destroy()
+		unbindWalkApply()
 		unbindSpeedBoost()
 		setNoClip(false)
 		applyFullBright()
 	end
+
+	bindWalkApply()
 
 	return {
 		tickMovement = applyWalkSpeed,

@@ -1,7 +1,8 @@
 return {
-	GAME_BUILD = "10-deadzone-classic",
+	GAME_BUILD = "11-deadzone-classic",
 
 	MAX_SAFE_WALK = 22.1,
+	MAX_BOOST_VEL = 22,
 	MAX_SAFE_JUMP = 27,
 
 	WHITE = Color3.fromRGB(248, 250, 252),

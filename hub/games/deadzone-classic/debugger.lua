@@ -8,6 +8,8 @@ local M = {}
 local MAX_ENTRIES = 200
 local SNAPSHOT_INTERVAL = 3
 local WALK_LOG_EPSILON = 0.05
+local WALK_LOG_INTERVAL = 0.5
+local AC_CONN_LOG_INTERVAL = 2
 
 function M.create(opts)
 	local Config = opts.config
@@ -21,6 +23,9 @@ function M.create(opts)
 	local started = false
 	local lastWalkLog = 0
 	local lastJumpLog = 0
+	local lastWalkLogAt = 0
+	local lastAcConnLogAt = 0
+	local lastAcConnCount = 0
 
 	local function formatDetail(detail: any): string
 		if detail == nil then
@@ -69,10 +74,12 @@ function M.create(opts)
 			configSprint = Config.SprintSpeed,
 			alwaysSprint = Config.AlwaysSprint,
 			acBypass = Config.ACBypass,
+			boostTarget = math.min(tonumber(Config.WalkSpeed) or 16, Constants.MAX_BOOST_VEL),
 			humWalk = hum and math.floor(hum.WalkSpeed * 10) / 10 or "nil",
 			humJump = hum and math.floor(hum.JumpPower * 10) / 10 or "nil",
 			horizVel = math.floor(horizVel * 10) / 10,
 			safeWalk = Constants.MAX_SAFE_WALK,
+			maxBoostVel = Constants.MAX_BOOST_VEL,
 			hookInstalled = diag.hookInstalled,
 			clientAcOff = diag.clientNeutralized,
 			disabledConns = diag.disabledCount,
@@ -145,7 +152,16 @@ function M.create(opts)
 				if math.abs(value - lastWalkLog) < WALK_LOG_EPSILON then
 					return
 				end
+				local now = os.clock()
+				if now - lastWalkLogAt < WALK_LOG_INTERVAL then
+					return
+				end
+				if value <= Constants.MAX_SAFE_WALK and value <= (tonumber(Config.WalkSpeed) or 16) + 0.1 then
+					lastWalkLog = value
+					return
+				end
 				lastWalkLog = value
+				lastWalkLogAt = now
 				log("walkspeed_changed", { value = value })
 			end))
 
@@ -199,6 +215,17 @@ function M.create(opts)
 			while started and Config.DebugAC do
 				task.wait(SNAPSHOT_INTERVAL)
 				if started and Config.DebugAC then
+					local snap = movementSnapshot()
+					if snap.activeAcConns and snap.activeAcConns > 0 then
+						local now = os.clock()
+						if snap.activeAcConns ~= lastAcConnCount or now - lastAcConnLogAt >= AC_CONN_LOG_INTERVAL then
+							lastAcConnCount = snap.activeAcConns
+							lastAcConnLogAt = now
+							log("ac_conn_active", snap)
+						end
+					else
+						lastAcConnCount = 0
+					end
 					snapshot("heartbeat")
 				end
 			end
