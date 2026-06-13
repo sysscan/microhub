@@ -1,3 +1,5 @@
+local require = shared.__MicroHubRequire
+
 local ACLib = require("games/deadzone-classic/ac.lua")
 
 local M = {}

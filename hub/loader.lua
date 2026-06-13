@@ -353,6 +353,9 @@ local function unloadOld()
 	if typeof(genv.__VVUltimatumUnload) == "function" then
 		pcall(genv.__VVUltimatumUnload)
 	end
+	if typeof(genv.__DeadzoneClassicUnload) == "function" then
+		pcall(genv.__DeadzoneClassicUnload)
+	end
 	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
 	genv.__WarfareUnload = nil
@@ -361,6 +364,7 @@ local function unloadOld()
 	genv.__ShrekBackroomsUnload = nil
 	genv.__LumberTycoon2Unload = nil
 	genv.__VVUltimatumUnload = nil
+	genv.__DeadzoneClassicUnload = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
 			genv.Library:Exit()
