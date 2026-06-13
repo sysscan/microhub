@@ -170,6 +170,9 @@ function M.create(opts)
 		end
 
 		fireOld = hookfunction(fireRemote.FireServer, wrap(function(self, tag, aimCf, ...)
+			if typeof(checkcaller) == "function" and checkcaller() then
+				return fireOld(self, tag, aimCf, ...)
+			end
 			if Config.SilentAim and silentTargetPos and typeof(aimCf) == "CFrame" then
 				aimCf = CFrame.new(Camera.CFrame.Position, silentTargetPos)
 			end

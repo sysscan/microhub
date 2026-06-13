@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "7-deadzone-classic",
+	GAME_BUILD = "8-deadzone-classic",
 
 	MAX_SAFE_WALK = 22.1,
 	MAX_SAFE_JUMP = 27,

@@ -82,7 +82,9 @@ function M.create(opts)
 		if not speedBoostBound then
 			return
 		end
-		pcall(RunService.UnbindFromRenderStep, RunService, SPEED_RENDER_STEP)
+		pcall(function()
+			RunService:UnbindFromRenderStep(SPEED_RENDER_STEP)
+		end)
 		speedBoostBound = false
 	end
 

@@ -28,11 +28,21 @@ local function wrap(fn)
 	return if typeof(newcclosure) == "function" then newcclosure(fn) else fn
 end
 
+local function isExecutorCall(): boolean
+	return typeof(checkcaller) == "function" and checkcaller()
+end
+
+local function canInspectConnections(): boolean
+	return typeof(getconnections) == "function"
+		and typeof(debug) == "table"
+		and typeof(debug.getconstants) == "function"
+end
+
 local function getState()
 	local state = GENV[KEY]
 	if not state then
 		state = {
-			disabled = {},
+			disabledConns = {},
 			clientNeutralized = false,
 			aimStepUnbound = false,
 		}
@@ -42,7 +52,7 @@ local function getState()
 end
 
 local function getConstants(fn: any): { any }
-	if typeof(fn) ~= "function" or typeof(debug) ~= "table" or typeof(debug.getconstants) ~= "function" then
+	if typeof(fn) ~= "function" then
 		return {}
 	end
 	local ok, constants = pcall(debug.getconstants, fn)
@@ -83,33 +93,52 @@ local function isGuiAc(fn: any): boolean
 end
 
 local function isAcCallback(fn: any): boolean
+	if typeof(isexecutorclosure) == "function" and isexecutorclosure(fn) then
+		return false
+	end
 	return isMovementAc(fn) or isInjectionAc(fn) or isGuiAc(fn)
 end
 
+local function isTrackedConnection(conn: any, state): boolean
+	for _, tracked in state.disabledConns do
+		if tracked == conn then
+			return true
+		end
+	end
+	return false
+end
+
 local function disableConnection(conn: any, state): boolean
-	if typeof(conn) ~= "table" or state.disabled[conn] then
+	if isTrackedConnection(conn, state) then
 		return false
 	end
 	if conn.Enabled == false then
 		return false
 	end
+	if typeof(conn.Disable) ~= "function" then
+		return false
+	end
+
 	local ok = pcall(function()
 		conn:Disable()
 	end)
-	if ok then
-		state.disabled[conn] = true
-		return true
+	if not ok then
+		return false
 	end
-	return false
+
+	table.insert(state.disabledConns, conn)
+	return true
 end
 
 local function restoreDisabledConnections(state)
-	for conn in state.disabled do
+	for _, conn in state.disabledConns do
 		pcall(function()
-			conn:Enable()
+			if typeof(conn.Enable) == "function" and conn.Enabled == false then
+				conn:Enable()
+			end
 		end)
 	end
-	table.clear(state.disabled)
+	table.clear(state.disabledConns)
 	state.clientNeutralized = false
 	state.aimStepUnbound = false
 end
@@ -135,7 +164,12 @@ local function collectSignals(): { RBXScriptSignal }
 end
 
 local function neutralizeAimRenderStep(state, debugPrint): boolean
-	local ok = pcall(RunService.UnbindFromRenderStep, RunService, AIM_RENDER_STEP)
+	if state.aimStepUnbound then
+		return false
+	end
+	local ok = pcall(function()
+		RunService:UnbindFromRenderStep(AIM_RENDER_STEP)
+	end)
 	if ok then
 		state.aimStepUnbound = true
 		if debugPrint then
@@ -146,7 +180,7 @@ local function neutralizeAimRenderStep(state, debugPrint): boolean
 end
 
 local function neutralizeClientAc(state, debugPrint): number
-	if typeof(getconnections) ~= "function" then
+	if not canInspectConnections() then
 		return 0
 	end
 
@@ -157,17 +191,17 @@ local function neutralizeClientAc(state, debugPrint): number
 			continue
 		end
 
-		for _, conn in connections do
-			local fn = conn.Function
-			if fn and isAcCallback(fn) and disableConnection(conn, state) then
+		for _, conn in ipairs(connections) do
+			if conn.ForeignState or not conn.LuaConnection or typeof(conn.Function) ~= "function" then
+				continue
+			end
+			if isAcCallback(conn.Function) and disableConnection(conn, state) then
 				disabledCount += 1
 			end
 		end
 	end
 
-	if neutralizeAimRenderStep(state, debugPrint) then
-		disabledCount += 1
-	end
+	neutralizeAimRenderStep(state, debugPrint)
 
 	if disabledCount > 0 then
 		state.clientNeutralized = true
@@ -212,6 +246,9 @@ local function hookChangePostureFire(changePosture: Instance, cfg, debugPrint): 
 	end
 
 	local oldFireServer = hookfunction(changePosture.FireServer, wrap(function(self, code, ...)
+		if isExecutorCall() then
+			return oldFireServer(self, code, ...)
+		end
 		if shouldBlock(code, cfg) then
 			if debugPrint then
 				debugPrint("blocked ChangePosture", code)
