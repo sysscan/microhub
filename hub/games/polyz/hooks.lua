@@ -19,6 +19,7 @@ function M.create(opts)
 	local oldFireServer: any = nil
 	local rawFireServer: any = nil
 	local hookedRemote: RemoteEvent? = nil
+	local enemyWatchConnections: { RBXScriptConnection } = {}
 	local bypassDepth = 0
 	local useNamecall = typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function"
 
@@ -50,6 +51,37 @@ function M.create(opts)
 		aimCache.expires = 0
 		aimCache.enemy = nil
 		aimCache.part = nil
+		targets.refreshEnemies(true)
+	end
+
+	local function aliveEnemyCount()
+		local _, count = targets.collectEnemies()
+		return count or 0
+	end
+
+	local function disconnectEnemyWatch()
+		for _, connection in enemyWatchConnections do
+			pcall(function()
+				connection:Disconnect()
+			end)
+		end
+		table.clear(enemyWatchConnections)
+	end
+
+	local function watchEnemyFolder(folder: Folder)
+		disconnectEnemyWatch()
+		table.insert(
+			enemyWatchConnections,
+			folder.ChildAdded:Connect(function()
+				invalidateAimCache()
+			end)
+		)
+		table.insert(
+			enemyWatchConnections,
+			folder.ChildRemoved:Connect(function()
+				invalidateAimCache()
+			end)
+		)
 	end
 
 	local function isShootRaycast(params)
@@ -115,6 +147,10 @@ function M.create(opts)
 	end
 
 	local function makeRaycastResult(part: BasePart, origin: Vector3, direction: Vector3)
+		if not part.Parent then
+			return nil
+		end
+
 		local toTarget = part.Position - origin
 		local distance = toTarget.Magnitude
 		if distance <= 0.05 then
@@ -160,6 +196,11 @@ function M.create(opts)
 			return nil, nil
 		end
 
+		if aliveEnemyCount() <= 0 then
+			invalidateAimCache()
+			return nil, nil
+		end
+
 		local now = os.clock()
 		if aimCache.part and aimCache.enemy and now < aimCache.expires and targets.isEnemyAlive(aimCache.enemy) then
 			return aimCache.enemy, aimCache.part
@@ -200,16 +241,29 @@ function M.create(opts)
 			return nil
 		end
 
-		local _, part = resolveSilentTarget(params)
-		if part then
-			return makeRaycastResult(part, origin, direction)
+		local ok, result = pcall(function()
+			local _, part = resolveSilentTarget(params)
+			if part then
+				return makeRaycastResult(part, origin, direction)
+			end
+			return nil
+		end)
+		if not ok then
+			if debug then
+				debug.logInvokeError("RaycastRedirect", { origin, direction }, tostring(result))
+			end
+			return nil
 		end
-
-		return nil
+		return result
 	end
 
 	local function redirectFireArgs(enemyModel, hitPart, hitPosition, pierceCount, gunName)
 		if not Config.SilentAim or shouldBypass() then
+			return enemyModel, hitPart, hitPosition, pierceCount, gunName
+		end
+
+		if aliveEnemyCount() <= 0 then
+			invalidateAimCache()
 			return enemyModel, hitPart, hitPosition, pierceCount, gunName
 		end
 
@@ -395,15 +449,24 @@ function M.create(opts)
 		end
 
 		if canHookFunction then
-			oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params, ...)
-				return callRaycast(origin, direction, params, ...)
-			end))
+			-- Raycast via __namecall only when available; hookfunction(workspace.Raycast)
+			-- double-intercepts camera raycasts and corrupts arguments (Vector3/string warnings).
+			if not useNamecall then
+				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params, ...)
+					return callRaycast(origin, direction, params, ...)
+				end))
+			end
 			oldFireServer = hookfunction(remote.FireServer, wrapHook(function(self, ...)
 				if Config.SilentAim and not shouldBypass() then
 					return callFireServer(self, ...)
 				end
 				return oldFireServer(self, ...)
 			end))
+		end
+
+		local enemiesFolder = targets.getEnemiesFolder()
+		if enemiesFolder then
+			watchEnemyFolder(enemiesFolder)
 		end
 
 		hookedRemote = remote
@@ -413,6 +476,7 @@ function M.create(opts)
 
 	local function remove()
 		installed = false
+		disconnectEnemyWatch()
 		invalidateAimCache()
 	end
 
