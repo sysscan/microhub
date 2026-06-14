@@ -72,6 +72,31 @@ function M.create(opts)
 		return ok and fromCamera == true
 	end
 
+	-- Camera aim-assist uses LookVector * 250 with no spread; works when debug.info is stripped.
+	local function isCameraAlignedRaycast(origin: Vector3, direction: Vector3)
+		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+			return false
+		end
+
+		local camera = workspace.CurrentCamera
+		if not camera then
+			return false
+		end
+
+		local mag = direction.Magnitude
+		if mag < 1 then
+			return false
+		end
+
+		local aligned = camera.CFrame.LookVector * mag
+		if (direction - aligned).Magnitude > 2 then
+			return false
+		end
+
+		local camPos = camera.CFrame.Position
+		return (origin - camPos).Magnitude <= 8
+	end
+
 	local function isPlayerControlsRaycast()
 		local ok, fromControls = pcall(function()
 			for level = 2, 15 do
@@ -113,18 +138,20 @@ function M.create(opts)
 		end
 
 		if rawRaycast then
-			if typeof(params) == "RaycastParams" then
-				local ok, result = pcall(rawRaycast, origin, direction, params)
-				if ok and isValidRaycastResult(result) then
-					return result, true
-				end
+			local invoke = function(...)
+				local packed = table.pack(...)
+				return withBypass(function()
+					return rawRaycast(table.unpack(packed, 1, packed.n))
+				end)
+			end
 
-				ok, result = pcall(rawRaycast, workspace, origin, direction, params)
+			if typeof(params) == "RaycastParams" then
+				local ok, result = pcall(invoke, workspace, origin, direction, params)
 				if ok and isValidRaycastResult(result) then
 					return result, true
 				end
 			else
-				local ok, result = pcall(rawRaycast, origin, direction)
+				local ok, result = pcall(invoke, workspace, origin, direction)
 				if ok and isValidRaycastResult(result) then
 					return result, true
 				end
@@ -132,7 +159,14 @@ function M.create(opts)
 		end
 
 		if oldRaycast then
-			local ok, result = pcall(oldRaycast, origin, direction, params)
+			local ok, result = pcall(function()
+				return withBypass(function()
+					if typeof(params) == "RaycastParams" then
+						return oldRaycast(workspace, origin, direction, params)
+					end
+					return oldRaycast(workspace, origin, direction)
+				end)
+			end)
 			if ok and isValidRaycastResult(result) then
 				return result, true
 			end
@@ -152,32 +186,62 @@ function M.create(opts)
 		return oldNamecall(self, table.unpack(args, 1, args.n))
 	end
 
+	local function passthroughRaycast(self, origin: Vector3, direction: Vector3, params: RaycastParams?)
+		return withBypass(function()
+			if rawRaycast and typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+				if typeof(params) == "RaycastParams" then
+					local ok, result = pcall(rawRaycast, self, origin, direction, params)
+					if ok and isValidRaycastResult(result) then
+						return result
+					end
+				end
+				local ok, result = pcall(rawRaycast, self, origin, direction)
+				if ok and isValidRaycastResult(result) then
+					return result
+				end
+			end
+			return passthroughNamecall(self, table.pack(origin, direction, params))
+		end)
+	end
+
 	local shouldRedirectWeaponRaycast
 	local redirectRaycast
 
 	local function tryNamecallRaycastRedirect(self, args)
-		if isCameraControllerRaycast() then
-			return passthroughNamecall(self, args)
-		end
+		local ok, result = pcall(function()
+			local origin, direction, params = args[1], args[2], args[3]
+			if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+				return passthroughRaycast(self, origin, direction, params)
+			end
 
-		if not Config.SilentAim or shouldBypass() then
-			return passthroughNamecall(self, args)
+			if isCameraControllerRaycast() or isCameraAlignedRaycast(origin, direction) then
+				return passthroughRaycast(self, origin, direction, params)
+			end
+
+			if not Config.SilentAim or shouldBypass() then
+				return passthroughRaycast(self, origin, direction, params)
+			end
+
+			if typeof(params) ~= "RaycastParams" or not shouldRedirectWeaponRaycast(origin, direction, params) then
+				return passthroughRaycast(self, origin, direction, params)
+			end
+
+			local redirected = redirectRaycast(origin, direction, params)
+			if typeof(redirected) == "RaycastResult" then
+				return redirected
+			end
+
+			return passthroughRaycast(self, origin, direction, params)
+		end)
+
+		if ok then
+			return result
 		end
 
 		local origin, direction, params = args[1], args[2], args[3]
-		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" or typeof(params) ~= "RaycastParams" then
-			return passthroughNamecall(self, args)
+		if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+			return passthroughRaycast(self, origin, direction, params)
 		end
-
-		if not shouldRedirectWeaponRaycast(origin, direction, params) then
-			return passthroughNamecall(self, args)
-		end
-
-		local redirected = redirectRaycast(origin, direction, params)
-		if typeof(redirected) == "RaycastResult" then
-			return redirected
-		end
-
 		return passthroughNamecall(self, args)
 	end
 
@@ -190,7 +254,7 @@ function M.create(opts)
 		if not isShootRaycast(params) then
 			return false
 		end
-		if isCameraControllerRaycast() then
+		if isCameraControllerRaycast() or isCameraAlignedRaycast(origin, direction) then
 			return false
 		end
 		if isPlayerControlsRaycast() then
@@ -560,7 +624,9 @@ function M.create(opts)
 	end
 
 	local function captureRawRaycast()
-		if rawRaycast or typeof(hookfunction) ~= "function" then
+		-- Avoid touching workspace.Raycast when __namecall handles Raycast; a leftover
+		-- hookfunction wrapper is what causes Workspace.Dot camera spam on Raptor.
+		if rawRaycast or useNamecall or typeof(hookfunction) ~= "function" then
 			return
 		end
 
