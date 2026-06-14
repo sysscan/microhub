@@ -152,6 +152,9 @@ function M.create(opts)
 		return oldNamecall(self, table.unpack(args, 1, args.n))
 	end
 
+	local shouldRedirectWeaponRaycast
+	local redirectRaycast
+
 	local function tryNamecallRaycastRedirect(self, args)
 		if not Config.SilentAim or shouldBypass() then
 			return passthroughNamecall(self, args)
@@ -174,7 +177,9 @@ function M.create(opts)
 		return passthroughNamecall(self, args)
 	end
 
-	local function shouldRedirectWeaponRaycast(origin: Vector3, direction: Vector3, params: RaycastParams)
+	local isShootRaycast
+
+	shouldRedirectWeaponRaycast = function(origin: Vector3, direction: Vector3, params: RaycastParams)
 		if not isShootRaycast(params) then
 			return false
 		end
@@ -218,7 +223,7 @@ function M.create(opts)
 		)
 	end
 
-	local function isShootRaycast(params)
+	isShootRaycast = function(params)
 		if typeof(params) ~= "RaycastParams" then
 			return false
 		end
@@ -368,7 +373,7 @@ function M.create(opts)
 		return enemy, part
 	end
 
-	local function redirectRaycast(origin: Vector3, direction: Vector3, params: RaycastParams)
+	redirectRaycast = function(origin: Vector3, direction: Vector3, params: RaycastParams)
 		if not Config.SilentAim or not shouldRedirectWeaponRaycast(origin, direction, params) then
 			return nil
 		end
