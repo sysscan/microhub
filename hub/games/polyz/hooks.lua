@@ -43,7 +43,7 @@ function M.create(opts)
 	end
 
 	local function shouldBypass()
-		return bypassDepth > 0 or (typeof(checkcaller) == "function" and checkcaller())
+		return bypassDepth > 0
 	end
 
 	local function invalidateAimCache()
@@ -115,29 +115,41 @@ function M.create(opts)
 	end
 
 	local function makeRaycastResult(part: BasePart, origin: Vector3, direction: Vector3)
-		local offset = part.Position - origin
-		local distance = offset.Magnitude
+		local toTarget = part.Position - origin
+		local distance = toTarget.Magnitude
 		if distance <= 0.05 then
-			distance = direction.Magnitude
-		end
-		if distance <= 0.05 then
-			distance = 1
-		end
-
-		local filterRoot = part:FindFirstAncestorOfClass("Model") or part.Parent
-		local params = RaycastParams.new()
-		params.FilterDescendantsInstances = { filterRoot }
-		params.FilterType = Enum.RaycastFilterType.Include
-
-		local result = withBypass(function()
-			return workspace:Raycast(origin, offset.Unit * (distance + 2), params)
-		end)
-
-		if typeof(result) == "RaycastResult" and result.Instance then
-			if debug then
-				debug.logRaycastRedirect(origin, direction, result.Instance, true, "real RaycastResult")
+			if direction.Magnitude > 0.05 then
+				toTarget = direction.Unit * math.max(direction.Magnitude, 1)
+			else
+				toTarget = Vector3.new(0, 0, -1)
 			end
-			return result
+			distance = toTarget.Magnitude
+		end
+
+		local rayDirection = toTarget.Unit * (distance + 5)
+		local model = part:FindFirstAncestorOfClass("Model")
+
+		local filters = { { part }, if model then { model } else nil, if model and part.Parent then { part, model } else nil }
+		for _, includeList in filters do
+			if includeList then
+				local params = RaycastParams.new()
+				params.FilterDescendantsInstances = includeList
+				params.FilterType = Enum.RaycastFilterType.Include
+
+				local result = withBypass(function()
+					return workspace:Raycast(origin, rayDirection, params)
+				end)
+
+				if typeof(result) == "RaycastResult" and result.Instance then
+					local enemiesFolder = targets.getEnemiesFolder()
+					if enemiesFolder and result.Instance:IsDescendantOf(enemiesFolder) then
+						if debug then
+							debug.logRaycastRedirect(origin, direction, result.Instance, true, "real RaycastResult")
+						end
+						return result
+					end
+				end
+			end
 		end
 
 		return nil
@@ -255,42 +267,44 @@ function M.create(opts)
 	end
 
 	local function invokeOriginalFire(self, host, part, pos, pierce, gun)
-		local args = { host, part, pos, pierce, gun }
-		local attempts = {}
+		return withBypass(function()
+			local args = { host, part, pos, pierce, gun }
+			local attempts = {}
 
-		if oldFireServer then
-			table.insert(attempts, function()
-				return oldFireServer(self, host, part, pos, pierce, gun)
-			end)
-			table.insert(attempts, function()
-				return oldFireServer(host, part, pos, pierce, gun)
-			end)
-		end
-		if rawFireServer then
-			table.insert(attempts, function()
-				return rawFireServer(self, host, part, pos, pierce, gun)
-			end)
-			table.insert(attempts, function()
-				return rawFireServer(host, part, pos, pierce, gun)
-			end)
-		end
-		table.insert(attempts, function()
-			return self:FireServer(host, part, pos, pierce, gun)
-		end)
-
-		local lastErr = "unknown FireServer invoke failure"
-		for _, attempt in attempts do
-			local ok, err = pcall(attempt)
-			if ok then
-				return true
+			if oldFireServer then
+				table.insert(attempts, function()
+					return oldFireServer(self, host, part, pos, pierce, gun)
+				end)
+				table.insert(attempts, function()
+					return oldFireServer(host, part, pos, pierce, gun)
+				end)
 			end
-			lastErr = tostring(err)
-		end
+			if rawFireServer then
+				table.insert(attempts, function()
+					return rawFireServer(self, host, part, pos, pierce, gun)
+				end)
+				table.insert(attempts, function()
+					return rawFireServer(host, part, pos, pierce, gun)
+				end)
+			end
+			table.insert(attempts, function()
+				return self:FireServer(host, part, pos, pierce, gun)
+			end)
 
-		if debug then
-			debug.logInvokeError("ShootEnemy", args, lastErr)
-		end
-		return
+			local lastErr = "unknown FireServer invoke failure"
+			for _, attempt in attempts do
+				local ok, err = pcall(attempt)
+				if ok then
+					return true
+				end
+				lastErr = tostring(err)
+			end
+
+			if debug then
+				debug.logInvokeError("ShootEnemy", args, lastErr)
+			end
+			return
+		end)
 	end
 
 	local function callFireServer(self, ...)
@@ -362,17 +376,17 @@ function M.create(opts)
 				"__namecall",
 				wrapHook(function(self, ...)
 					local method = getnamecallmethod()
-					if method == "FireServer" and self == remote and not canHookFunction then
-						if Config.SilentAim and not shouldBypass() then
-							return callFireServer(self, ...)
-						end
-					elseif method == "Raycast" and self == workspace and not canHookFunction then
+					if method == "Raycast" and self == workspace then
 						if Config.SilentAim and not shouldBypass() then
 							local origin, direction, params = ...
 							local redirected = redirectRaycast(origin, direction, params)
 							if redirected then
 								return redirected
 							end
+						end
+					elseif method == "FireServer" and self == remote and not canHookFunction then
+						if Config.SilentAim and not shouldBypass() then
+							return callFireServer(self, ...)
 						end
 					end
 					return oldNamecall(self, ...)

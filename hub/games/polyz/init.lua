@@ -104,6 +104,21 @@ function M.run()
 		config = Config,
 		uiLib = UILib,
 		constants = Constants,
+		onToggle = function(key, value)
+			if key == "SilentAim" then
+				if value then
+					task.spawn(function()
+						for _ = 1, 12 do
+							if hooks.sync() then
+								break
+							end
+							task.wait(0.25)
+						end
+					end)
+				end
+				hooks.invalidateAimCache()
+			end
+		end,
 	})
 
 	BootstrapLib.create({

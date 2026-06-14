@@ -4,6 +4,7 @@ function M.create(opts)
 	local Config = opts.config
 	local UILib = opts.uiLib
 	local Constants = opts.constants
+	local onToggle = opts.onToggle
 
 	if not Config or not UILib or not Constants then
 		error("[POLYZ] ui.create missing config, uiLib, or constants", 0)
@@ -12,6 +13,7 @@ function M.create(opts)
 	UILib.create({
 		title = "POLYZ",
 		config = Config,
+		onToggle = onToggle,
 		pages = {
 			{
 				label = "Combat",
