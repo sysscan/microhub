@@ -19,8 +19,6 @@ function M.create(opts)
 	local lastSecondaryAmmo = -1
 	local reloadHookedScript: LocalScript? = nil
 	local oldReloadFn: any = nil
-	local oldTaskWait: any = nil
-	local reloadWaitHooked = false
 
 	local function wrapHook(fn)
 		if typeof(newcclosure) == "function" then
@@ -131,38 +129,6 @@ function M.create(opts)
 		return true
 	end
 
-	local function isReloadWaitFrame()
-		for level = 2, 14 do
-			local ok, name = pcall(debug.info, level, "n")
-			if not ok or not name then
-				return false
-			end
-			if name == "reload" then
-				return true
-			end
-		end
-		return false
-	end
-
-	local function installReloadWaitHook()
-		if reloadWaitHooked or typeof(hookfunction) ~= "function" then
-			return
-		end
-
-		local hooked = hookfunction(task.wait, wrapHook(function(...)
-			local packed = table.pack(...)
-			if Config.InstantReload and isReloadWaitFrame() then
-				return oldTaskWait(0)
-			end
-			return oldTaskWait(table.unpack(packed, 1, packed.n))
-		end))
-
-		if typeof(hooked) == "function" then
-			oldTaskWait = hooked
-			reloadWaitHooked = true
-		end
-	end
-
 	local function hookPlayerControlsReload(character: Model?)
 		if not character or typeof(getsenv) ~= "function" or typeof(hookfunction) ~= "function" then
 			return false
@@ -187,31 +153,35 @@ function M.create(opts)
 			return false
 		end
 
-		local original = reloadFn
-		local wrapped = wrapHook(function()
-			if not Config.InstantReload then
-				return original()
-			end
+		oldReloadFn = hookfunction(
+			reloadFn,
+			wrapHook(function()
+				if not Config.InstantReload then
+					return oldReloadFn()
+				end
 
-			local variables = util.getVariables()
-			if variables then
-				transferReloadAmmo(variables)
-			end
-			hideReloadUi()
-		end)
+				local variables = util.getVariables()
+				if variables then
+					transferReloadAmmo(variables)
+				end
+				hideReloadUi()
+			end)
+		)
 
-		local hooked = hookfunction(reloadFn, wrapped)
-		if typeof(hooked) ~= "function" then
+		if typeof(oldReloadFn) ~= "function" then
+			oldReloadFn = nil
 			return false
 		end
 
-		oldReloadFn = hooked
 		reloadHookedScript = controls
 		return true
 	end
 
 	local function installReloadHooks()
-		installReloadWaitHook()
+		if not Config.InstantReload then
+			return
+		end
+
 		local character = util.getCharacter() or LocalPlayer.Character
 		if character then
 			hookPlayerControlsReload(character)
@@ -288,13 +258,34 @@ function M.create(opts)
 
 		hideReloadUi()
 
+		local variables = util.getVariables()
+		if not variables then
+			return
+		end
+
 		local loading = getReloadLoadingLabel()
 		if loading and loading:IsA("GuiObject") and loading.Visible then
-			local variables = util.getVariables()
-			if variables then
-				transferReloadAmmo(variables)
-				hideReloadUi()
-			end
+			transferReloadAmmo(variables)
+			hideReloadUi()
+			return
+		end
+
+		-- Top up before mag hits 0 so PlayerControls never enters reload lock (v39).
+		local slot = variables:GetAttribute("Equipped_Slot")
+		if type(slot) ~= "string" or slot == "" then
+			return
+		end
+
+		local playerData = util.getPlayerData()
+		local equipped = playerData and playerData:FindFirstChild("equipped_" .. string.lower(slot))
+		if not equipped or equipped.Value == "None" or equipped.Value == "" then
+			return
+		end
+
+		local magKey = slot .. "_Mag"
+		local currentMag = variables:GetAttribute(magKey) or 0
+		if currentMag <= 0 then
+			transferReloadAmmo(variables)
 		end
 	end
 
@@ -364,15 +355,13 @@ function M.create(opts)
 		end
 	end
 
-	installReloadWaitHook()
-	LocalPlayer.CharacterAdded:Connect(function(character)
+	LocalPlayer.CharacterAdded:Connect(function(_character)
 		reloadHookedScript = nil
-		oldReloadFn = nil
 		task.defer(function()
 			installReloadHooks()
 		end)
 	end)
-	if LocalPlayer.Character then
+	if LocalPlayer.Character and Config.InstantReload then
 		task.defer(function()
 			installReloadHooks()
 		end)
