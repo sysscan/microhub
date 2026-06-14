@@ -89,17 +89,17 @@ function M.create(opts)
 	end
 
 	local function hasBulletSpread(origin: Vector3, direction: Vector3)
+		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+			return false
+		end
+
 		local camera = workspace.CurrentCamera
 		if not camera or direction.Magnitude < 1 then
 			return false
 		end
 
-		local look = camera.CFrame.LookVector
-		if look.Magnitude < 0.001 then
-			return false
-		end
-
-		return direction.Unit:Dot(look.Unit) < 0.999
+		local aligned = camera.CFrame.LookVector * direction.Magnitude
+		return (direction - aligned).Magnitude > 1
 	end
 
 	local function isValidRaycastResult(result: any)
@@ -156,6 +156,10 @@ function M.create(opts)
 	local redirectRaycast
 
 	local function tryNamecallRaycastRedirect(self, args)
+		if isCameraControllerRaycast() then
+			return passthroughNamecall(self, args)
+		end
+
 		if not Config.SilentAim or shouldBypass() then
 			return passthroughNamecall(self, args)
 		end
@@ -180,6 +184,9 @@ function M.create(opts)
 	local isShootRaycast
 
 	shouldRedirectWeaponRaycast = function(origin: Vector3, direction: Vector3, params: RaycastParams)
+		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+			return false
+		end
 		if not isShootRaycast(params) then
 			return false
 		end
@@ -435,6 +442,14 @@ function M.create(opts)
 		return enemyModel, hitPart, hitPosition, pierceCount, gunName
 	end
 
+	local function normalizeRaycastArgs(...)
+		local args = table.pack(...)
+		if args.n >= 4 and isWorkspaceInstance(args[1]) then
+			return args[2], args[3], args[4]
+		end
+		return args[1], args[2], args[3]
+	end
+
 	local function callRaycast(origin, direction, params)
 		if Config.SilentAim and not shouldBypass() then
 			local redirected = redirectRaycast(origin, direction, params)
@@ -617,10 +632,12 @@ function M.create(opts)
 		end
 
 		if canHookFunction then
-			if typeof(rawRaycast) == "function" and not oldRaycast then
+			-- Never stack hookfunction(workspace.Raycast) on top of __namecall; Raptor
+			-- re-enters the hook with Workspace as arg[1] and breaks camera raycasts.
+			if not useNamecall and typeof(rawRaycast) == "function" and not oldRaycast then
 				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(...)
-					local args = table.pack(...)
-					return callRaycast(args[1], args[2], args[3])
+					local origin, direction, params = normalizeRaycastArgs(...)
+					return callRaycast(origin, direction, params)
 				end))
 			end
 			oldFireServer = hookfunction(remote.FireServer, wrapHook(function(self, ...)
