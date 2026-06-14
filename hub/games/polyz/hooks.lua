@@ -219,6 +219,21 @@ function M.create(opts)
 		end)
 	end
 
+	local function shouldApplyNoSpread(origin: Vector3, direction: Vector3, params: RaycastParams)
+		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" or typeof(params) ~= "RaycastParams" then
+			return false
+		end
+		if not isShootRaycast(params) then
+			return false
+		end
+		-- CameraController aim-assist is the only other Enemies+Misc raycast path.
+		return not isCameraControllerRaycast()
+	end
+
+	local function isWeaponShootRaycast(origin: Vector3, direction: Vector3, params: RaycastParams)
+		return shouldApplyNoSpread(origin, direction, params)
+	end
+
 	local shouldRedirectWeaponRaycast
 	local redirectRaycast
 
@@ -233,9 +248,9 @@ function M.create(opts)
 				return passthroughRaycast(self, origin, direction, params)
 			end
 
-			local silentAimWeapon = typeof(params) == "RaycastParams" and isWeaponShootRaycast(origin, direction, params)
+			local weaponRay = typeof(params) == "RaycastParams" and shouldApplyNoSpread(origin, direction, params)
 
-			if shouldApplyNoSpread(origin, direction, params) and Config.NoSpread and not shouldBypass() then
+			if weaponRay and Config.NoSpread and not shouldBypass() then
 				direction = alignDirectionToCamera(direction)
 			end
 
@@ -243,7 +258,7 @@ function M.create(opts)
 				return passthroughRaycast(self, origin, direction, params)
 			end
 
-			if Config.SilentAim and silentAimWeapon then
+			if Config.SilentAim and weaponRay then
 				local redirected = redirectRaycast(origin, direction, params, true)
 				if typeof(redirected) == "RaycastResult" then
 					return redirected
@@ -271,14 +286,13 @@ function M.create(opts)
 		if not isShootRaycast(params) then
 			return false
 		end
-		if isCameraControllerRaycast() or isCameraAlignedRaycast(origin, direction) then
+		if isCameraControllerRaycast() then
 			return false
 		end
-		if isPlayerControlsRaycast() then
+		if isPlayerControlsRaycast() or hasBulletSpread(origin, direction) then
 			return true
 		end
-		-- PlayerControls applies spread to weapon rays; camera aim-assist does not.
-		return hasBulletSpread(origin, direction)
+		return shouldApplyNoSpread(origin, direction, params)
 	end
 
 	local function aliveEnemyCount()
@@ -348,34 +362,6 @@ function M.create(opts)
 		return hasEnemyTarget and hasMisc
 	end
 
-	local function shouldApplyNoSpread(origin: Vector3, direction: Vector3, params: RaycastParams)
-		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" or typeof(params) ~= "RaycastParams" then
-			return false
-		end
-		if not isShootRaycast(params) then
-			return false
-		end
-		-- CameraController aim-assist is the only other Enemies+Misc raycast path.
-		return not isCameraControllerRaycast()
-	end
-
-	local function isWeaponShootRaycast(origin: Vector3, direction: Vector3, params: RaycastParams)
-		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" or typeof(params) ~= "RaycastParams" then
-			return false
-		end
-		if not isShootRaycast(params) then
-			return false
-		end
-		if isCameraControllerRaycast() then
-			return false
-		end
-		if isPlayerControlsRaycast() or hasBulletSpread(origin, direction) then
-			return true
-		end
-		-- When debug.info is stripped, aim-assist rays are aligned; weapon shots have spread.
-		return not isCameraAlignedRaycast(origin, direction)
-	end
-
 	local function collectCandidatesFromFilter(params)
 		local enemiesFolder = targets.getEnemiesFolder()
 		if not enemiesFolder then
@@ -401,7 +387,7 @@ function M.create(opts)
 		return buffer, count
 	end
 
-	local function makeRaycastResult(part: BasePart, origin: Vector3, direction: Vector3)
+	local function makeRaycastResult(part: BasePart, origin: Vector3, direction: Vector3, params: RaycastParams?)
 		if not part.Parent then
 			return nil
 		end
@@ -423,17 +409,35 @@ function M.create(opts)
 		local filters = { { part }, if model then { model } else nil, if model and part.Parent then { part, model } else nil }
 		for _, includeList in filters do
 			if includeList then
-				local params = RaycastParams.new()
-				params.FilterDescendantsInstances = includeList
-				params.FilterType = Enum.RaycastFilterType.Include
+				local probeParams = RaycastParams.new()
+				probeParams.FilterDescendantsInstances = includeList
+				probeParams.FilterType = Enum.RaycastFilterType.Include
 
-				local result, invoked = tryClonedRaycast(origin, rayDirection, params)
+				local result, invoked = tryClonedRaycast(origin, rayDirection, probeParams)
 
 				if invoked and typeof(result) == "RaycastResult" and result.Instance then
 					local enemiesFolder = targets.getEnemiesFolder()
 					if enemiesFolder and result.Instance:IsDescendantOf(enemiesFolder) then
 						if debug then
 							debug.logRaycastRedirect(origin, direction, result.Instance, true, "real RaycastResult")
+						end
+						return result
+					end
+				end
+			end
+		end
+
+		-- Fallback: ray along original shoot filter toward the target part.
+		if typeof(params) == "RaycastParams" then
+			local toPart = part.Position - origin
+			if toPart.Magnitude > 0.05 then
+				local fallbackDir = toPart.Unit * math.min(toPart.Magnitude + 5, math.max(direction.Magnitude, 250))
+				local result, invoked = tryClonedRaycast(origin, fallbackDir, params)
+				if invoked and typeof(result) == "RaycastResult" and result.Instance then
+					local enemiesFolder = targets.getEnemiesFolder()
+					if enemiesFolder and result.Instance:IsDescendantOf(enemiesFolder) then
+						if debug then
+							debug.logRaycastRedirect(origin, direction, result.Instance, true, "shoot-filter RaycastResult")
 						end
 						return result
 					end
@@ -503,7 +507,7 @@ function M.create(opts)
 		local ok, result = pcall(function()
 			local _, part = resolveSilentTarget(params)
 			if part then
-				return makeRaycastResult(part, origin, direction)
+				return makeRaycastResult(part, origin, direction, params)
 			end
 			return nil
 		end)
@@ -566,16 +570,16 @@ function M.create(opts)
 	end
 
 	local function callRaycast(origin, direction, params)
-		local silentAimWeapon = typeof(origin) == "Vector3"
+		local weaponRay = typeof(origin) == "Vector3"
 			and typeof(direction) == "Vector3"
 			and typeof(params) == "RaycastParams"
-			and isWeaponShootRaycast(origin, direction, params)
+			and shouldApplyNoSpread(origin, direction, params)
 
-		if shouldApplyNoSpread(origin, direction, params) and Config.NoSpread and not shouldBypass() then
+		if weaponRay and Config.NoSpread and not shouldBypass() then
 			direction = alignDirectionToCamera(direction)
 		end
 
-		if Config.SilentAim and not shouldBypass() and silentAimWeapon then
+		if Config.SilentAim and not shouldBypass() and weaponRay then
 			local redirected = redirectRaycast(origin, direction, params, true)
 			if typeof(redirected) == "RaycastResult" then
 				return redirected
