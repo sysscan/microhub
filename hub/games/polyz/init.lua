@@ -68,6 +68,7 @@ function M.run()
 
 	local hooks = HooksLib.create({
 		config = Config,
+		constants = Constants,
 		targets = targets,
 		util = util,
 		remotes = remotes,
