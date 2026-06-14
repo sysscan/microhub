@@ -380,8 +380,13 @@ function M.create(opts)
 	end
 
 	local function callFireServer(self, ...)
-		local rawArgs = { ... }
-		local enemyModel, hitPart, hitPosition, pierceCount, gunName = ...
+		local rawArgs = table.pack(...)
+		local enemyModel = rawArgs[1]
+		local hitPart = rawArgs[2]
+		local hitPosition = rawArgs[3]
+		local pierceCount = rawArgs[4]
+		local gunName = rawArgs[5]
+		local debugArgs = { enemyModel, hitPart, hitPosition, pierceCount, gunName }
 		local ok, err = pcall(function()
 			local rEnemy, rPart, rPos, rPierce, rGun = redirectFireArgs(
 				enemyModel,
@@ -400,13 +405,13 @@ function M.create(opts)
 
 			if not normalized then
 				if debug then
-					debug.logShootEnemy("passthrough", rawArgs, nil, normErr)
+					debug.logShootEnemy("passthrough", debugArgs, nil, normErr)
 				end
 				return invokeOriginalFire(self, enemyModel, hitPart, hitPosition, pierceCount, gunName)
 			end
 
 			if debug then
-				debug.logShootEnemy(stage, rawArgs, normalized, normErr)
+				debug.logShootEnemy(stage, debugArgs, normalized, normErr)
 			end
 
 			local host, part, pos, pierce, gun = table.unpack(normalized)
@@ -414,7 +419,7 @@ function M.create(opts)
 		end)
 		if not ok then
 			if debug then
-				debug.logInvokeError("ShootEnemy", rawArgs, tostring(err))
+				debug.logInvokeError("ShootEnemy", debugArgs, tostring(err))
 			end
 			return invokeOriginalFire(self, enemyModel, hitPart, hitPosition, pierceCount, gunName)
 		end
@@ -456,21 +461,25 @@ function M.create(opts)
 				game,
 				"__namecall",
 				wrapHook(function(self, ...)
+					-- Luau allows only one `...` per function; pack before any unpack.
+					local args = table.pack(...)
 					local method = getnamecallmethod()
 					if method == "Raycast" and self == workspace then
 						if Config.SilentAim and not shouldBypass() then
-							local origin, direction, params = ...
-							local redirected = redirectRaycast(origin, direction, params)
-							if redirected then
-								return redirected
+							local origin, direction, params = args[1], args[2], args[3]
+							if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and typeof(params) == "RaycastParams" then
+								local redirected = redirectRaycast(origin, direction, params)
+								if typeof(redirected) == "RaycastResult" then
+									return redirected
+								end
 							end
 						end
 					elseif method == "FireServer" and self == remote and not canHookFunction then
 						if Config.SilentAim and not shouldBypass() then
-							return callFireServer(self, ...)
+							return callFireServer(self, table.unpack(args, 1, args.n))
 						end
 					end
-					return oldNamecall(self, ...)
+					return oldNamecall(self, table.unpack(args, 1, args.n))
 				end)
 			)
 		end
@@ -479,15 +488,18 @@ function M.create(opts)
 			-- Raycast via __namecall only when available; hookfunction(workspace.Raycast)
 			-- double-intercepts camera raycasts and corrupts arguments (Vector3/string warnings).
 			if not useNamecall then
-				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params, ...)
-					return callRaycast(origin, direction, params, ...)
+				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(...)
+					local args = table.pack(...)
+					local origin, direction, params = args[1], args[2], args[3]
+					return callRaycast(origin, direction, params, table.unpack(args, 4, args.n))
 				end))
 			end
 			oldFireServer = hookfunction(remote.FireServer, wrapHook(function(self, ...)
+				local args = table.pack(...)
 				if Config.SilentAim and not shouldBypass() then
-					return callFireServer(self, ...)
+					return callFireServer(self, table.unpack(args, 1, args.n))
 				end
-				return oldFireServer(self, ...)
+				return oldFireServer(self, table.unpack(args, 1, args.n))
 			end))
 		end
 
