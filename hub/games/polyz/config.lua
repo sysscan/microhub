@@ -1,0 +1,38 @@
+return {
+	ShowHUD = true,
+	TickInterval = 0.15,
+	CombatInterval = 0.08,
+
+	SpeedBoost = false,
+	WalkSpeed = 25,
+	AlwaysSprint = false,
+	SprintSpeed = 30,
+	InfiniteStamina = false,
+	JumpBoost = false,
+	JumpPower = 50,
+	NoClip = false,
+	Fly = false,
+	FlySpeed = 50,
+	FullBright = false,
+	CameraFOV = 80,
+	AntiAfk = true,
+
+	NoRecoil = false,
+	InfiniteAmmo = false,
+	AutoReload = false,
+
+	AutoShoot = false,
+	SilentAim = false,
+	AimAssist = false,
+	AimAtHead = true,
+	AimFOV = 180,
+	AttackRange = 250,
+	ShowAimFOV = false,
+	PierceShots = false,
+
+	EnemyESP = false,
+	EnemyESPBoxes = false,
+	ESPSnaplines = false,
+	PlayerESP = false,
+	ShowEnemyHealth = true,
+}
