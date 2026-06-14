@@ -240,7 +240,7 @@ function M.create(opts)
 			return rawRaycast(workspace, origin, direction, params, ...)
 		end
 		return withBypass(function()
-			return workspace:Raycast(origin, direction, params, ...)
+			return workspace:Raycast(origin, direction, params)
 		end)
 	end
 
