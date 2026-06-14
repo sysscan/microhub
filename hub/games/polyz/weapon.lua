@@ -6,6 +6,10 @@ function M.create(opts)
 	local util = opts.util
 	local LocalPlayer = opts.localPlayer
 
+	if not Config or not Constants or not util or not LocalPlayer then
+		error("[POLYZ] weapon.create missing required opts", 0)
+	end
+
 	local GunVariables: any = nil
 	local magCapCache: { [string]: number } = {}
 	local lastWeaponTick = 0

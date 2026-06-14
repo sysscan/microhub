@@ -7,6 +7,10 @@ function M.create(opts)
 	local targets = opts.targets
 	local hooks = opts.hooks
 
+	if not Config or not remotes or not util or not targets or not hooks then
+		error("[POLYZ] combat.create missing required opts", 0)
+	end
+
 	local lastShotAt = 0
 	local pierceBuffer: { Model } = {}
 

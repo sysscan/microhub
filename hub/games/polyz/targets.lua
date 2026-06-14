@@ -5,6 +5,10 @@ function M.create(opts)
 	local Constants = opts.constants
 	local util = opts.util
 
+	if not Config or not Constants or not util then
+		error("[POLYZ] targets.create missing config, constants, or util", 0)
+	end
+
 	local enemiesFolder: Folder? = nil
 	local enemyBuffer: { Model } = {}
 	local enemyCount = 0

@@ -7,6 +7,10 @@ function M.create(opts)
 	local util = opts.util
 	local remotes = opts.remotes
 
+	if not Config or not Constants or not targets or not util or not remotes then
+		error("[POLYZ] hooks.create missing required opts", 0)
+	end
+
 	local installed = false
 	local oldNamecall: any = nil
 	local oldRaycast: any = nil

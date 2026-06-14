@@ -5,6 +5,10 @@ function M.create(opts)
 	local UILib = opts.uiLib
 	local Constants = opts.constants
 
+	if not Config or not UILib or not Constants then
+		error("[POLYZ] ui.create missing config, uiLib, or constants", 0)
+	end
+
 	UILib.create({
 		title = "POLYZ",
 		config = Config,

@@ -6,6 +6,10 @@ function M.create(opts)
 	local targets = opts.targets
 	local canDraw = opts.canDraw == true
 
+	if not Config or not Constants or not targets then
+		error("[POLYZ] esp.create missing config, constants, or targets", 0)
+	end
+
 	local drawings = {}
 	local aimCircle: DrawingCircle?
 	local enemyColor = Color3.fromRGB(255, 80, 80)
@@ -72,10 +76,20 @@ function M.create(opts)
 		return x - 28, y - 56, 56, 112
 	end
 
+	local function getPartScreenBoxIf(part: BasePart?, camera: Camera)
+		if not part then
+			return nil
+		end
+		return getPartScreenBox(part, camera)
+	end
+
+	local function isValidScreenBox(x: any, y: any, w: any, h: any): boolean
+		return typeof(x) == "number" and typeof(y) == "number" and typeof(w) == "number" and typeof(h) == "number"
+	end
+
 	local function getModelScreenBox(model: Model, camera: Camera, useFullBox: boolean)
 		if not useFullBox then
-			local part = targets.getAimPart(model)
-			return part and getPartScreenBox(part, camera)
+			return getPartScreenBoxIf(targets.getAimPart(model), camera)
 		end
 
 		local ok, cf, size = pcall(model.GetBoundingBox, model)
@@ -103,8 +117,7 @@ function M.create(opts)
 			end
 		end
 
-		local part = targets.getAimPart(model)
-		return part and getPartScreenBox(part, camera)
+		return getPartScreenBoxIf(targets.getAimPart(model), camera)
 	end
 
 	local function drawScreenBox(key: string, x: number, y: number, w: number, h: number, color: Color3)
@@ -186,10 +199,10 @@ function M.create(opts)
 			end
 
 			local boundsX, boundsY, boundsW, boundsH = getModelScreenBox(enemy, camera, useFullBox)
-			if not boundsX then
+			if not isValidScreenBox(boundsX, boundsY, boundsW, boundsH) then
 				boundsX, boundsY, boundsW, boundsH = getPartScreenBox(part, camera)
 			end
-			if not boundsX then
+			if not isValidScreenBox(boundsX, boundsY, boundsW, boundsH) then
 				continue
 			end
 
@@ -245,7 +258,7 @@ function M.create(opts)
 			end
 			if model:IsA("Model") then
 				local boundsX, boundsY, boundsW, boundsH = getModelScreenBox(model, camera, true)
-				if boundsX then
+				if isValidScreenBox(boundsX, boundsY, boundsW, boundsH) then
 					index += 1
 					drawScreenBox("player_" .. index, boundsX, boundsY, boundsW, boundsH, playerColor)
 				end

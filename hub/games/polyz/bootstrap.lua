@@ -9,6 +9,10 @@ function M.create(opts)
 	local esp = opts.esp
 	local connections = opts.connections
 
+	if not Config or not RunService or not movement or not combat or not weapon or not esp or not connections then
+		error("[POLYZ] bootstrap.create missing required opts", 0)
+	end
+
 	local function anyMovementEnabled()
 		return Config.Fly
 			or Config.NoClip

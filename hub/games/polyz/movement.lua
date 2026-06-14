@@ -10,6 +10,10 @@ function M.create(opts)
 	local RunService = opts.runService
 	local util = opts.util
 
+	if not Config or not Constants or not LocalPlayer or not RunService or not util then
+		error("[POLYZ] movement.create missing required opts", 0)
+	end
+
 	local noclipConn = nil
 	local noclipEnabled = false
 	local antiAfkThread = nil
