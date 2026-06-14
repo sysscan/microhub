@@ -84,8 +84,55 @@ function M.create(opts)
 		end
 	end
 
+	local function applyInfiniteAmmo(variables)
+		refillSlot(variables, "Primary", false)
+		refillSlot(variables, "Secondary", false)
+
+		local slot = variables:GetAttribute("Equipped_Slot")
+		if type(slot) ~= "string" or slot == "" then
+			return
+		end
+
+		local playerData = util.getPlayerData()
+		local equipped = playerData and playerData:FindFirstChild("equipped_" .. string.lower(slot))
+		if not equipped or equipped.Value == "None" or equipped.Value == "" then
+			return
+		end
+
+		local magCap = getMagCap(slot, equipped.Value)
+		local magKey = slot .. "_Mag"
+		local currentMag = variables:GetAttribute(magKey) or 0
+		if currentMag < magCap then
+			variables:SetAttribute(magKey, magCap)
+		end
+	end
+
+	local function stabilizeCameraRecoil()
+		local controller = util.getCameraController()
+		if not controller then
+			return
+		end
+		if typeof(controller:GetAttribute("recoil_offset")) ~= "Vector3" then
+			controller:SetAttribute("recoil_offset", Vector3.new(0, 0, 0))
+		end
+	end
+
 	local function tickWeapon()
+		stabilizeCameraRecoil()
+
 		if not (Config.InfiniteAmmo or Config.AutoReload) then
+			return
+		end
+
+		local variables = util.getVariables()
+		if not variables then
+			return
+		end
+
+		if Config.InfiniteAmmo then
+			-- Refill every heartbeat so fast / silent-aim fire never hits 0 mag
+			-- and triggers PlayerControls reload lock (v39).
+			applyInfiniteAmmo(variables)
 			return
 		end
 
@@ -94,31 +141,6 @@ function M.create(opts)
 			return
 		end
 		lastWeaponTick = now
-
-		local variables = util.getVariables()
-		if not variables then
-			return
-		end
-
-		if Config.InfiniteAmmo then
-			refillSlot(variables, "Primary", false)
-			refillSlot(variables, "Secondary", false)
-
-			local slot = variables:GetAttribute("Equipped_Slot")
-			if type(slot) == "string" and slot ~= "" then
-				local playerData = util.getPlayerData()
-				local equipped = playerData and playerData:FindFirstChild("equipped_" .. string.lower(slot))
-				if equipped and equipped.Value ~= "None" and equipped.Value ~= "" then
-					local magCap = getMagCap(slot, equipped.Value)
-					local magKey = slot .. "_Mag"
-					local currentMag = variables:GetAttribute(magKey) or 0
-					if currentMag < magCap then
-						variables:SetAttribute(magKey, magCap)
-					end
-				end
-			end
-			return
-		end
 
 		local primaryMag = variables:GetAttribute("Primary_Mag") or 0
 		local primaryAmmo = variables:GetAttribute("Primary_Ammo") or 0
@@ -142,8 +164,21 @@ function M.create(opts)
 		end
 	end
 
+	local function refillNow()
+		stabilizeCameraRecoil()
+		if not Config.InfiniteAmmo then
+			return
+		end
+		local variables = util.getVariables()
+		if variables then
+			applyInfiniteAmmo(variables)
+		end
+	end
+
 	return {
 		tickWeapon = tickWeapon,
+		refillNow = refillNow,
+		stabilizeCameraRecoil = stabilizeCameraRecoil,
 	}
 end
 

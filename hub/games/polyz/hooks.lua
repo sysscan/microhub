@@ -47,11 +47,29 @@ function M.create(opts)
 		return bypassDepth > 0
 	end
 
-	local function invalidateAimCache()
+	local function invalidateAimCache(forceRefresh: boolean?)
 		aimCache.expires = 0
 		aimCache.enemy = nil
 		aimCache.part = nil
-		targets.refreshEnemies(true)
+		if forceRefresh then
+			targets.refreshEnemies(true)
+		end
+	end
+
+	local function isCameraControllerRaycast()
+		local ok, fromCamera = pcall(function()
+			for level = 2, 12 do
+				local src = debug.info(level, "s")
+				if not src then
+					return false
+				end
+				if string.find(src, "CameraController", 1, true) then
+					return true
+				end
+			end
+			return false
+		end)
+		return ok and fromCamera == true
 	end
 
 	local function aliveEnemyCount()
@@ -73,13 +91,13 @@ function M.create(opts)
 		table.insert(
 			enemyWatchConnections,
 			folder.ChildAdded:Connect(function()
-				invalidateAimCache()
+				invalidateAimCache(true)
 			end)
 		)
 		table.insert(
 			enemyWatchConnections,
 			folder.ChildRemoved:Connect(function()
-				invalidateAimCache()
+				invalidateAimCache(true)
 			end)
 		)
 	end
@@ -197,7 +215,7 @@ function M.create(opts)
 		end
 
 		if aliveEnemyCount() <= 0 then
-			invalidateAimCache()
+			invalidateAimCache(true)
 			return nil, nil
 		end
 
@@ -207,13 +225,13 @@ function M.create(opts)
 		end
 
 		if not util.isAlive() then
-			invalidateAimCache()
+			invalidateAimCache(false)
 			return nil, nil
 		end
 
 		local variables = util.getVariables()
 		if variables and (variables:GetAttribute("Health") or 0) <= 0 then
-			invalidateAimCache()
+			invalidateAimCache(false)
 			return nil, nil
 		end
 
@@ -230,14 +248,14 @@ function M.create(opts)
 			aimCache.part = part
 			aimCache.expires = now + Constants.SILENT_AIM_CACHE_TTL
 		else
-			invalidateAimCache()
+			invalidateAimCache(false)
 		end
 
 		return enemy, part
 	end
 
 	local function redirectRaycast(origin: Vector3, direction: Vector3, params)
-		if not Config.SilentAim or not isShootRaycast(params) then
+		if not Config.SilentAim or not isShootRaycast(params) or isCameraControllerRaycast() then
 			return nil
 		end
 
@@ -263,7 +281,7 @@ function M.create(opts)
 		end
 
 		if aliveEnemyCount() <= 0 then
-			invalidateAimCache()
+			invalidateAimCache(true)
 			return enemyModel, hitPart, hitPosition, pierceCount, gunName
 		end
 
@@ -364,34 +382,43 @@ function M.create(opts)
 	local function callFireServer(self, ...)
 		local rawArgs = { ... }
 		local enemyModel, hitPart, hitPosition, pierceCount, gunName = ...
-		local rEnemy, rPart, rPos, rPierce, rGun = redirectFireArgs(
-			enemyModel,
-			hitPart,
-			hitPosition,
-			pierceCount,
-			gunName
-		)
+		local ok, err = pcall(function()
+			local rEnemy, rPart, rPos, rPierce, rGun = redirectFireArgs(
+				enemyModel,
+				hitPart,
+				hitPosition,
+				pierceCount,
+				gunName
+			)
 
-		local normalized, err = remotes.normalizeShootEnemyArgs(rEnemy, rPart, rPos, rPierce, rGun)
-		local stage = "redirect"
-		if not normalized then
-			normalized, err = remotes.normalizeShootEnemyArgs(enemyModel, hitPart, hitPosition, pierceCount, gunName)
-			stage = "fallback"
-		end
+			local normalized, normErr = remotes.normalizeShootEnemyArgs(rEnemy, rPart, rPos, rPierce, rGun)
+			local stage = "redirect"
+			if not normalized then
+				normalized, normErr = remotes.normalizeShootEnemyArgs(enemyModel, hitPart, hitPosition, pierceCount, gunName)
+				stage = "fallback"
+			end
 
-		if not normalized then
+			if not normalized then
+				if debug then
+					debug.logShootEnemy("passthrough", rawArgs, nil, normErr)
+				end
+				return invokeOriginalFire(self, enemyModel, hitPart, hitPosition, pierceCount, gunName)
+			end
+
 			if debug then
-				debug.logShootEnemy("passthrough", rawArgs, nil, err)
+				debug.logShootEnemy(stage, rawArgs, normalized, normErr)
+			end
+
+			local host, part, pos, pierce, gun = table.unpack(normalized)
+			return invokeOriginalFire(self, host, part, pos, pierce, gun)
+		end)
+		if not ok then
+			if debug then
+				debug.logInvokeError("ShootEnemy", rawArgs, tostring(err))
 			end
 			return invokeOriginalFire(self, enemyModel, hitPart, hitPosition, pierceCount, gunName)
 		end
-
-		if debug then
-			debug.logShootEnemy(stage, rawArgs, normalized, err)
-		end
-
-		local host, part, pos, pierce, gun = table.unpack(normalized)
-		return invokeOriginalFire(self, host, part, pos, pierce, gun)
+		return err
 	end
 
 	local function wrapHook(fn)
@@ -477,7 +504,7 @@ function M.create(opts)
 	local function remove()
 		installed = false
 		disconnectEnemyWatch()
-		invalidateAimCache()
+		invalidateAimCache(true)
 	end
 
 	local function sync()

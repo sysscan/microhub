@@ -44,6 +44,8 @@ function M.create(opts)
 		end
 		if anyWeaponEnabled() then
 			weapon.tickWeapon()
+		elseif Config.SilentAim and weapon.stabilizeCameraRecoil then
+			weapon.stabilizeCameraRecoil()
 		end
 		if Config.AutoShoot then
 			combat.tickCombat()

@@ -221,7 +221,7 @@ function M.create(opts)
 		end
 		local controller = util.getCameraController()
 		if controller then
-			controller:SetAttribute("recoil_offset", Vector3.zero)
+			controller:SetAttribute("recoil_offset", Vector3.new(0, 0, 0))
 		end
 	end
 

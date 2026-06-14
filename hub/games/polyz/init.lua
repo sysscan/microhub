@@ -116,7 +116,9 @@ function M.run()
 						end
 					end)
 				end
-				hooks.invalidateAimCache()
+				hooks.invalidateAimCache(true)
+			elseif key == "InfiniteAmmo" and value and weapon.refillNow then
+				weapon.refillNow()
 			end
 		end,
 	})
