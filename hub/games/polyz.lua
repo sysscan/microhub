@@ -1,5 +1,5 @@
 --[[
-	POLYZ — placeId 114291906728616
+	POLYZ — placeIds 114291906728616, 135140697106817
 	Entry point for MicroHub loader. Implementation lives in games/polyz/.
 ]]
 
