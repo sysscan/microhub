@@ -42,6 +42,21 @@ function M.create(opts)
 						},
 					},
 					{
+						title = "DEBUG",
+						items = {
+							{
+								type = "toggle",
+								key = "DebugRemotes",
+								label = "Remote Debugger",
+								hud = "Debug",
+							},
+							{
+								type = "hint",
+								text = "Logs ShootEnemy + silent Raycast rewrites. Errors always warn in console.",
+							},
+						},
+					},
+					{
 						title = "WEAPON",
 						items = {
 							{ type = "toggle", key = "NoRecoil", label = "No Recoil", hud = "Recoil" },

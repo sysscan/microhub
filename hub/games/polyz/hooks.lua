@@ -6,6 +6,7 @@ function M.create(opts)
 	local targets = opts.targets
 	local util = opts.util
 	local remotes = opts.remotes
+	local debug = opts.debug
 
 	if not Config or not Constants or not targets or not util or not remotes then
 		error("[POLYZ] hooks.create missing required opts", 0)
@@ -108,7 +109,35 @@ function M.create(opts)
 	end
 
 	local function makeRaycastResult(part: BasePart, origin: Vector3, direction: Vector3)
+		local offset = part.Position - origin
+		local distance = offset.Magnitude
+		if distance <= 0.05 then
+			distance = direction.Magnitude
+		end
+		if distance <= 0.05 then
+			distance = 1
+		end
+
+		local filterRoot = part:FindFirstAncestorOfClass("Model") or part.Parent
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = { filterRoot }
+		params.FilterType = Enum.RaycastFilterType.Include
+
+		local result = withBypass(function()
+			return workspace:Raycast(origin, offset.Unit * (distance + 2), params)
+		end)
+
+		if typeof(result) == "RaycastResult" and result.Instance then
+			if debug then
+				debug.logRaycastRedirect(origin, direction, result.Instance, true, "real RaycastResult")
+			end
+			return result
+		end
+
 		local position = part.Position
+		if debug then
+			debug.logRaycastRedirect(origin, direction, part, true, "table fallback")
+		end
 		return {
 			Instance = part,
 			Position = position,
@@ -221,7 +250,47 @@ function M.create(opts)
 		return workspace:Raycast(origin, direction, params, ...)
 	end
 
+	local function invokeOriginalFire(self, host, part, pos, pierce, gun)
+		local args = { host, part, pos, pierce, gun }
+		local attempts = {}
+
+		if oldFireServer then
+			table.insert(attempts, function()
+				return oldFireServer(self, host, part, pos, pierce, gun)
+			end)
+			table.insert(attempts, function()
+				return oldFireServer(host, part, pos, pierce, gun)
+			end)
+		end
+		if rawFireServer then
+			table.insert(attempts, function()
+				return rawFireServer(self, host, part, pos, pierce, gun)
+			end)
+			table.insert(attempts, function()
+				return rawFireServer(host, part, pos, pierce, gun)
+			end)
+		end
+		table.insert(attempts, function()
+			return self:FireServer(host, part, pos, pierce, gun)
+		end)
+
+		local lastErr = "unknown FireServer invoke failure"
+		for _, attempt in attempts do
+			local ok, err = pcall(attempt)
+			if ok then
+				return true
+			end
+			lastErr = tostring(err)
+		end
+
+		if debug then
+			debug.logInvokeError("ShootEnemy", args, lastErr)
+		end
+		return
+	end
+
 	local function callFireServer(self, ...)
+		local rawArgs = { ... }
 		local enemyModel, hitPart, hitPosition, pierceCount, gunName = ...
 		local rEnemy, rPart, rPos, rPierce, rGun = redirectFireArgs(
 			enemyModel,
@@ -230,19 +299,27 @@ function M.create(opts)
 			pierceCount,
 			gunName
 		)
-		if oldFireServer then
-			return oldFireServer(self, rEnemy, rPart, rPos, rPierce, rGun)
+
+		local normalized, err = remotes.normalizeShootEnemyArgs(rEnemy, rPart, rPos, rPierce, rGun)
+		local stage = "redirect"
+		if not normalized then
+			normalized, err = remotes.normalizeShootEnemyArgs(enemyModel, hitPart, hitPosition, pierceCount, gunName)
+			stage = "fallback"
 		end
-		if rawFireServer then
-			return rawFireServer(self, rEnemy, rPart, rPos, rPierce, rGun)
+
+		if not normalized then
+			if debug then
+				debug.logShootEnemy("blocked", rawArgs, nil, err)
+			end
+			return
 		end
-		if oldNamecall then
-			-- Modified args through oldNamecall breaks on some executors (e.g. Raptor).
-			return withBypass(function()
-				return self:FireServer(rEnemy, rPart, rPos, rPierce, rGun)
-			end)
+
+		if debug then
+			debug.logShootEnemy(stage, rawArgs, normalized, err)
 		end
-		return self:FireServer(rEnemy, rPart, rPos, rPierce, rGun)
+
+		local host, part, pos, pierce, gun = table.unpack(normalized)
+		return invokeOriginalFire(self, host, part, pos, pierce, gun)
 	end
 
 	local function wrapHook(fn)

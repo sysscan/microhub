@@ -35,4 +35,5 @@ return {
 	ESPSnaplines = false,
 	PlayerESP = false,
 	ShowEnemyHealth = true,
+	DebugRemotes = false,
 }

@@ -17,6 +17,7 @@ local ESPLib = require("games/polyz/esp.lua")
 local MovementLib = require("games/polyz/movement.lua")
 local WeaponLib = require("games/polyz/weapon.lua")
 local HooksLib = require("games/polyz/hooks.lua")
+local DebugLib = require("games/polyz/debug.lua")
 local UILibDef = require("games/polyz/ui.lua")
 local BootstrapLib = require("games/polyz/bootstrap.lua")
 
@@ -41,14 +42,21 @@ function M.run()
 		localPlayer = LocalPlayer,
 	})
 
-	local remotes = RemotesLib.create({
-		replicatedStorage = ReplicatedStorage,
+	local debug = DebugLib.create({
+		config = Config,
 	})
 
 	local targets = TargetsLib.create({
 		config = Config,
 		constants = Constants,
 		util = util,
+	})
+
+	local remotes = RemotesLib.create({
+		replicatedStorage = ReplicatedStorage,
+		util = util,
+		targets = targets,
+		debug = debug,
 	})
 
 	local movement = MovementLib.create({
@@ -72,6 +80,7 @@ function M.run()
 		targets = targets,
 		util = util,
 		remotes = remotes,
+		debug = debug,
 	})
 
 	local combat = CombatLib.create({
@@ -140,6 +149,7 @@ function M.run()
 
 	local genv = typeof(getgenv) == "function" and getgenv() or _G
 	genv.__POLYZUnload = unload
+	genv.__POLYZRemoteLogs = debug.getRecentLogs
 
 	print("[MicroHub] POLYZ", Constants.GAME_BUILD)
 end
