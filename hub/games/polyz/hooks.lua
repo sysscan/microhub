@@ -15,6 +15,7 @@ function M.create(opts)
 	local oldNamecall: any = nil
 	local oldRaycast: any = nil
 	local oldFireServer: any = nil
+	local rawFireServer: any = nil
 	local hookedRemote: RemoteEvent? = nil
 	local bypassDepth = 0
 	local useNamecall = typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function"
@@ -232,10 +233,23 @@ function M.create(opts)
 		if oldFireServer then
 			return oldFireServer(self, rEnemy, rPart, rPos, rPierce, rGun)
 		end
+		if rawFireServer then
+			return rawFireServer(self, rEnemy, rPart, rPos, rPierce, rGun)
+		end
 		if oldNamecall then
-			return oldNamecall(self, rEnemy, rPart, rPos, rPierce, rGun)
+			-- Modified args through oldNamecall breaks on some executors (e.g. Raptor).
+			return withBypass(function()
+				return self:FireServer(rEnemy, rPart, rPos, rPierce, rGun)
+			end)
 		end
 		return self:FireServer(rEnemy, rPart, rPos, rPierce, rGun)
+	end
+
+	local function wrapHook(fn)
+		if typeof(newcclosure) == "function" then
+			return newcclosure(fn)
+		end
+		return fn
 	end
 
 	local function install()
@@ -248,28 +262,48 @@ function M.create(opts)
 			return false
 		end
 
+		if typeof(clonefunction) == "function" then
+			local ok, cloned = pcall(clonefunction, remote.FireServer)
+			if ok and typeof(cloned) == "function" then
+				rawFireServer = cloned
+			end
+		end
+
+		local canHookFunction = typeof(hookfunction) == "function"
+
 		if useNamecall then
-			oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-				local method = getnamecallmethod()
-				if method == "Raycast" and self == workspace then
-					if Config.SilentAim and not shouldBypass() then
-						local origin, direction, params = ...
-						return callRaycast(origin, direction, params, select(4, ...))
+			oldNamecall = hookmetamethod(
+				game,
+				"__namecall",
+				wrapHook(function(self, ...)
+					local method = getnamecallmethod()
+					if method == "Raycast" and self == workspace then
+						if Config.SilentAim and not shouldBypass() then
+							local origin, direction, params = ...
+							return callRaycast(origin, direction, params, select(4, ...))
+						end
+					elseif method == "FireServer" and self == remote and not canHookFunction then
+						if Config.SilentAim and not shouldBypass() then
+							return callFireServer(self, ...)
+						end
 					end
-				elseif method == "FireServer" and self == remote then
-					if Config.SilentAim and not shouldBypass() then
-						return callFireServer(self, ...)
-					end
+					return oldNamecall(self, ...)
+				end)
+			)
+		end
+
+		if canHookFunction then
+			if not useNamecall then
+				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params, ...)
+					return callRaycast(origin, direction, params, ...)
+				end))
+			end
+			oldFireServer = hookfunction(remote.FireServer, wrapHook(function(self, ...)
+				if Config.SilentAim and not shouldBypass() then
+					return callFireServer(self, ...)
 				end
-				return oldNamecall(self, ...)
-			end)
-		elseif typeof(hookfunction) == "function" then
-			oldRaycast = hookfunction(workspace.Raycast, function(origin, direction, params, ...)
-				return callRaycast(origin, direction, params, ...)
-			end)
-			oldFireServer = hookfunction(remote.FireServer, function(self, ...)
-				return callFireServer(self, ...)
-			end)
+				return oldFireServer(self, ...)
+			end))
 		end
 
 		hookedRemote = remote
