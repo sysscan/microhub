@@ -15,6 +15,7 @@ function M.create(opts)
 	local installed = false
 	local oldNamecall: any = nil
 	local oldRaycast: any = nil
+	local rawRaycast: any = nil
 	local oldFireServer: any = nil
 	local rawFireServer: any = nil
 	local hookedRemote: RemoteEvent? = nil
@@ -51,7 +52,7 @@ function M.create(opts)
 		aimCache.part = nil
 	end
 
-	local function isEnemyRaycast(params)
+	local function isShootRaycast(params)
 		if typeof(params) ~= "RaycastParams" then
 			return false
 		end
@@ -66,21 +67,26 @@ function M.create(opts)
 			return false
 		end
 
+		local miscFolder = workspace:FindFirstChild("Misc")
+		local hasEnemyTarget = false
+		local hasMisc = false
+
 		for _, inst in filter do
 			if inst == enemiesFolder then
-				return true
-			end
-			if typeof(inst) == "Instance" then
+				hasEnemyTarget = true
+			elseif inst == miscFolder then
+				hasMisc = true
+			elseif typeof(inst) == "Instance" then
 				if inst:IsA("Model") and inst.Parent == enemiesFolder then
-					return true
-				end
-				if inst:IsDescendantOf(enemiesFolder) then
-					return true
+					hasEnemyTarget = true
+				elseif inst:IsDescendantOf(enemiesFolder) then
+					hasEnemyTarget = true
 				end
 			end
 		end
 
-		return false
+		-- PlayerControls shoot / pierce raycasts always include workspace.Misc.
+		return hasEnemyTarget and hasMisc
 	end
 
 	local function collectCandidatesFromFilter(params)
@@ -134,17 +140,7 @@ function M.create(opts)
 			return result
 		end
 
-		local position = part.Position
-		if debug then
-			debug.logRaycastRedirect(origin, direction, part, true, "table fallback")
-		end
-		return {
-			Instance = part,
-			Position = position,
-			Normal = if direction.Magnitude > 0 then -direction.Unit else Vector3.new(0, 1, 0),
-			Material = part.Material,
-			Distance = (position - origin).Magnitude,
-		}
+		return nil
 	end
 
 	local function resolveSilentTarget(params)
@@ -188,7 +184,7 @@ function M.create(opts)
 	end
 
 	local function redirectRaycast(origin: Vector3, direction: Vector3, params)
-		if not Config.SilentAim or not isEnemyRaycast(params) then
+		if not Config.SilentAim or not isShootRaycast(params) then
 			return nil
 		end
 
@@ -236,18 +232,26 @@ function M.create(opts)
 		return enemyModel, hitPart, hitPosition, pierceCount, gunName
 	end
 
-	local function callRaycast(origin, direction, params, ...)
-		local redirected = redirectRaycast(origin, direction, params)
-		if redirected then
-			return redirected
-		end
+	local function invokeOriginalRaycast(origin, direction, params, ...)
 		if oldRaycast then
 			return oldRaycast(origin, direction, params, ...)
 		end
-		if oldNamecall then
-			return oldNamecall(workspace, origin, direction, params, ...)
+		if rawRaycast then
+			return rawRaycast(workspace, origin, direction, params, ...)
 		end
-		return workspace:Raycast(origin, direction, params, ...)
+		return withBypass(function()
+			return workspace:Raycast(origin, direction, params, ...)
+		end)
+	end
+
+	local function callRaycast(origin, direction, params, ...)
+		if Config.SilentAim and not shouldBypass() then
+			local redirected = redirectRaycast(origin, direction, params)
+			if redirected then
+				return redirected
+			end
+		end
+		return invokeOriginalRaycast(origin, direction, params, ...)
 	end
 
 	local function invokeOriginalFire(self, host, part, pos, pierce, gun)
@@ -309,9 +313,9 @@ function M.create(opts)
 
 		if not normalized then
 			if debug then
-				debug.logShootEnemy("blocked", rawArgs, nil, err)
+				debug.logShootEnemy("passthrough", rawArgs, nil, err)
 			end
-			return
+			return invokeOriginalFire(self, enemyModel, hitPart, hitPosition, pierceCount, gunName)
 		end
 
 		if debug then
@@ -344,6 +348,10 @@ function M.create(opts)
 			if ok and typeof(cloned) == "function" then
 				rawFireServer = cloned
 			end
+			local okRay, clonedRay = pcall(clonefunction, workspace.Raycast)
+			if okRay and typeof(clonedRay) == "function" then
+				rawRaycast = clonedRay
+			end
 		end
 
 		local canHookFunction = typeof(hookfunction) == "function"
@@ -354,14 +362,17 @@ function M.create(opts)
 				"__namecall",
 				wrapHook(function(self, ...)
 					local method = getnamecallmethod()
-					if method == "Raycast" and self == workspace then
-						if Config.SilentAim and not shouldBypass() then
-							local origin, direction, params = ...
-							return callRaycast(origin, direction, params, select(4, ...))
-						end
-					elseif method == "FireServer" and self == remote and not canHookFunction then
+					if method == "FireServer" and self == remote and not canHookFunction then
 						if Config.SilentAim and not shouldBypass() then
 							return callFireServer(self, ...)
+						end
+					elseif method == "Raycast" and self == workspace and not canHookFunction then
+						if Config.SilentAim and not shouldBypass() then
+							local origin, direction, params = ...
+							local redirected = redirectRaycast(origin, direction, params)
+							if redirected then
+								return redirected
+							end
 						end
 					end
 					return oldNamecall(self, ...)
@@ -370,11 +381,9 @@ function M.create(opts)
 		end
 
 		if canHookFunction then
-			if not useNamecall then
-				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params, ...)
-					return callRaycast(origin, direction, params, ...)
-				end))
-			end
+			oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params, ...)
+				return callRaycast(origin, direction, params, ...)
+			end))
 			oldFireServer = hookfunction(remote.FireServer, wrapHook(function(self, ...)
 				if Config.SilentAim and not shouldBypass() then
 					return callFireServer(self, ...)

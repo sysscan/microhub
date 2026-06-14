@@ -14,8 +14,10 @@ function M.create(opts)
 
 	local TAG = "[POLYZ Remote]"
 	local MAX_LOGS = 120
+	local RAYCAST_LOG_INTERVAL = 0.25
 	local logs: { [number]: string } = {}
 	local logCount = 0
+	local lastRaycastLogAt = 0
 
 	local function kindOf(value)
 		return typeof(value)
@@ -109,6 +111,11 @@ function M.create(opts)
 		if not Config.DebugRemotes then
 			return
 		end
+		local now = os.clock()
+		if now - lastRaycastLogAt < RAYCAST_LOG_INTERVAL then
+			return
+		end
+		lastRaycastLogAt = now
 		local line = string.format(
 			"RaycastRedirect %s | origin=%s | dir=(%.2f, %.2f, %.2f) | hit=%s%s",
 			if ok then "HIT" else "MISS",
