@@ -142,10 +142,47 @@ function M.create(opts)
 	end
 
 	local function passthroughNamecallRaycast(self, args)
-		if not oldNamecall then
-			return nil
+		local origin, direction, params = args[1], args[2], args[3]
+		if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+			local result, invoked = tryClonedRaycast(origin, direction, params)
+			if invoked then
+				return result
+			end
 		end
-		return oldNamecall(self, table.unpack(args, 1, args.n))
+
+		if typeof(oldNamecall) == "function" then
+			local ok, result = pcall(function()
+				return oldNamecall(self, table.unpack(args, 1, args.n))
+			end)
+			if ok then
+				return result
+			end
+		end
+
+		return nil
+	end
+
+	local function handleWorkspaceRaycast(self, args)
+		if not Config.SilentAim or shouldBypass() then
+			return passthroughNamecallRaycast(self, args)
+		end
+
+		local origin, direction, params = args[1], args[2], args[3]
+		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" or typeof(params) ~= "RaycastParams" then
+			return passthroughNamecallRaycast(self, args)
+		end
+
+		-- Never touch camera / misc raycasts; only weapon fire rays get redirected.
+		if not shouldRedirectWeaponRaycast(origin, direction, params) then
+			return passthroughNamecallRaycast(self, args)
+		end
+
+		local redirected = redirectRaycast(origin, direction, params)
+		if typeof(redirected) == "RaycastResult" then
+			return redirected
+		end
+
+		return passthroughNamecallRaycast(self, args)
 	end
 
 	local function callOriginalRaycast(origin: Vector3, direction: Vector3, params: RaycastParams?)
@@ -545,6 +582,28 @@ function M.create(opts)
 		return fn
 	end
 
+	local function captureRawRaycast()
+		if rawRaycast or typeof(hookfunction) ~= "function" then
+			return
+		end
+
+		local okCapture, captured = pcall(function()
+			local function probe()
+				return nil
+			end
+			local original = hookfunction(workspace.Raycast, wrapHook(probe))
+			if typeof(original) ~= "function" then
+				return nil
+			end
+			hookfunction(workspace.Raycast, original)
+			return original
+		end)
+
+		if okCapture and typeof(captured) == "function" then
+			rawRaycast = captured
+		end
+	end
+
 	local function install()
 		if installed or not canHook() then
 			return installed
@@ -568,67 +627,46 @@ function M.create(opts)
 
 		local canHookFunction = typeof(hookfunction) == "function"
 
-		if canHookFunction and not rawRaycast then
-			local okCapture, captured = pcall(function()
-				local original: any
-				original = hookfunction(workspace.Raycast, wrapHook(function(origin, direction, params)
-					return original(origin, direction, params)
-				end))
-				return original
-			end)
-			if okCapture and typeof(captured) == "function" then
-				rawRaycast = captured
-			end
-		end
+		captureRawRaycast()
 
-		if useNamecall and not rawRaycast then
-			warn("[POLYZ] Raycast clone unavailable; using namecall passthrough on Raptor-style executors")
-		end
+		local raycastViaNamecall = false
 
 		if useNamecall then
-			oldNamecall = hookmetamethod(
+			local hookedNamecall = hookmetamethod(
 				game,
 				"__namecall",
 				wrapHook(function(self, ...)
 					-- Luau allows only one `...` per function; pack before any unpack.
 					local args = table.pack(...)
 					local method = getnamecallmethod()
-					if method == "Raycast" and self == workspace then
-						if not Config.SilentAim or shouldBypass() then
-							return passthroughNamecallRaycast(self, args)
-						end
-
-						local origin, direction, params = args[1], args[2], args[3]
-						if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-							local redirected = redirectRaycast(origin, direction, params)
-							if typeof(redirected) == "RaycastResult" then
-								return redirected
-							end
-						end
-
-						local result, invoked = tryClonedRaycast(origin, direction, params)
-						if invoked then
-							return result
-						end
-
-						return passthroughNamecallRaycast(self, args)
+					if method == "Raycast" and self == workspace and raycastViaNamecall then
+						return handleWorkspaceRaycast(self, args)
 					elseif method == "FireServer" and self == remote and not canHookFunction then
 						if Config.SilentAim and not shouldBypass() then
 							return callFireServer(self, table.unpack(args, 1, args.n))
 						end
 					end
-					return oldNamecall(self, table.unpack(args, 1, args.n))
+					if typeof(oldNamecall) == "function" then
+						return oldNamecall(self, table.unpack(args, 1, args.n))
+					end
+					return nil
 				end)
 			)
+			if typeof(hookedNamecall) == "function" then
+				oldNamecall = hookedNamecall
+				raycastViaNamecall = true
+			else
+				warn("[POLYZ] hookmetamethod did not return __namecall trampoline")
+			end
 		end
 
 		if canHookFunction then
-			if not useNamecall and not oldRaycast then
+			if not raycastViaNamecall and not oldRaycast then
 				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(...)
 					local args = table.pack(...)
 					return callRaycast(args[1], args[2], args[3])
 				end))
-				if not rawRaycast then
+				if not rawRaycast and typeof(oldRaycast) == "function" then
 					rawRaycast = oldRaycast
 				end
 			end

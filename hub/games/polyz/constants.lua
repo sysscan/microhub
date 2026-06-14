@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "4-debug-fix8",
+	GAME_BUILD = "4-debug-fix9",
 	MAX_SAFE_WALKSPEED = 40,
 	MAX_SPRINT_SPEED = 35,
 	MAX_FLY_SPEED = 120,
