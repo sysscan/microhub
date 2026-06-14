@@ -58,7 +58,7 @@ function M.create(opts)
 
 	local function isCameraControllerRaycast()
 		local ok, fromCamera = pcall(function()
-			for level = 2, 12 do
+			for level = 2, 15 do
 				local src = debug.info(level, "s")
 				if not src then
 					return false
@@ -70,6 +70,88 @@ function M.create(opts)
 			return false
 		end)
 		return ok and fromCamera == true
+	end
+
+	local function isPlayerControlsRaycast()
+		local ok, fromControls = pcall(function()
+			for level = 2, 15 do
+				local src = debug.info(level, "s")
+				if not src then
+					return false
+				end
+				if string.find(src, "PlayerControls", 1, true) then
+					return true
+				end
+			end
+			return false
+		end)
+		return ok and fromControls == true
+	end
+
+	local function hasBulletSpread(origin: Vector3, direction: Vector3)
+		local camera = workspace.CurrentCamera
+		if not camera or direction.Magnitude < 1 then
+			return false
+		end
+
+		local look = camera.CFrame.LookVector
+		if look.Magnitude < 0.001 then
+			return false
+		end
+
+		return direction.Unit:Dot(look.Unit) < 0.999
+	end
+
+	local function isValidRaycastResult(result: any)
+		return result == nil or typeof(result) == "RaycastResult"
+	end
+
+	local function callOriginalRaycast(origin: Vector3, direction: Vector3, params: RaycastParams?)
+		if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+			return nil
+		end
+
+		if rawRaycast then
+			if typeof(params) == "RaycastParams" then
+				local ok, result = pcall(rawRaycast, origin, direction, params)
+				if ok and isValidRaycastResult(result) then
+					return result
+				end
+
+				ok, result = pcall(rawRaycast, workspace, origin, direction, params)
+				if ok and isValidRaycastResult(result) then
+					return result
+				end
+			else
+				local ok, result = pcall(rawRaycast, origin, direction)
+				if ok and isValidRaycastResult(result) then
+					return result
+				end
+			end
+		end
+
+		if oldRaycast then
+			local ok, result = pcall(oldRaycast, origin, direction, params)
+			if ok and isValidRaycastResult(result) then
+				return result
+			end
+		end
+
+		return nil
+	end
+
+	local function shouldRedirectWeaponRaycast(origin: Vector3, direction: Vector3, params: RaycastParams)
+		if not isShootRaycast(params) then
+			return false
+		end
+		if isCameraControllerRaycast() then
+			return false
+		end
+		if isPlayerControlsRaycast() then
+			return true
+		end
+		-- PlayerControls applies spread to weapon rays; camera aim-assist does not.
+		return hasBulletSpread(origin, direction)
 	end
 
 	local function aliveEnemyCount()
@@ -190,9 +272,7 @@ function M.create(opts)
 				params.FilterDescendantsInstances = includeList
 				params.FilterType = Enum.RaycastFilterType.Include
 
-				local result = withBypass(function()
-					return workspace:Raycast(origin, rayDirection, params)
-				end)
+				local result = callOriginalRaycast(origin, rayDirection, params)
 
 				if typeof(result) == "RaycastResult" and result.Instance then
 					local enemiesFolder = targets.getEnemiesFolder()
@@ -254,8 +334,8 @@ function M.create(opts)
 		return enemy, part
 	end
 
-	local function redirectRaycast(origin: Vector3, direction: Vector3, params)
-		if not Config.SilentAim or not isShootRaycast(params) or isCameraControllerRaycast() then
+	local function redirectRaycast(origin: Vector3, direction: Vector3, params: RaycastParams)
+		if not Config.SilentAim or not shouldRedirectWeaponRaycast(origin, direction, params) then
 			return nil
 		end
 
@@ -316,26 +396,18 @@ function M.create(opts)
 		return enemyModel, hitPart, hitPosition, pierceCount, gunName
 	end
 
-	local function invokeOriginalRaycast(origin, direction, params, ...)
-		if oldRaycast then
-			return oldRaycast(origin, direction, params, ...)
-		end
-		if rawRaycast then
-			return rawRaycast(workspace, origin, direction, params, ...)
-		end
-		return withBypass(function()
-			return workspace:Raycast(origin, direction, params)
-		end)
+	local function invokeOriginalRaycast(origin, direction, params)
+		return callOriginalRaycast(origin, direction, params)
 	end
 
-	local function callRaycast(origin, direction, params, ...)
+	local function callRaycast(origin, direction, params)
 		if Config.SilentAim and not shouldBypass() then
 			local redirected = redirectRaycast(origin, direction, params)
-			if redirected then
+			if typeof(redirected) == "RaycastResult" then
 				return redirected
 			end
 		end
-		return invokeOriginalRaycast(origin, direction, params, ...)
+		return callOriginalRaycast(origin, direction, params)
 	end
 
 	local function invokeOriginalFire(self, host, part, pos, pierce, gun)
@@ -456,6 +528,10 @@ function M.create(opts)
 
 		local canHookFunction = typeof(hookfunction) == "function"
 
+		if useNamecall and not rawRaycast then
+			warn("[POLYZ] clonefunction(workspace.Raycast) required for silent aim passthrough")
+		end
+
 		if useNamecall then
 			oldNamecall = hookmetamethod(
 				game,
@@ -465,15 +541,19 @@ function M.create(opts)
 					local args = table.pack(...)
 					local method = getnamecallmethod()
 					if method == "Raycast" and self == workspace then
-						if Config.SilentAim and not shouldBypass() then
-							local origin, direction, params = args[1], args[2], args[3]
-							if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and typeof(params) == "RaycastParams" then
+						local origin, direction, params = args[1], args[2], args[3]
+						if shouldBypass() then
+							return callOriginalRaycast(origin, direction, params)
+						end
+						if Config.SilentAim then
+							if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
 								local redirected = redirectRaycast(origin, direction, params)
 								if typeof(redirected) == "RaycastResult" then
 									return redirected
 								end
 							end
 						end
+						return callOriginalRaycast(origin, direction, params)
 					elseif method == "FireServer" and self == remote and not canHookFunction then
 						if Config.SilentAim and not shouldBypass() then
 							return callFireServer(self, table.unpack(args, 1, args.n))
@@ -485,14 +565,14 @@ function M.create(opts)
 		end
 
 		if canHookFunction then
-			-- Raycast via __namecall only when available; hookfunction(workspace.Raycast)
-			-- double-intercepts camera raycasts and corrupts arguments (Vector3/string warnings).
-			if not useNamecall then
+			if not useNamecall and not oldRaycast then
 				oldRaycast = hookfunction(workspace.Raycast, wrapHook(function(...)
 					local args = table.pack(...)
-					local origin, direction, params = args[1], args[2], args[3]
-					return callRaycast(origin, direction, params, table.unpack(args, 4, args.n))
+					return callRaycast(args[1], args[2], args[3])
 				end))
+				if not rawRaycast then
+					rawRaycast = oldRaycast
+				end
 			end
 			oldFireServer = hookfunction(remote.FireServer, wrapHook(function(self, ...)
 				local args = table.pack(...)
