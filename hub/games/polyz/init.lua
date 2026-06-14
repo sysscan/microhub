@@ -105,7 +105,7 @@ function M.run()
 		uiLib = UILib,
 		constants = Constants,
 		onToggle = function(key, value)
-			if key == "SilentAim" then
+			if key == "SilentAim" or key == "NoSpread" then
 				if value then
 					task.spawn(function()
 						for _ = 1, 12 do
@@ -116,7 +116,16 @@ function M.run()
 						end
 					end)
 				end
-				hooks.invalidateAimCache(true)
+				if key == "SilentAim" then
+					hooks.invalidateAimCache(true)
+				end
+			elseif key == "InstantReload" and value then
+				if weapon.installReloadHooks then
+					weapon.installReloadHooks()
+				end
+				if weapon.refillNow then
+					weapon.refillNow()
+				end
 			elseif key == "InfiniteAmmo" and value and weapon.refillNow then
 				weapon.refillNow()
 			end
@@ -133,8 +142,8 @@ function M.run()
 		connections = connections,
 	})
 
-	if Config.SilentAim and not hooks.canHook() then
-		warn("[POLYZ] Silent Aim requires hookfunction or hookmetamethod support")
+	if (Config.SilentAim or Config.NoSpread) and not hooks.canHook() then
+		warn("[POLYZ] Silent Aim and No Spread require hookfunction or hookmetamethod support")
 	end
 
 	task.spawn(function()

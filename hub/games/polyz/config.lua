@@ -18,8 +18,10 @@ return {
 	AntiAfk = true,
 
 	NoRecoil = false,
+	NoSpread = false,
 	InfiniteAmmo = false,
 	AutoReload = false,
+	InstantReload = false,
 
 	AutoShoot = false,
 	SilentAim = false,

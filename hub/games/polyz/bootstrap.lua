@@ -26,7 +26,7 @@ function M.create(opts)
 	end
 
 	local function anyWeaponEnabled()
-		return Config.InfiniteAmmo or Config.AutoReload
+		return Config.InfiniteAmmo or Config.AutoReload or Config.InstantReload
 	end
 
 	local function anyEspEnabled()

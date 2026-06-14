@@ -17,6 +17,17 @@ function M.create(opts)
 	local lastSecondaryMag = -1
 	local lastPrimaryAmmo = -1
 	local lastSecondaryAmmo = -1
+	local reloadHookedScript: LocalScript? = nil
+	local oldReloadFn: any = nil
+	local oldTaskWait: any = nil
+	local reloadWaitHooked = false
+
+	local function wrapHook(fn)
+		if typeof(newcclosure) == "function" then
+			return newcclosure(fn)
+		end
+		return fn
+	end
 
 	local function getGunVariables()
 		if GunVariables then
@@ -50,8 +61,161 @@ function M.create(opts)
 		return cap
 	end
 
+	local function getTargetMag(variables, slot: string, gunName: string)
+		local base = getMagCap(slot, gunName)
+		if variables:GetAttribute("DoubleMag_Perk") == true then
+			return base * 2
+		end
+		return base
+	end
+
 	local function getReserveCap(magCap: number, bandoiler: boolean)
 		return if bandoiler then magCap * 16 else magCap * 10
+	end
+
+	local function getReloadLoadingLabel()
+		local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+		local hud = playerGui and playerGui:FindFirstChild("HUD")
+		local ammoFrame = hud and hud:FindFirstChild("AmmoFrame")
+		local equipped = ammoFrame and ammoFrame:FindFirstChild("Equipped")
+		return equipped and equipped:FindFirstChild("Loading")
+	end
+
+	local function hideReloadUi()
+		local loading = getReloadLoadingLabel()
+		if loading and loading:IsA("GuiObject") then
+			loading.Visible = false
+		end
+	end
+
+	-- Matches PlayerControls.reload ammo transfer (without v39 lock or animation wait).
+	local function transferReloadAmmo(variables)
+		if (variables:GetAttribute("Health") or 0) <= 0 then
+			return false
+		end
+
+		local slot = variables:GetAttribute("Equipped_Slot")
+		if type(slot) ~= "string" or slot == "" then
+			return false
+		end
+
+		local playerData = util.getPlayerData()
+		if not playerData then
+			return false
+		end
+
+		local equipped = playerData:FindFirstChild("equipped_" .. string.lower(slot))
+		if not equipped or equipped.Value == "None" or equipped.Value == "" then
+			return false
+		end
+
+		local targetMag = getTargetMag(variables, slot, equipped.Value)
+		local magKey = slot .. "_Mag"
+		local ammoKey = slot .. "_Ammo"
+		local currentMag = variables:GetAttribute(magKey) or 0
+		local reserve = variables:GetAttribute(ammoKey) or 0
+
+		if currentMag >= targetMag or reserve <= 0 then
+			return false
+		end
+
+		local needed = targetMag - currentMag
+		if reserve >= needed then
+			variables:SetAttribute(ammoKey, reserve - needed)
+			variables:SetAttribute(magKey, targetMag)
+		else
+			variables:SetAttribute(magKey, currentMag + reserve)
+			variables:SetAttribute(ammoKey, 0)
+		end
+
+		return true
+	end
+
+	local function isReloadWaitFrame()
+		for level = 2, 14 do
+			local ok, name = pcall(debug.info, level, "n")
+			if not ok or not name then
+				return false
+			end
+			if name == "reload" then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function installReloadWaitHook()
+		if reloadWaitHooked or typeof(hookfunction) ~= "function" then
+			return
+		end
+
+		local hooked = hookfunction(task.wait, wrapHook(function(...)
+			local packed = table.pack(...)
+			if Config.InstantReload and isReloadWaitFrame() then
+				return oldTaskWait(0)
+			end
+			return oldTaskWait(table.unpack(packed, 1, packed.n))
+		end))
+
+		if typeof(hooked) == "function" then
+			oldTaskWait = hooked
+			reloadWaitHooked = true
+		end
+	end
+
+	local function hookPlayerControlsReload(character: Model?)
+		if not character or typeof(getsenv) ~= "function" or typeof(hookfunction) ~= "function" then
+			return false
+		end
+
+		local controls = character:FindFirstChild("PlayerControls")
+		if not controls or not controls:IsA("LocalScript") then
+			return false
+		end
+
+		if reloadHookedScript == controls and typeof(oldReloadFn) == "function" then
+			return true
+		end
+
+		local ok, env = pcall(getsenv, controls)
+		if not ok or typeof(env) ~= "table" then
+			return false
+		end
+
+		local reloadFn = rawget(env, "reload")
+		if typeof(reloadFn) ~= "function" then
+			return false
+		end
+
+		local original = reloadFn
+		local wrapped = wrapHook(function()
+			if not Config.InstantReload then
+				return original()
+			end
+
+			local variables = util.getVariables()
+			if variables then
+				transferReloadAmmo(variables)
+			end
+			hideReloadUi()
+		end)
+
+		local hooked = hookfunction(reloadFn, wrapped)
+		if typeof(hooked) ~= "function" then
+			return false
+		end
+
+		oldReloadFn = hooked
+		reloadHookedScript = controls
+		return true
+	end
+
+	local function installReloadHooks()
+		installReloadWaitHook()
+		local character = util.getCharacter() or LocalPlayer.Character
+		if character then
+			hookPlayerControlsReload(character)
+		end
 	end
 
 	local function refillSlot(variables, slot: string, force: boolean?)
@@ -117,8 +281,26 @@ function M.create(opts)
 		end
 	end
 
+	local function tickInstantReload()
+		if not Config.InstantReload then
+			return
+		end
+
+		hideReloadUi()
+
+		local loading = getReloadLoadingLabel()
+		if loading and loading:IsA("GuiObject") and loading.Visible then
+			local variables = util.getVariables()
+			if variables then
+				transferReloadAmmo(variables)
+				hideReloadUi()
+			end
+		end
+	end
+
 	local function tickWeapon()
 		stabilizeCameraRecoil()
+		tickInstantReload()
 
 		if not (Config.InfiniteAmmo or Config.AutoReload) then
 			return
@@ -166,6 +348,13 @@ function M.create(opts)
 
 	local function refillNow()
 		stabilizeCameraRecoil()
+		if Config.InstantReload then
+			local variables = util.getVariables()
+			if variables then
+				transferReloadAmmo(variables)
+				hideReloadUi()
+			end
+		end
 		if not Config.InfiniteAmmo then
 			return
 		end
@@ -175,10 +364,26 @@ function M.create(opts)
 		end
 	end
 
+	installReloadWaitHook()
+	LocalPlayer.CharacterAdded:Connect(function(character)
+		reloadHookedScript = nil
+		oldReloadFn = nil
+		task.defer(function()
+			installReloadHooks()
+		end)
+	end)
+	if LocalPlayer.Character then
+		task.defer(function()
+			installReloadHooks()
+		end)
+	end
+
 	return {
 		tickWeapon = tickWeapon,
 		refillNow = refillNow,
 		stabilizeCameraRecoil = stabilizeCameraRecoil,
+		installReloadHooks = installReloadHooks,
+		transferReloadAmmo = transferReloadAmmo,
 	}
 end
 

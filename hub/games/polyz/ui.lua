@@ -62,8 +62,18 @@ function M.create(opts)
 						title = "WEAPON",
 						items = {
 							{ type = "toggle", key = "NoRecoil", label = "No Recoil", hud = "Recoil" },
+							{ type = "toggle", key = "NoSpread", label = "No Spread", hud = "Spread" },
+							{
+								type = "hint",
+								text = "Weapon shots use exact crosshair direction (hooks PlayerControls raycasts).",
+							},
 							{ type = "toggle", key = "InfiniteAmmo", label = "Infinite Ammo", hud = "Ammo" },
 							{ type = "toggle", key = "AutoReload", label = "Auto Refill Empty Mag", hud = "Reload" },
+							{ type = "toggle", key = "InstantReload", label = "Instant Reload", hud = "FastR" },
+							{
+								type = "hint",
+								text = "Skips reload lock animation — mag refills immediately (R / auto-reload).",
+							},
 						},
 					},
 				},
