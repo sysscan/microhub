@@ -39,21 +39,24 @@ local M = {}
 
 function M.create(opts: {
 	config: { [string]: any },
-	camera: Camera,
+	camera: Camera?,
 	localPlayer: Player,
 	canDraw: boolean?,
 	maxDist: number?,
 	dimColor: Color3?,
+	getCamera: (() -> Camera?)?,
 	getCharacter: (Player) -> Model?,
 	isAlive: (Model) -> (boolean, Humanoid?, BasePart?),
 	getAccent: (Player, Model) -> Color3,
 	getNameSuffix: (Model) -> string,
 	getWeaponName: ((Model) -> string?)?,
+	getHealthRatio: ((Player, Model, Humanoid) -> number)?,
 	shouldSkip: ((Player, Model) -> boolean)?,
 	getMaxDist: (() -> number)?,
 })
 	local config = opts.config
 	local camera = opts.camera
+	local getCamera = opts.getCamera
 	local localPlayer = opts.localPlayer
 	local canDraw = opts.canDraw ~= false and typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
 	local maxDist = opts.maxDist or DEFAULT_MAX_DIST
@@ -77,26 +80,33 @@ function M.create(opts: {
 		return maxDist
 	end
 
+	local function resolveCamera(): Camera?
+		if getCamera then
+			return getCamera()
+		end
+		return camera
+	end
+
 	local cache: { [Model]: any } = {}
 	local needsHide = false
 
-	local function box2d(char: Model, root: BasePart): (number?, number?, number?, number?)
+	local function box2d(char: Model, root: BasePart, cam: Camera): (number?, number?, number?, number?)
 		if not char.Parent or not root.Parent then
 			return nil
 		end
-		local head = char:FindFirstChild("Head")
+		local head = char:FindFirstChild("SmallHead") or char:FindFirstChild("Head")
 		if head and head:IsA("BasePart") then
 			local topPos = head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.4, 0)
 			local botPos = root.Position - Vector3.new(0, 2.8, 0)
-			local top, topOn = camera:WorldToViewportPoint(topPos)
-			local bot, botOn = camera:WorldToViewportPoint(botPos)
+			local top, topOn = cam:WorldToViewportPoint(topPos)
+			local bot, botOn = cam:WorldToViewportPoint(botPos)
 			if top.Z > 0 and bot.Z > 0 and (topOn or botOn) then
 				local h = math.max(14, bot.Y - top.Y)
 				local w = h * 0.55
 				return top.X - w * 0.5, top.Y, w, h
 			end
 		end
-		local pos, onScreen = camera:WorldToViewportPoint(root.Position)
+		local pos, onScreen = cam:WorldToViewportPoint(root.Position)
 		if onScreen and pos.Z > 0 then
 			return pos.X - 16, pos.Y - 30, 32, 60
 		end
@@ -137,7 +147,9 @@ function M.create(opts: {
 		return entry
 	end
 
-	local function drawTarget(player: Player, char: Model, hum: Humanoid, root: BasePart, camPos: Vector3, snapFrom: Vector2?)
+	local getHealthRatio = opts.getHealthRatio
+
+	local function drawTarget(player: Player, char: Model, hum: Humanoid, root: BasePart, cam: Camera, camPos: Vector3, snapFrom: Vector2?)
 		if shouldSkip and shouldSkip(player, char) then
 			if cache[char] then
 				hideEntry(cache[char])
@@ -153,7 +165,7 @@ function M.create(opts: {
 			return
 		end
 
-		local x, y, w, h = box2d(char, root)
+		local x, y, w, h = box2d(char, root, cam)
 		if not x then
 			if cache[char] then
 				hideEntry(cache[char])
@@ -165,7 +177,9 @@ function M.create(opts: {
 		local accent = getAccent(player, char)
 		local cx = x + w * 0.5
 		local bottom = y + h
-		local ratio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+		local ratio = if getHealthRatio
+			then math.clamp(getHealthRatio(player, char, hum), 0, 1)
+			else math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
 		local fadeAlpha = 1 - math.clamp((dist - 800) / 1200, 0, 0.6)
 
 		entry.boxOutline.Position = Vector2.new(x - 1, y - 1)
@@ -243,8 +257,13 @@ function M.create(opts: {
 		end
 		needsHide = true
 
-		local camPos = camera.CFrame.Position
-		local vpSize = camera.ViewportSize
+		local cam = resolveCamera()
+		if not cam then
+			return
+		end
+
+		local camPos = cam.CFrame.Position
+		local vpSize = cam.ViewportSize
 		local snapFrom = if config.ESPSnaplines then Vector2.new(vpSize.X * 0.5, vpSize.Y) else nil
 		local seen: { [Model]: boolean } = {}
 
@@ -259,7 +278,7 @@ function M.create(opts: {
 			local alive, hum, root = isAlive(char)
 			if alive and hum and root then
 				seen[char] = true
-				drawTarget(player, char, hum, root, camPos, snapFrom)
+				drawTarget(player, char, hum, root, cam, camPos, snapFrom)
 			end
 		end
 

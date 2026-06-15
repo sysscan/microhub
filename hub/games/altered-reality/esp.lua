@@ -1,3 +1,5 @@
+local Players = game:GetService("Players")
+
 local hubRequire = shared.__MicroHubRequire
 local PlayerESP = hubRequire("lib/esp/player-v2.lua")
 
@@ -7,6 +9,7 @@ function M.create(opts)
 	local Config = opts.config
 	local Constants = opts.constants
 	local LocalPlayer = opts.localPlayer
+	local util = opts.util
 	local loot = opts.loot
 	local canDraw = opts.canDraw == true
 
@@ -17,10 +20,20 @@ function M.create(opts)
 		return workspace.CurrentCamera or opts.camera
 	end
 
+	local function findPlayerForCharacter(character)
+		for _, player in Players:GetPlayers() do
+			if player.Character == character then
+				return player
+			end
+		end
+		return nil
+	end
+
 	if canDraw then
 		playerEsp = PlayerESP.create({
 			config = Config,
 			camera = getCamera(),
+			getCamera = getCamera,
 			localPlayer = LocalPlayer,
 			canDraw = true,
 			getMaxDist = function()
@@ -30,14 +43,10 @@ function M.create(opts)
 				return player and player.Character
 			end,
 			isAlive = function(char)
-				if not char then
-					return false
-				end
-				local humanoid = char:FindFirstChildOfClass("Humanoid")
-				local root = char:FindFirstChild("HumanoidRootPart")
-					or char:FindFirstChild("Torso")
-					or char:FindFirstChild("SmallTorso")
-				return humanoid ~= nil and root ~= nil and humanoid.Health > 0, humanoid, root
+				return util.isCharacterAlive(char, findPlayerForCharacter(char))
+			end,
+			getHealthRatio = function(player, char, humanoid)
+				return util.getHealthRatio(player, char, humanoid)
 			end,
 			getAccent = function()
 				return Color3.fromRGB(255, 90, 90)
@@ -109,7 +118,13 @@ function M.create(opts)
 			return
 		end
 
-		local lootItems = loot.scanLoot(false)
+		local ok, lootItems = pcall(loot.scanLoot, loot, false)
+		if not ok or typeof(lootItems) ~= "table" then
+			for _, label in lootLabels do
+				label.Visible = false
+			end
+			return
+		end
 		for index, entry in lootItems do
 			drawLoot(entry, index)
 		end

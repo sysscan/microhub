@@ -21,14 +21,6 @@ function M.create(opts)
 	local lootCacheAt = {}
 	local ammoNames = {}
 
-	local function getScanSignature(options)
-		options = options or {}
-		local filter = options.filter or normalizeFilter()
-		local range = options.range or getLootEspRange()
-		local maxItems = options.maxItems or getLootEspMaxItems()
-		return string.format("%s:%d:%d", filter, math.floor(range), maxItems)
-	end
-
 	local function buildAmmoNames()
 		table.clear(ammoNames)
 		local modulesFolder = services.modulesFolder
@@ -70,6 +62,14 @@ function M.create(opts)
 			return "All"
 		end
 		return filter
+	end
+
+	local function getScanSignature(options)
+		options = options or {}
+		local filter = options.filter or normalizeFilter()
+		local range = options.range or getLootEspRange()
+		local maxItems = options.maxItems or getLootEspMaxItems()
+		return string.format("%s:%d:%d", filter, math.floor(range), maxItems)
 	end
 
 	local function categoryFromAlias(alias, model)

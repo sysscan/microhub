@@ -6,14 +6,26 @@ function M.create(opts)
 
 	local cachedCharacter = LocalPlayer.Character
 	local cachedHumanoid = cachedCharacter and cachedCharacter:FindFirstChildOfClass("Humanoid")
-	local cachedRoot = cachedCharacter and cachedCharacter:FindFirstChild("HumanoidRootPart")
-	local cachedHead = cachedCharacter and cachedCharacter:FindFirstChild("Head")
+	local cachedRoot = cachedCharacter
+		and (
+			cachedCharacter:FindFirstChild("SmallTorso")
+			or cachedCharacter:FindFirstChild("HumanoidRootPart")
+			or cachedCharacter:FindFirstChild("Torso")
+		)
+	local cachedHead = cachedCharacter
+		and (cachedCharacter:FindFirstChild("SmallHead") or cachedCharacter:FindFirstChild("Head"))
 
 	local function bindCharacter(character)
 		cachedCharacter = character
 		cachedHumanoid = character and character:FindFirstChildOfClass("Humanoid")
-		cachedRoot = character and character:FindFirstChild("HumanoidRootPart")
-		cachedHead = character and character:FindFirstChild("Head")
+		cachedRoot = character
+			and (
+				character:FindFirstChild("SmallTorso")
+				or character:FindFirstChild("HumanoidRootPart")
+				or character:FindFirstChild("Torso")
+			)
+		cachedHead = character
+			and (character:FindFirstChild("SmallHead") or character:FindFirstChild("Head"))
 	end
 
 	LocalPlayer.CharacterAdded:Connect(bindCharacter)
@@ -56,6 +68,60 @@ function M.create(opts)
 	local function isAlive()
 		local humanoid = getHumanoid()
 		return humanoid ~= nil and humanoid.Health > 0
+	end
+
+	local function getCharacterRoot(character)
+		if not character then
+			return nil
+		end
+		return character:FindFirstChild("SmallTorso")
+			or character:FindFirstChild("HumanoidRootPart")
+			or character:FindFirstChild("Torso")
+	end
+
+	local function getCharacterHead(character)
+		if not character then
+			return nil
+		end
+		return character:FindFirstChild("SmallHead") or character:FindFirstChild("Head")
+	end
+
+	local function getReplicatedHealth(player)
+		local folder = ReplicatedFirst:FindFirstChild(tostring(player.UserId))
+		local alive = folder and folder:FindFirstChild("Alive")
+		local health = alive and alive:FindFirstChild("Health")
+		if health and health:IsA("NumberValue") then
+			return health.Value
+		end
+		return nil
+	end
+
+	local function isCharacterAlive(character, player)
+		if not character or not character.Parent then
+			return false
+		end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local root = getCharacterRoot(character)
+		if not humanoid or not root then
+			return false
+		end
+		local health = humanoid.Health
+		if player then
+			local replicatedHealth = getReplicatedHealth(player)
+			if replicatedHealth ~= nil then
+				health = replicatedHealth
+			end
+		end
+		return health > 0, humanoid, root
+	end
+
+	local function getHealthRatio(player, character, humanoid)
+		local health = humanoid.Health
+		local replicatedHealth = player and getReplicatedHealth(player)
+		if replicatedHealth ~= nil then
+			health = replicatedHealth
+		end
+		return health / math.max(humanoid.MaxHealth > 0 and humanoid.MaxHealth or 100, 1)
 	end
 
 	local function getPlayerFolder()
@@ -102,6 +168,11 @@ function M.create(opts)
 		getHumanoid = getHumanoid,
 		getRoot = getRoot,
 		getHead = getHead,
+		getCharacterRoot = getCharacterRoot,
+		getCharacterHead = getCharacterHead,
+		getReplicatedHealth = getReplicatedHealth,
+		isCharacterAlive = isCharacterAlive,
+		getHealthRatio = getHealthRatio,
 		isAlive = isAlive,
 		getPlayerFolder = getPlayerFolder,
 		isSpawned = isSpawned,

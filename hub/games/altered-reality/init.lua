@@ -127,6 +127,7 @@ function M.run()
 		camera = Camera,
 		localPlayer = LocalPlayer,
 		canDraw = canDraw,
+		util = util,
 		loot = loot,
 	})
 

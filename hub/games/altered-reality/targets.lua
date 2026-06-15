@@ -48,12 +48,8 @@ function M.create(opts)
 		return player ~= LocalPlayer and player.Parent == Players
 	end
 
-	local function isEnemyAlive(character)
-		if not character or not character.Parent then
-			return false
-		end
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		return humanoid ~= nil and humanoid.Health > 0
+	local function isEnemyAlive(character, player)
+		return util.isCharacterAlive(character, player)
 	end
 
 	local function collectPlayers()
@@ -109,7 +105,7 @@ function M.create(opts)
 				continue
 			end
 			local character = player.Character
-			if not isEnemyAlive(character) then
+			if not isEnemyAlive(character, player) then
 				continue
 			end
 			local aimPart = util.findAimPart(character, Config.AimAtHead == true)

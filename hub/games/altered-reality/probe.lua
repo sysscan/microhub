@@ -338,16 +338,6 @@ function M.create(opts)
 		logMovementSnapshot()
 	end
 
-	local function runSpawnedReport(connections)
-		logPlayerState()
-		scanVehicles()
-		log("=== toggle hub features; each change logs here ===")
-		local folder = util.getPlayerFolder()
-		if folder then
-			watchPlayerFolder(folder, connections)
-		end
-	end
-
 	local function watchPlayerFolder(folder, connections)
 		local values = folder:FindFirstChild("Values")
 		local alive = folder:FindFirstChild("Alive")
@@ -380,6 +370,16 @@ function M.create(opts)
 		end
 	end
 
+	local function runSpawnedReport(connections)
+		logPlayerState()
+		scanVehicles()
+		log("=== toggle hub features; each change logs here ===")
+		local folder = util.getPlayerFolder()
+		if folder then
+			watchPlayerFolder(folder, connections)
+		end
+	end
+
 	local function startAutoMonitor(monitorOpts)
 		if monitorStarted then
 			return
@@ -388,7 +388,7 @@ function M.create(opts)
 			return
 		end
 		monitorStarted = true
-		toggleLogReadyAt = tick() + 3
+		toggleLogReadyAt = tick() + 8
 
 		local connections = monitorOpts.connections
 		local runService = monitorOpts.runService
