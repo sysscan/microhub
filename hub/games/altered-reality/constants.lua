@@ -1,5 +1,5 @@
 return {
-	GAME_BUILD = "1.0.8",
+	GAME_BUILD = "1.0.9",
 	MAX_WALK_SPEED = 40,
 	MAX_FLY_SPEED = 50,
 	SAFE_FLY_SPEED = 28,

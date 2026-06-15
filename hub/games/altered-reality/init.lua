@@ -204,7 +204,8 @@ function M.run()
 		warn("[Altered Reality] Silent Aim requires hookfunction or hookmetamethod support")
 	end
 
-	if Config.ProbeAutoLog then
+	if Config.ProbeAutoLog ~= false then
+		warn("[Altered Reality] AC probe auto-log starting (build " .. Constants.GAME_BUILD .. ")")
 		probe.startAutoMonitor({
 			connections = connections,
 			runService = RunService,

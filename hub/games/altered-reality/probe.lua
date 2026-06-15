@@ -43,6 +43,7 @@ function M.create(opts)
 			table.remove(logs)
 		end
 		print(line)
+		warn(line)
 	end
 
 	local function log(message: string)
@@ -325,14 +326,21 @@ function M.create(opts)
 	end
 
 	local function runStartupReport()
-		log("=== AC PROBE START (auto) ===")
-		log("Open F9 console — no buttons needed")
+		log("=== AC PROBE START build " .. tostring(Constants.GAME_BUILD) .. " ===")
+		log("Logging to F9 — check Warning AND Output tabs")
 		installRemoteLogger()
 		listRemotes()
+		logMovementSnapshot()
+	end
+
+	local function runSpawnedReport(connections)
 		logPlayerState()
 		scanVehicles()
-		logMovementSnapshot()
-		log("=== toggle features in hub UI; changes print here ===")
+		log("=== toggle hub features; each change logs here ===")
+		local folder = util.getPlayerFolder()
+		if folder then
+			watchPlayerFolder(folder, connections)
+		end
 	end
 
 	local function watchPlayerFolder(folder, connections)
@@ -368,7 +376,10 @@ function M.create(opts)
 	end
 
 	local function startAutoMonitor(monitorOpts)
-		if monitorStarted or Config.ProbeAutoLog ~= true then
+		if monitorStarted then
+			return
+		end
+		if Config.ProbeAutoLog == false then
 			return
 		end
 		monitorStarted = true
@@ -377,13 +388,11 @@ function M.create(opts)
 		local runService = monitorOpts.runService
 		local localPlayer = monitorOpts.localPlayer
 
+		runStartupReport()
+
 		task.spawn(function()
 			services.waitForPlayerFolder(25)
-			runStartupReport()
-			local folder = util.getPlayerFolder()
-			if folder then
-				watchPlayerFolder(folder, connections)
-			end
+			runSpawnedReport(connections)
 		end)
 
 		local lastSnapshotAt = 0
