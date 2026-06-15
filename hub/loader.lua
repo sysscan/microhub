@@ -218,7 +218,15 @@ end
 
 local moduleCache = {}
 
+local function normalizeModulePath(path)
+	if not path:match("%.lua$") and not path:match("%.luau$") then
+		return path .. ".lua"
+	end
+	return path
+end
+
 local function hubRequire(path)
+	path = normalizeModulePath(path)
 	if moduleCache[path] ~= nil then
 		return moduleCache[path]
 	end
@@ -236,6 +244,7 @@ local function hubRequire(path)
 end
 
 local function runSource(path)
+	path = normalizeModulePath(path)
 	local source = fetch(path)
 	local fn, compileErr = loadstring(source, path)
 	if not fn then

@@ -1,5 +1,5 @@
 local require = shared.__MicroHubRequire
-local PlayerESP = require("lib/esp/player-v2")
+local PlayerESP = require("lib/esp/player-v2.lua")
 
 local M = {}
 
