@@ -5,6 +5,7 @@ function M.create(opts)
 	local UILib = opts.uiLib
 	local Constants = opts.constants
 	local onToggle = opts.onToggle
+	local onChange = opts.onChange
 
 	if not Config or not UILib or not Constants then
 		error("[POLYZ] ui.create missing config, uiLib, or constants", 0)
@@ -14,6 +15,7 @@ function M.create(opts)
 		title = "POLYZ",
 		config = Config,
 		onToggle = onToggle,
+		onChange = onChange,
 		pages = {
 			{
 				label = "Combat",
@@ -29,6 +31,16 @@ function M.create(opts)
 							},
 							{ type = "hint", text = "Hooks Raycast + ShootEnemy — every shot hits nearest enemy in range." },
 							{ type = "toggle", key = "AimAtHead", label = "Aim At Head", hud = "Head" },
+							{
+								type = "select",
+								key = "TargetMode",
+								label = "Target Mode",
+								options = { "Closest", "FOV", "Boss", "Lowest HP" },
+							},
+							{
+								type = "hint",
+								text = "Closest / FOV / Boss priority / Lowest HP — used by silent aim, auto shoot, and pierce.",
+							},
 							{ type = "slider", key = "AttackRange", label = "Attack Range", min = 50, max = 500, step = 10 },
 						},
 					},
@@ -73,6 +85,11 @@ function M.create(opts)
 							{
 								type = "hint",
 								text = "Skips reload lock animation — mag refills immediately (R / auto-reload).",
+							},
+							{ type = "toggle", key = "InfiniteGrenades", label = "Infinite Grenades", hud = "Nades" },
+							{
+								type = "hint",
+								text = "Keeps Variables.Grenades filled so G / mobile grenade always has ammo client-side.",
 							},
 						},
 					},

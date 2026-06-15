@@ -26,7 +26,7 @@ function M.create(opts)
 	end
 
 	local function anyWeaponEnabled()
-		return Config.InfiniteAmmo or Config.AutoReload or Config.InstantReload
+		return Config.InfiniteAmmo or Config.AutoReload or Config.InstantReload or Config.InfiniteGrenades
 	end
 
 	local function anyEspEnabled()
@@ -39,6 +39,7 @@ function M.create(opts)
 	end
 
 	table.insert(connections, RunService.Heartbeat:Connect(function()
+		movement.tickAntiAfk()
 		if anyMovementEnabled() then
 			movement.tickMovement()
 		end
@@ -57,10 +58,6 @@ function M.create(opts)
 			esp.tick()
 		end
 	end))
-
-	if Config.AntiAfk then
-		movement.startAntiAfk()
-	end
 end
 
 return M

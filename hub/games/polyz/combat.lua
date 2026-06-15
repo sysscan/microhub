@@ -94,7 +94,7 @@ function M.create(opts)
 				break
 			end
 
-			local nextEnemy, nextPart = targets.pickFromBuffer(pierceBuffer, remainingCount, Config.AttackRange, false)
+			local nextEnemy, nextPart = targets.pickFromBuffer(pierceBuffer, remainingCount, Config.AttackRange)
 			if not (nextEnemy and nextPart) then
 				break
 			end
@@ -125,8 +125,7 @@ function M.create(opts)
 			return
 		end
 
-		local useFov = Config.AimAssist and not Config.SilentAim
-		local enemy, part = targets.pickEnemy(Config.AttackRange, useFov)
+		local enemy, part = targets.pickEnemy(Config.AttackRange)
 		if not (enemy and part) then
 			return
 		end

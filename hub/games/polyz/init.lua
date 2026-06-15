@@ -104,6 +104,11 @@ function M.run()
 		config = Config,
 		uiLib = UILib,
 		constants = Constants,
+		onChange = function(key)
+			if key == "TargetMode" or key == "AimAtHead" or key == "AttackRange" or key == "AimFOV" then
+				hooks.invalidateAimCache(true)
+			end
+		end,
 		onToggle = function(key, value)
 			if key == "SilentAim" or key == "NoSpread" then
 				if value then
@@ -128,6 +133,14 @@ function M.run()
 				end
 			elseif key == "InfiniteAmmo" and value and weapon.refillNow then
 				weapon.refillNow()
+			elseif key == "InfiniteGrenades" and value and weapon.refillNow then
+				weapon.refillNow()
+			elseif key == "AntiAfk" then
+				if value then
+					movement.startAntiAfk()
+				else
+					movement.stopAntiAfk()
+				end
 			end
 		end,
 	})

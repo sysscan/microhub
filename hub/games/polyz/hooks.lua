@@ -477,9 +477,9 @@ function M.create(opts)
 		local enemy: Model?, part: BasePart?
 		local candidates, candidateCount = collectCandidatesFromFilter(params)
 		if candidateCount and candidateCount > 0 then
-			enemy, part = targets.pickFromBuffer(candidates, candidateCount, Config.AttackRange, false)
+			enemy, part = targets.pickFromBuffer(candidates, candidateCount, Config.AttackRange)
 		else
-			enemy, part = targets.pickEnemy(Config.AttackRange, false)
+			enemy, part = targets.pickEnemy(Config.AttackRange)
 		end
 
 		if enemy and part then
@@ -539,7 +539,7 @@ function M.create(opts)
 			return enemyModel, hitPart, hitPosition, pierceCount, gunName
 		end
 
-		local enemy, part = targets.pickEnemy(Config.AttackRange, false)
+		local enemy, part = targets.pickEnemy(Config.AttackRange)
 		if enemy and part then
 			aimCache.enemy = enemy
 			aimCache.part = part

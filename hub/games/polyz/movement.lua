@@ -17,6 +17,7 @@ function M.create(opts)
 	local noclipConn = nil
 	local noclipEnabled = false
 	local antiAfkThread = nil
+	local antiAfkIdleConn: RBXScriptConnection? = nil
 	local lightingBackup = nil
 	local flyVelocity = nil
 	local humanoidDefaults = nil
@@ -280,10 +281,28 @@ function M.create(opts)
 	end
 
 	local function stopAntiAfk()
+		if antiAfkIdleConn then
+			antiAfkIdleConn:Disconnect()
+			antiAfkIdleConn = nil
+		end
 		if antiAfkThread then
 			task.cancel(antiAfkThread)
 			antiAfkThread = nil
 		end
+	end
+
+	local function pulseAfk()
+		pcall(function()
+			local VirtualUser = game:GetService("VirtualUser")
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.zero)
+		end)
+
+		pcall(function()
+			local vim = game:GetService("VirtualInputManager")
+			vim:SendMouseMoveEvent(1, 1, game)
+			vim:SendMouseMoveEvent(0, 0, game)
+		end)
 	end
 
 	local function startAntiAfk()
@@ -291,16 +310,34 @@ function M.create(opts)
 		if not Config.AntiAfk then
 			return
 		end
-		antiAfkThread = task.spawn(function()
-			local VirtualUser = game:GetService("VirtualUser")
-			while Config.AntiAfk do
-				pcall(function()
-					VirtualUser:CaptureController()
-					VirtualUser:ClickButton2(Vector2.new())
-				end)
-				task.wait(1140)
+
+		antiAfkIdleConn = LocalPlayer.Idled:Connect(function(idleTime)
+			if not Config.AntiAfk then
+				return
+			end
+			if idleTime >= Constants.AFK_IDLE_THRESHOLD then
+				pulseAfk()
 			end
 		end)
+
+		antiAfkThread = task.spawn(function()
+			while Config.AntiAfk do
+				task.wait(Constants.AFK_BACKUP_INTERVAL)
+				if Config.AntiAfk then
+					pulseAfk()
+				end
+			end
+		end)
+	end
+
+	local function tickAntiAfk()
+		if Config.AntiAfk then
+			if not antiAfkIdleConn then
+				startAntiAfk()
+			end
+		else
+			stopAntiAfk()
+		end
 	end
 
 	local function unload()
@@ -315,6 +352,7 @@ function M.create(opts)
 
 	return {
 		tickMovement = tickMovement,
+		tickAntiAfk = tickAntiAfk,
 		startAntiAfk = startAntiAfk,
 		stopAntiAfk = stopAntiAfk,
 		unload = unload,

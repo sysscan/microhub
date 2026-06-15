@@ -22,6 +22,7 @@ return {
 	InfiniteAmmo = false,
 	AutoReload = false,
 	InstantReload = false,
+	InfiniteGrenades = false,
 
 	AutoShoot = false,
 	SilentAim = false,
@@ -29,6 +30,7 @@ return {
 	AimAtHead = true,
 	AimFOV = 180,
 	AttackRange = 250,
+	TargetMode = "Closest",
 	ShowAimFOV = false,
 	PierceShots = false,
 

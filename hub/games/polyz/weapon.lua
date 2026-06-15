@@ -241,6 +241,14 @@ function M.create(opts)
 		end
 	end
 
+	local function applyInfiniteGrenades(variables)
+		local cap = Constants.DEFAULT_GRENADE_CAP
+		local current = variables:GetAttribute("Grenades") or 0
+		if current < cap then
+			variables:SetAttribute("Grenades", cap)
+		end
+	end
+
 	local function stabilizeCameraRecoil()
 		local controller = util.getCameraController()
 		if not controller then
@@ -293,11 +301,15 @@ function M.create(opts)
 		stabilizeCameraRecoil()
 		tickInstantReload()
 
+		local variables = util.getVariables()
+		if variables and Config.InfiniteGrenades then
+			applyInfiniteGrenades(variables)
+		end
+
 		if not (Config.InfiniteAmmo or Config.AutoReload) then
 			return
 		end
 
-		local variables = util.getVariables()
 		if not variables then
 			return
 		end
@@ -344,6 +356,12 @@ function M.create(opts)
 			if variables then
 				transferReloadAmmo(variables)
 				hideReloadUi()
+			end
+		end
+		if Config.InfiniteGrenades then
+			local variables = util.getVariables()
+			if variables then
+				applyInfiniteGrenades(variables)
 			end
 		end
 		if not Config.InfiniteAmmo then
