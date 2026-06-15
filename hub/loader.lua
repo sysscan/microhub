@@ -1,6 +1,6 @@
 -- MicroHub loader — fetched at latest commit SHA by bootstrap.lua (or an equivalent bootstrap snippet).
 
-local VERSION = "1.7.1"
+local VERSION = "1.7.2"
 local OWNER = "sysscan"
 local REPO = "microhub"
 local BRANCH = "main"
@@ -142,17 +142,63 @@ local function requestPayload(url)
 	}
 end
 
+local function looksLikeFetchError(source)
+	if kind(source) ~= "string" or #source == 0 then
+		return true
+	end
+	local head = source:sub(1, 96):lower()
+	if head:sub(1, 3) == "404" then
+		return true
+	end
+	if head:find("not found", 1, true) then
+		return true
+	end
+	if head:find("<!doctype", 1, true) or head:find("<html", 1, true) then
+		return true
+	end
+	return false
+end
+
+local function looksLikeLuaSource(source)
+	if looksLikeFetchError(source) then
+		return false
+	end
+	return source:find("function", 1, true) ~= nil
+		or source:find("\nlocal ", 1, true) ~= nil
+		or source:find("\nreturn ", 1, true) ~= nil
+		or source:sub(1, 6) == "--[[" 
+		or source:sub(1, 2) == "--"
+end
+
+local function acceptBody(body, failures, label)
+	body = sanitize(body)
+	if kind(body) ~= "string" or #body == 0 then
+		table.insert(failures, label .. " empty body")
+		return nil
+	end
+	if not looksLikeLuaSource(body) then
+		local preview = body:sub(1, 48):gsub("%s+", " ")
+		table.insert(failures, label .. " invalid body: " .. preview)
+		return nil
+	end
+	return body
+end
+
 local function httpGet(url)
 	local failures = {}
 
 	if isCallable(request) then
 		local ok, res = pcall(request, requestPayload(url))
 		if ok and res then
-			local body = responseBody(res)
-			if statusOk(res) and kind(body) == "string" and #body > 0 then
-				return sanitize(body)
+			local body = acceptBody(responseBody(res), failures, "request HTTP " .. responseStatus(res))
+			if body and statusOk(res) then
+				return body
 			end
-			table.insert(failures, "request HTTP " .. responseStatus(res))
+			if not body then
+				-- already logged
+			elseif not statusOk(res) then
+				table.insert(failures, "request HTTP " .. responseStatus(res))
+			end
 		else
 			table.insert(failures, "request " .. tostring(res))
 		end
@@ -161,18 +207,24 @@ local function httpGet(url)
 	local okAsync, bodyAsync = pcall(function()
 		return game:HttpGetAsync(url, true)
 	end)
-	if okAsync and kind(bodyAsync) == "string" and #bodyAsync > 0 then
-		return sanitize(bodyAsync)
+	local asyncBody = acceptBody(bodyAsync, failures, "HttpGetAsync")
+	if okAsync and asyncBody then
+		return asyncBody
 	end
-	table.insert(failures, "HttpGetAsync " .. tostring(bodyAsync))
+	if not okAsync then
+		table.insert(failures, "HttpGetAsync " .. tostring(bodyAsync))
+	end
 
 	local okSync, bodySync = pcall(function()
 		return game:HttpGet(url, true)
 	end)
-	if okSync and kind(bodySync) == "string" and #bodySync > 0 then
-		return sanitize(bodySync)
+	local syncBody = acceptBody(bodySync, failures, "HttpGet")
+	if okSync and syncBody then
+		return syncBody
 	end
-	table.insert(failures, "HttpGet " .. tostring(bodySync))
+	if not okSync then
+		table.insert(failures, "HttpGet " .. tostring(bodySync))
+	end
 
 	error("download failed on " .. executorName() .. ": " .. table.concat(failures, " | ") .. " -> " .. url, 0)
 end
