@@ -9,6 +9,7 @@ function M.create(opts)
 	local targets = opts.targets
 	local util = opts.util
 	local weapon = opts.weapon
+	local hooks = opts.hooks
 
 	local lastShotAt = 0
 
@@ -62,7 +63,14 @@ function M.create(opts)
 		if not hits then
 			return false
 		end
-		local ok = remotes.fireGun(hits, tool)
+		local ok
+		if hooks and hooks.withBypass then
+			ok = select(1, hooks.withBypass(function()
+				return remotes.fireGun(hits, tool, { legit = true })
+			end))
+		else
+			ok = select(1, remotes.fireGun(hits, tool, { legit = true }))
+		end
 		if ok then
 			lastShotAt = tick()
 		end
@@ -71,6 +79,9 @@ function M.create(opts)
 
 	local function tickCombat()
 		if not Config.AutoShoot and not Config.SilentAim then
+			return
+		end
+		if not Config.AutoShoot then
 			return
 		end
 		if not util.isSpawned() or not util.isAlive() then

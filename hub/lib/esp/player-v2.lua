@@ -50,6 +50,7 @@ function M.create(opts: {
 	getNameSuffix: (Model) -> string,
 	getWeaponName: ((Model) -> string?)?,
 	shouldSkip: ((Player, Model) -> boolean)?,
+	getMaxDist: (() -> number)?,
 })
 	local config = opts.config
 	local camera = opts.camera
@@ -67,6 +68,14 @@ function M.create(opts: {
 			return tool and tool.Name or nil
 		end
 	local shouldSkip = opts.shouldSkip
+	local getMaxDist = opts.getMaxDist
+
+	local function resolveMaxDist(): number
+		if getMaxDist then
+			return getMaxDist()
+		end
+		return maxDist
+	end
 
 	local cache: { [Model]: any } = {}
 	local needsHide = false
@@ -137,7 +146,7 @@ function M.create(opts: {
 		end
 
 		local dist = (root.Position - camPos).Magnitude
-		if dist > maxDist then
+		if dist > resolveMaxDist() then
 			if cache[char] then
 				hideEntry(cache[char])
 			end

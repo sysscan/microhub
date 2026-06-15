@@ -10,6 +10,7 @@ function M.create(opts)
 	local RunService = opts.runService
 	local services = opts.services
 	local util = opts.util
+	local vehicles = opts.vehicles
 
 	local noclipConn = nil
 	local noclipEnabled = false
@@ -106,17 +107,19 @@ function M.create(opts)
 	end
 
 	local function prepareFlight(root)
-		if typeof(sethiddenproperty) == "function" then
+		if Config.FlyNetworkOwner and typeof(sethiddenproperty) == "function" then
 			pcall(function()
 				sethiddenproperty(LocalPlayer, "SimulationRadius", 112412400000)
 				sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 112412400000)
 			end)
 		end
-		pcall(function()
-			if root:GetNetworkOwner() ~= LocalPlayer then
-				root:SetNetworkOwner(LocalPlayer)
-			end
-		end)
+		if Config.FlyNetworkOwner then
+			pcall(function()
+				if root:GetNetworkOwner() ~= LocalPlayer then
+					root:SetNetworkOwner(LocalPlayer)
+				end
+			end)
+		end
 		zeroVelocity(root)
 	end
 
@@ -328,6 +331,14 @@ function M.create(opts)
 	local function tickFly(dt)
 		if not Config.Fly then
 			clearFly()
+			return
+		end
+		if Config.FlyMode == "Vehicle" and vehicles then
+			if vehicles.tickVehicleFly(dt) then
+				clearFly()
+				return
+			end
+			applyFlyCFrame(dt)
 			return
 		end
 		if Config.FlyMode == "Velocity" then

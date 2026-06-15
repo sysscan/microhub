@@ -12,6 +12,11 @@ return {
 	FlyMode = "CFrame",
 	FlySpeed = 28,
 	FlySafeSpeed = true,
+	FlyNetworkOwner = false,
+	FlySuppressFell = true,
+	VehicleFlyAutoEnter = true,
+	VehicleFlyEnterRange = 25,
+	RemoteProbeLog = true,
 	FullBright = false,
 	AntiAfk = true,
 
@@ -24,6 +29,7 @@ return {
 
 	ESP = false,
 	ESPSnaplines = false,
+	ESPRange = 500,
 
 	LootESP = false,
 	LootESPRange = 400,

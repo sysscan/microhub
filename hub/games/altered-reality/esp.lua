@@ -23,7 +23,9 @@ function M.create(opts)
 			camera = getCamera(),
 			localPlayer = LocalPlayer,
 			canDraw = true,
-			maxDist = Constants.MAX_ESP_DIST,
+			getMaxDist = function()
+				return math.clamp(tonumber(Config.ESPRange) or Constants.DEFAULT_ESP_RANGE, 25, Constants.MAX_ESP_DIST)
+			end,
 			getCharacter = function(player)
 				return player and player.Character
 			end,

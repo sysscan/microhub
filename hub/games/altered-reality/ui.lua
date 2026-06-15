@@ -6,6 +6,8 @@ function M.create(opts)
 	local Constants = opts.constants
 	local remotes = opts.remotes
 	local automation = opts.automation
+	local vehicles = opts.vehicles
+	local probe = opts.probe
 	local onToggle = opts.onToggle
 
 	if not Config or not UILib or not Constants then
@@ -28,9 +30,10 @@ function M.create(opts)
 							{ type = "toggle", key = "AimAtHead", label = "Aim At Head", hud = "Head" },
 							{
 								type = "hint",
-								text = "Auto Shoot fires continuously. Silent Aim fires while holding LMB.",
+								text = "Silent Aim hooks weapon raycasts (750 stud shots). Hold LMB and let the game fire — do not rely on hub firing.",
 							},
 							{ type = "slider", key = "AttackRange", label = "Attack Range", min = 50, max = 750, step = 10 },
+							{ type = "slider", key = "AimFOV", label = "Aim FOV", min = 60, max = 720, step = 10 },
 							{ type = "slider", key = "CombatInterval", label = "Shot Interval Cap", min = 0.04, max = 0.5, step = 0.01 },
 						},
 					},
@@ -60,6 +63,27 @@ function M.create(opts)
 								options = Constants.FLY_MODES,
 							},
 							{ type = "toggle", key = "FlySafeSpeed", label = "Safe Speed Cap", hud = "SafeFly" },
+							{ type = "toggle", key = "FlySuppressFell", label = "Suppress Fall Remote", hud = "NoFell" },
+							{ type = "toggle", key = "FlyNetworkOwner", label = "Network Owner (risky)", hud = "NetOwn" },
+							{ type = "toggle", key = "VehicleFlyAutoEnter", label = "Auto Enter Vehicle", hud = "VehEnter" },
+							{
+								type = "slider",
+								key = "VehicleFlyEnterRange",
+								label = "Vehicle Enter Range",
+								min = 8,
+								max = 40,
+								step = 1,
+							},
+							{
+								type = "button",
+								label = "Enter Nearest Vehicle",
+								onClick = function()
+									if vehicles then
+										local ok = vehicles.tryEnterNearest()
+										warn("[Altered Reality] enter nearest vehicle:", ok)
+									end
+								end,
+							},
 							{
 								type = "slider",
 								key = "FlySpeed",
@@ -70,7 +94,11 @@ function M.create(opts)
 							},
 							{
 								type = "hint",
-								text = "CFrame mode avoids BodyVelocity lagbacks. Keep Safe Speed on in-game.",
+								text = "Vehicle mode drives Chassis.Root.BodyVelocity while seated. Planes get full 3D thrust.",
+							},
+							{
+								type = "hint",
+								text = "Kicks are usually server position checks. Keep Safe Speed on; avoid Network Owner unless needed.",
 							},
 						},
 					},
@@ -91,6 +119,14 @@ function M.create(opts)
 						items = {
 							{ type = "toggle", key = "ESP", label = "Player ESP", hud = "Players" },
 							{ type = "toggle", key = "ESPSnaplines", label = "Snaplines", hud = "Lines" },
+							{
+								type = "slider",
+								key = "ESPRange",
+								label = "Player ESP Range",
+								min = 25,
+								max = Constants.MAX_ESP_DIST,
+								step = 25,
+							},
 						},
 					},
 					{
@@ -136,6 +172,97 @@ function M.create(opts)
 						title = "WORLD",
 						items = {
 							{ type = "toggle", key = "FullBright", label = "Fullbright", hud = "Bright" },
+						},
+					},
+				},
+			},
+			{
+				label = "Probe",
+				sections = {
+					{
+						title = "LOGGER",
+						items = {
+							{ type = "toggle", key = "RemoteProbeLog", label = "Log Remotes To Console", hud = "ProbeLog" },
+							{
+								type = "button",
+								label = "Install Remote Logger",
+								onClick = function()
+									if probe then
+										probe.installRemoteLogger()
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "List Remotes",
+								onClick = function()
+									if probe then
+										probe.listRemotes()
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "Log Player State",
+								onClick = function()
+									if probe then
+										probe.logPlayerState()
+									end
+								end,
+							},
+							{
+								type = "button",
+								label = "Dump Probe Logs",
+								onClick = function()
+									if probe then
+										probe.dumpLogs()
+									end
+								end,
+							},
+						},
+					},
+					{
+						title = "SAFE PROBES",
+						items = {
+							{
+								type = "hint",
+								text = "These fire real remotes. Use in a safe area — reload probe logs after each test.",
+							},
+							{ type = "button", label = "Probe Fell(0)", onClick = function()
+								if probe then
+									probe.probeFellZero()
+								end
+							end },
+							{ type = "button", label = "Probe Entangle()", onClick = function()
+								if probe then
+									probe.probeEntangle()
+								end
+							end },
+							{ type = "button", label = "Probe Crouch(false)", onClick = function()
+								if probe then
+									probe.probeCrouch()
+								end
+							end },
+							{ type = "button", label = "Scan workspace.Vehicles", onClick = function()
+								if probe then
+									probe.scanVehicles()
+								end
+							end },
+							{ type = "button", label = "Probe Vehicle Horn", onClick = function()
+								if probe then
+									probe.probeVehicleHorn()
+								end
+							end },
+							{ type = "button", label = "Probe Vehicle Exit", onClick = function()
+								if probe then
+									probe.probeVehicleExit()
+								end
+							end },
+							{ type = "button", label = "Probe Tool Reload", onClick = function()
+								if probe then
+									probe.probeToolReload()
+								end
+							end },
 						},
 					},
 				},

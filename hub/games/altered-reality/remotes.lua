@@ -47,16 +47,30 @@ function M.create(opts)
 		return ok, err
 	end
 
-	local function fireGun(hits, tool)
+	local function fireGunSound()
+		local remote = getRemote("Tool_URE")
+		if not remote then
+			return
+		end
+		pcall(function()
+			remote:FireServer(M.scramble(LocalPlayer.UserId, { Sound = "Shoot" }))
+		end)
+	end
+
+	local function fireGun(hits, tool, options)
 		if typeof(hits) ~= "table" or #hits == 0 then
 			return false, "no hits"
 		end
 		if tool and not weapon.consumeAmmo(tool) then
 			return false, "no ammo"
 		end
-		return fireTool({
+		if options and options.legit then
+			fireGunSound()
+		end
+		local ok, err = fireTool({
 			Fire = { tick(), hits },
 		})
+		return ok, err
 	end
 
 	local function reloadGun()

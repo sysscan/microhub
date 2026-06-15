@@ -14,6 +14,9 @@ local UtilLib = require("games/altered-reality/util.lua")
 local WeaponLib = require("games/altered-reality/weapon.lua")
 local RemotesLib = require("games/altered-reality/remotes.lua")
 local TargetsLib = require("games/altered-reality/targets.lua")
+local HooksLib = require("games/altered-reality/hooks.lua")
+local VehiclesLib = require("games/altered-reality/vehicles.lua")
+local ProbeLib = require("games/altered-reality/probe.lua")
 local MovementLib = require("games/altered-reality/movement.lua")
 local CombatLib = require("games/altered-reality/combat.lua")
 local LootLib = require("games/altered-reality/loot.lua")
@@ -68,6 +71,20 @@ function M.run()
 		util = util,
 	})
 
+	local hooks = HooksLib.create({
+		config = Config,
+		constants = Constants,
+		targets = targets,
+		util = util,
+		services = services,
+	})
+
+	local vehicles = VehiclesLib.create({
+		config = Config,
+		constants = Constants,
+		util = util,
+	})
+
 	local movement = MovementLib.create({
 		config = Config,
 		constants = Constants,
@@ -75,6 +92,15 @@ function M.run()
 		runService = RunService,
 		services = services,
 		util = util,
+		vehicles = vehicles,
+	})
+
+	local probe = ProbeLib.create({
+		config = Config,
+		services = services,
+		util = util,
+		vehicles = vehicles,
+		remotes = remotes,
 	})
 
 	local combat = CombatLib.create({
@@ -84,6 +110,7 @@ function M.run()
 		targets = targets,
 		util = util,
 		weapon = weapon,
+		hooks = hooks,
 	})
 
 	local loot = LootLib.create({
@@ -117,6 +144,8 @@ function M.run()
 		constants = Constants,
 		remotes = remotes,
 		automation = automation,
+		vehicles = vehicles,
+		probe = probe,
 		onToggle = function(key, value)
 			if key == "AntiAfk" then
 				if value then
@@ -124,6 +153,20 @@ function M.run()
 				else
 					movement.stopAntiAfk()
 				end
+			elseif key == "RemoteProbeLog" and value and probe then
+				probe.installRemoteLogger()
+			elseif key == "SilentAim" or key == "AimAtHead" or key == "AttackRange" or key == "AimFOV" then
+				if key == "SilentAim" and value then
+					task.spawn(function()
+						for _ = 1, 12 do
+							if hooks.sync() then
+								break
+							end
+							task.wait(0.25)
+						end
+					end)
+				end
+				hooks.invalidateAimCache()
 			end
 		end,
 	})
@@ -147,6 +190,28 @@ function M.run()
 		movement.startAntiAfk()
 	end
 
+	if Config.SilentAim and not hooks.canHook() then
+		warn("[Altered Reality] Silent Aim requires hookfunction or hookmetamethod support")
+	end
+
+	if Config.RemoteProbeLog then
+		task.spawn(function()
+			probe.installRemoteLogger()
+		end)
+	end
+
+	task.spawn(function()
+		if not Config.SilentAim then
+			return
+		end
+		for _ = 1, 24 do
+			if hooks.sync() then
+				break
+			end
+			task.wait(0.25)
+		end
+	end)
+
 	local function unload()
 		for _, connection in connections do
 			pcall(function()
@@ -155,6 +220,7 @@ function M.run()
 		end
 		table.clear(connections)
 		movement.unload()
+		hooks.remove()
 		esp.destroy()
 	end
 
