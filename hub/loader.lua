@@ -180,7 +180,7 @@ local function addBust(url)
 	return url .. sep .. "t=" .. cacheBust()
 end
 
-local function addBust(url)
+local function resolveLatestSha()
 	if resolvedSha then
 		return resolvedSha
 	end
