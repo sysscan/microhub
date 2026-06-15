@@ -22,6 +22,7 @@ local GAMES = {
 		path = "games/deadzone-classic.lua",
 		placeIds = { 3221241066, 17772691665, 86444118656057 },
 	},
+	{ name = "Bloodzone", path = "games/bloodzone.lua", placeIds = { 13955927965 } },
 	{
 		name = "VV Ultimatum",
 		path = "games/vv-ultimatum.lua",
@@ -347,6 +348,9 @@ local function unloadOld()
 	if typeof(genv.__DeadzoneClassicUnload) == "function" then
 		pcall(genv.__DeadzoneClassicUnload)
 	end
+	if typeof(genv.__BloodzoneUnload) == "function" then
+		pcall(genv.__BloodzoneUnload)
+	end
 	genv.__PrisonLifeUnload = nil
 	genv.__GunfightArenaUnload = nil
 	genv.__WarfareUnload = nil
@@ -358,6 +362,9 @@ local function unloadOld()
 	genv.__LumberTycoon2Unload = nil
 	genv.__VVUltimatumUnload = nil
 	genv.__DeadzoneClassicUnload = nil
+	genv.__BloodzoneUnload = nil
+	genv.__BloodzoneBypass = nil
+	genv.__BloodzoneConfig = nil
 	if typeof(genv.Library) == "table" and typeof(genv.Library.Exit) == "function" then
 		pcall(function()
 			genv.Library:Exit()
@@ -405,6 +412,20 @@ local ok, err = pcall(function()
 	loaderUI.setStep("Matched game", entry.name, 0.22)
 	warn("[MicroHub] v" .. VERSION .. " @ " .. sha:sub(1, 7) .. " -> " .. entry.name)
 
+	shared.__MicroHubRequire = hubRequire
+
+	if entry.path == "games/bloodzone.lua" then
+		loaderUI.setStep("Neutralizing client AC", nil, 0.28)
+		pcall(function()
+			local genv = getGenv()
+			genv.__BloodzoneConfig = hubRequire("games/bloodzone/config.lua")
+			hubRequire("games/bloodzone/ac.lua").install({
+				config = genv.__BloodzoneConfig,
+				timeout = 10,
+			})
+		end)
+	end
+
 	loaderUI.setStep("Loading UI framework", nil, 0.38)
 	local juanita = runSource("lib/juanita/Library.lua")
 	if typeof(juanita) ~= "table" then
@@ -419,7 +440,6 @@ local ok, err = pcall(function()
 	end
 	local uiVersion = tostring(ui.version or "?")
 	shared[UI_KEY] = ui
-	shared.__MicroHubRequire = hubRequire
 
 	loaderUI.setStep("Loading " .. entry.name, nil, 0.72)
 	runSource(entry.path)
