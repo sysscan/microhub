@@ -100,10 +100,10 @@ local function httpGet(url)
 end
 
 local function loaderUrls()
-	-- jsdelivr first: raw.githubusercontent.com @main can lag behind the real branch tip.
+	-- GitHub raw first: jsdelivr @main can lag hours behind the branch tip.
 	return {
-		"https://cdn.jsdelivr.net/gh/" .. OWNER .. "/" .. REPO .. "@" .. BRANCH .. "/" .. HUB_DIR .. "/loader.lua",
 		"https://raw.githubusercontent.com/" .. OWNER .. "/" .. REPO .. "/" .. BRANCH .. "/" .. HUB_DIR .. "/loader.lua",
+		"https://cdn.jsdelivr.net/gh/" .. OWNER .. "/" .. REPO .. "@" .. BRANCH .. "/" .. HUB_DIR .. "/loader.lua",
 	}
 end
 
@@ -114,16 +114,29 @@ local function isLoaderSource(source)
 		and source:find("runSource", 1, true)
 end
 
+local function loaderVersion(source)
+	local major, minor, patch = source:match('VERSION%s*=%s*"(%d+)%.(%d+)%.(%d+)"')
+	if not major then
+		return 0
+	end
+	return tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch)
+end
+
 local loaderSource = nil
+local bestVersion = -1
 local failures = {}
 
 for _, url in ipairs(loaderUrls()) do
 	local ok, body = pcall(httpGet, cacheBust(url))
 	if ok and isLoaderSource(body) then
-		loaderSource = body
-		break
+		local version = loaderVersion(body)
+		if version > bestVersion then
+			bestVersion = version
+			loaderSource = body
+		end
+	else
+		table.insert(failures, ok and "invalid loader body" or tostring(body))
 	end
-	table.insert(failures, ok and "invalid loader body" or tostring(body))
 end
 
 if not loaderSource then

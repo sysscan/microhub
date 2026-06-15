@@ -1,6 +1,6 @@
 -- MicroHub loader — fetched at latest commit SHA by bootstrap.lua (or an equivalent bootstrap snippet).
 
-local VERSION = "1.7.0"
+local VERSION = "1.7.1"
 local OWNER = "sysscan"
 local REPO = "microhub"
 local BRANCH = "main"
@@ -201,8 +201,8 @@ end
 local function fetch(path)
 	local sha = resolvedSha or resolveLatestSha()
 	local urls = {
-		jsdelivrUrl(sha, path),
 		rawUrl(sha, path),
+		jsdelivrUrl(sha, path),
 	}
 	local failures = {}
 	for _, url in ipairs(urls) do
@@ -248,9 +248,10 @@ local function runSource(path)
 end
 
 local function findGame(placeId)
+	local needle = tostring(placeId)
 	for _, entry in ipairs(GAMES) do
 		for _, id in ipairs(entry.placeIds) do
-			if tonumber(id) == tonumber(placeId) then
+			if tostring(id) == needle then
 				return entry
 			end
 		end
@@ -331,6 +332,12 @@ local function unloadOld()
 	if typeof(genv.__ShrekBackroomsUnload) == "function" then
 		pcall(genv.__ShrekBackroomsUnload)
 	end
+	if typeof(genv.__POLYZUnload) == "function" then
+		pcall(genv.__POLYZUnload)
+	end
+	if typeof(genv.__AlteredRealityUnload) == "function" then
+		pcall(genv.__AlteredRealityUnload)
+	end
 	if typeof(genv.__LumberTycoon2Unload) == "function" then
 		pcall(genv.__LumberTycoon2Unload)
 	end
@@ -346,6 +353,8 @@ local function unloadOld()
 	genv.__StudIncrementalUnload = nil
 	genv.__SlimeRNGUnload = nil
 	genv.__ShrekBackroomsUnload = nil
+	genv.__POLYZUnload = nil
+	genv.__AlteredRealityUnload = nil
 	genv.__LumberTycoon2Unload = nil
 	genv.__VVUltimatumUnload = nil
 	genv.__DeadzoneClassicUnload = nil

@@ -1,5 +1,5 @@
 --[[
-	Altered Reality — placeId 94570841251512
+	Altered Reality — placeIds 94570841251512
 	Entry point for MicroHub loader. Implementation lives in games/altered-reality/.
 ]]
 
