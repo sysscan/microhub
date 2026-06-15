@@ -122,7 +122,15 @@ local function resolveLatestSha()
 			table.insert(failures, tostring(body))
 		end
 	end
-	error("could not resolve latest GitHub commit: " .. table.concat(failures, " | "), 0)
+	-- GitHub REST is often rate-limited from Roblox/executor IPs; branch refs work on raw + jsdelivr.
+	warn(
+		"[MicroHub] GitHub API unavailable ("
+			.. table.concat(failures, " | ")
+			.. "); using branch ref '"
+			.. BRANCH
+			.. "'"
+	)
+	return BRANCH
 end
 
 local function loaderUrls(sha)
