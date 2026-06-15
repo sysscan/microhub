@@ -42,9 +42,10 @@ function M.create(opts)
 		if #logs > 200 then
 			table.remove(logs)
 		end
-		print(line)
 		warn(line)
 	end
+
+	local toggleLogReadyAt = 0
 
 	local function log(message: string)
 		emit(message, false)
@@ -141,8 +142,9 @@ function M.create(opts)
 			log("Remotes folder missing")
 			return {}
 		end
-		local names = table.create(folder:GetChildCount())
-		for _, child in folder:GetChildren() do
+		local children = folder:GetChildren()
+		local names = table.create(#children)
+		for _, child in children do
 			table.insert(names, child.Name .. " (" .. child.ClassName .. ")")
 			log(child.Name .. " (" .. child.ClassName .. ")")
 		end
@@ -312,6 +314,9 @@ function M.create(opts)
 	end
 
 	local function logToggle(key, value)
+		if tick() < toggleLogReadyAt then
+			return
+		end
 		log("toggle " .. tostring(key) .. "=" .. tostring(value))
 		logMovementSnapshot()
 	end
@@ -383,6 +388,7 @@ function M.create(opts)
 			return
 		end
 		monitorStarted = true
+		toggleLogReadyAt = tick() + 3
 
 		local connections = monitorOpts.connections
 		local runService = monitorOpts.runService
