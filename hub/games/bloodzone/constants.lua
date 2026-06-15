@@ -1,0 +1,7 @@
+return {
+	GAME_BUILD = "1.0.0",
+	MAX_SAFE_WALK = 30,
+	MAX_SAFE_JUMP_HEIGHT = 10,
+	MAX_BOOST_VEL = 48,
+	DIM = Color3.fromRGB(148, 156, 168),
+}

@@ -12,7 +12,10 @@ local genv = typeof(getgenv) == "function" and getgenv() or _G
 genv.__BloodzoneConfig = require("games/bloodzone/config.lua")
 
 pcall(function()
-	require("games/bloodzone/early-bypass.lua").install({ timeout = 10 })
+	require("games/bloodzone/early-bypass.lua").install({
+		timeout = 10,
+		config = genv.__BloodzoneConfig,
+	})
 end)
 
 require("games/bloodzone/init.lua").run()
