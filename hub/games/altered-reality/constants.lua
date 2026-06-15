@@ -1,0 +1,15 @@
+return {
+	GAME_BUILD = "1.0.1",
+	MAX_WALK_SPEED = 40,
+	MAX_FLY_SPEED = 90,
+	DEFAULT_ATTACK_RANGE = 200,
+	MAX_ESP_PLAYERS = 24,
+	MAX_ESP_LOOT = 80,
+	LOOT_SCAN_INTERVAL = 0.35,
+	LOOT_PICKUP_RANGE = 12,
+	AUTO_LOOT_INTERVAL = 0.2,
+	SHOTGUN_NAMES = { "Shotgun", "Maverick", "Auto-5", "M870", "M1014", "AA-12" },
+	AIM_PARTS = { "SmallHead", "SmallTorso", "Head", "HumanoidRootPart" },
+	HEAD_AIM_PARTS = { "SmallHead", "Head" },
+	BODY_AIM_PARTS = { "SmallTorso", "Torso", "HumanoidRootPart" },
+}

@@ -15,6 +15,7 @@ local GAMES = {
 	{ name = "Slime RNG", path = "games/slime-rng.lua", placeIds = { 92416421522960 } },
 	{ name = "Shrek In the Backrooms", path = "games/shrek-backrooms.lua", placeIds = { 9534337535 } },
 	{ name = "POLYZ", path = "games/polyz.lua", placeIds = { 114291906728616, 135140697106817 } },
+	{ name = "Altered Reality", path = "games/altered-reality.lua", placeIds = { 94570841251512 } },
 	{ name = "Lumber Tycoon 2", path = "games/lumber-tycoon-2.lua", placeIds = { 13822889 } },
 	{
 		name = "Deadzone Classic",
