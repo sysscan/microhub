@@ -97,6 +97,7 @@ function M.run()
 
 	local probe = ProbeLib.create({
 		config = Config,
+		constants = Constants,
 		services = services,
 		util = util,
 		vehicles = vehicles,
@@ -147,6 +148,9 @@ function M.run()
 		vehicles = vehicles,
 		probe = probe,
 		onToggle = function(key, value)
+			if probe and Config.ProbeAutoLog then
+				probe.logToggle(key, value)
+			end
 			if key == "AntiAfk" then
 				if value then
 					movement.startAntiAfk()
@@ -155,6 +159,12 @@ function M.run()
 				end
 			elseif key == "RemoteProbeLog" and value and probe then
 				probe.installRemoteLogger()
+			elseif key == "ProbeAutoLog" and value and probe then
+				probe.startAutoMonitor({
+					connections = connections,
+					runService = RunService,
+					localPlayer = LocalPlayer,
+				})
 			elseif key == "SilentAim" or key == "AimAtHead" or key == "AttackRange" or key == "AimFOV" then
 				if key == "SilentAim" and value then
 					task.spawn(function()
@@ -194,10 +204,12 @@ function M.run()
 		warn("[Altered Reality] Silent Aim requires hookfunction or hookmetamethod support")
 	end
 
-	if Config.RemoteProbeLog then
-		task.spawn(function()
-			probe.installRemoteLogger()
-		end)
+	if Config.ProbeAutoLog then
+		probe.startAutoMonitor({
+			connections = connections,
+			runService = RunService,
+			localPlayer = LocalPlayer,
+		})
 	end
 
 	task.spawn(function()

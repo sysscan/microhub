@@ -20,6 +20,7 @@ end
 
 function M.create(opts)
 	local Config = opts.config
+	local Constants = opts.constants
 	local services = opts.services
 	local util = opts.util
 	local vehicles = opts.vehicles
@@ -29,16 +30,23 @@ function M.create(opts)
 	local loggerInstalled = false
 	local hookedFire = {}
 	local hookedInvoke = {}
+	local lastPosition: Vector3? = nil
+	local monitorStarted = false
 
-	local function log(message)
-		local line = string.format("[%.2f] %s", tick(), message)
+	local function emit(message: string, remoteOnly: boolean?)
+		if remoteOnly and not Config.RemoteProbeLog then
+			return
+		end
+		local line = string.format("[AR Probe %.1f] %s", tick(), message)
 		table.insert(logs, 1, line)
-		if #logs > 120 then
+		if #logs > 200 then
 			table.remove(logs)
 		end
-		if Config.RemoteProbeLog then
-			warn("[AR Probe]", message)
-		end
+		print(line)
+	end
+
+	local function log(message: string)
+		emit(message, false)
 	end
 
 	local function getLogs()
@@ -73,7 +81,7 @@ function M.create(opts)
 				for index = 1, packed.n do
 					parts[index] = stringifyArg(packed[index])
 				end
-				log(remote.Name .. ":FireServer(" .. table.concat(parts, ", ") .. ")")
+				emit(remote.Name .. ":FireServer(" .. table.concat(parts, ", ") .. ")", true)
 			end
 			return original(self, ...)
 		end))
@@ -91,7 +99,7 @@ function M.create(opts)
 				for index = 1, packed.n do
 					parts[index] = stringifyArg(packed[index])
 				end
-				log(remote.Name .. ":InvokeServer(" .. table.concat(parts, ", ") .. ")")
+				emit(remote.Name .. ":InvokeServer(" .. table.concat(parts, ", ") .. ")", true)
 			end
 			return original(self, ...)
 		end))
@@ -253,14 +261,166 @@ function M.create(opts)
 		return ok
 	end
 
+	local function getProbeInterval()
+		return math.clamp(
+			tonumber(Config.ProbeLogInterval) or Constants.DEFAULT_PROBE_LOG_INTERVAL,
+			5,
+			60
+		)
+	end
+
+	local function logMovementSnapshot()
+		local root = util.getRoot()
+		local humanoid = util.getHumanoid()
+		if not root then
+			log("snapshot: no character root")
+			return
+		end
+
+		local position = root.Position
+		local velocity = root.AssemblyLinearVelocity
+		local moved = 0
+		if lastPosition then
+			moved = (position - lastPosition).Magnitude
+		end
+		lastPosition = position
+
+		local flags = table.concat({
+			"Fly=" .. tostring(Config.Fly),
+			"FlyMode=" .. tostring(Config.FlyMode),
+			"Speed=" .. tostring(Config.SpeedBoost),
+			"SilentAim=" .. tostring(Config.SilentAim),
+			"AutoShoot=" .. tostring(Config.AutoShoot),
+			"NoClip=" .. tostring(Config.NoClip),
+		}, " ")
+
+		log(string.format(
+			"snapshot pos=(%.0f,%.0f,%.0f) velY=%.1f moved=%.1f walkspeed=%.1f | %s",
+			position.X,
+			position.Y,
+			position.Z,
+			velocity.Y,
+			moved,
+			humanoid and humanoid.WalkSpeed or 0,
+			flags
+		))
+
+		if vehicles and vehicles.isInVehicle() then
+			log("snapshot vehicle: " .. vehicles.describeVehicle(vehicles.getActiveVehicle()))
+		end
+	end
+
+	local function logToggle(key, value)
+		log("toggle " .. tostring(key) .. "=" .. tostring(value))
+		logMovementSnapshot()
+	end
+
+	local function dumpRecentLogs(count: number?)
+		local limit = math.clamp(count or 25, 1, 200)
+		log("--- last " .. tostring(limit) .. " probe lines ---")
+		for index = math.min(#logs, limit), 1, -1 do
+			print(logs[index])
+		end
+		log("--- end probe dump ---")
+	end
+
+	local function runStartupReport()
+		log("=== AC PROBE START (auto) ===")
+		log("Open F9 console — no buttons needed")
+		installRemoteLogger()
+		listRemotes()
+		logPlayerState()
+		scanVehicles()
+		logMovementSnapshot()
+		log("=== toggle features in hub UI; changes print here ===")
+	end
+
+	local function watchPlayerFolder(folder, connections)
+		local values = folder:FindFirstChild("Values")
+		local alive = folder:FindFirstChild("Alive")
+		if not values or not alive then
+			return
+		end
+
+		local watched = { "InVehicle", "Spawned", "Sprinting" }
+		for _, name in watched do
+			local value = values:FindFirstChild(name)
+			if value and value:IsA("ValueBase") then
+				table.insert(
+					connections,
+					value.Changed:Connect(function()
+						log("CHANGED Values." .. name .. "=" .. tostring(value.Value))
+					end)
+				)
+			end
+		end
+
+		local currentVehicle = alive:FindFirstChild("CurrentVehicle")
+		if currentVehicle and currentVehicle:IsA("ValueBase") then
+			table.insert(
+				connections,
+				currentVehicle.Changed:Connect(function()
+					log("CHANGED Alive.CurrentVehicle=" .. tostring(currentVehicle.Value))
+					logPlayerState()
+				end)
+			)
+		end
+	end
+
+	local function startAutoMonitor(monitorOpts)
+		if monitorStarted or Config.ProbeAutoLog ~= true then
+			return
+		end
+		monitorStarted = true
+
+		local connections = monitorOpts.connections
+		local runService = monitorOpts.runService
+		local localPlayer = monitorOpts.localPlayer
+
+		task.spawn(function()
+			services.waitForPlayerFolder(25)
+			runStartupReport()
+			local folder = util.getPlayerFolder()
+			if folder then
+				watchPlayerFolder(folder, connections)
+			end
+		end)
+
+		local lastSnapshotAt = 0
+		table.insert(connections, runService.Heartbeat:Connect(function()
+			local now = tick()
+			if now - lastSnapshotAt < getProbeInterval() then
+				return
+			end
+			lastSnapshotAt = now
+			logMovementSnapshot()
+		end))
+
+		table.insert(connections, localPlayer.CharacterRemoving:Connect(function()
+			log("!!! CHARACTER REMOVING — possible death or kick !!!")
+			logPlayerState()
+			dumpRecentLogs(30)
+		end))
+
+		table.insert(connections, localPlayer.OnTeleport:Connect(function(state)
+			log("!!! ON TELEPORT state=" .. tostring(state) .. " — possible kick !!!")
+			dumpRecentLogs(30)
+		end))
+	end
+
 	return {
 		log = log,
 		getLogs = getLogs,
 		clearLogs = clearLogs,
 		dumpLogs = dumpLogs,
+		dumpRecentLogs = dumpRecentLogs,
 		listRemotes = listRemotes,
 		logPlayerState = logPlayerState,
+		logMovementSnapshot = logMovementSnapshot,
+		logToggle = logToggle,
 		installRemoteLogger = installRemoteLogger,
+		runStartupReport = runStartupReport,
+		startAutoMonitor = startAutoMonitor,
 		probeFellZero = probeFellZero,
 		probeEntangle = probeEntangle,
 		probeCrouch = probeCrouch,

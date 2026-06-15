@@ -180,89 +180,22 @@ function M.create(opts)
 				label = "Probe",
 				sections = {
 					{
-						title = "LOGGER",
-						items = {
-							{ type = "toggle", key = "RemoteProbeLog", label = "Log Remotes To Console", hud = "ProbeLog" },
-							{
-								type = "button",
-								label = "Install Remote Logger",
-								onClick = function()
-									if probe then
-										probe.installRemoteLogger()
-									end
-								end,
-							},
-							{
-								type = "button",
-								label = "List Remotes",
-								onClick = function()
-									if probe then
-										probe.listRemotes()
-									end
-								end,
-							},
-							{
-								type = "button",
-								label = "Log Player State",
-								onClick = function()
-									if probe then
-										probe.logPlayerState()
-									end
-								end,
-							},
-							{
-								type = "button",
-								label = "Dump Probe Logs",
-								onClick = function()
-									if probe then
-										probe.dumpLogs()
-									end
-								end,
-							},
-						},
-					},
-					{
-						title = "SAFE PROBES",
+						title = "AUTO CONSOLE LOG",
 						items = {
 							{
 								type = "hint",
-								text = "These fire real remotes. Use in a safe area — reload probe logs after each test.",
+								text = "Everything prints to F9 automatically — no buttons needed. Toggle features in other tabs; each change logs here.",
 							},
-							{ type = "button", label = "Probe Fell(0)", onClick = function()
-								if probe then
-									probe.probeFellZero()
-								end
-							end },
-							{ type = "button", label = "Probe Entangle()", onClick = function()
-								if probe then
-									probe.probeEntangle()
-								end
-							end },
-							{ type = "button", label = "Probe Crouch(false)", onClick = function()
-								if probe then
-									probe.probeCrouch()
-								end
-							end },
-							{ type = "button", label = "Scan workspace.Vehicles", onClick = function()
-								if probe then
-									probe.scanVehicles()
-								end
-							end },
-							{ type = "button", label = "Probe Vehicle Horn", onClick = function()
-								if probe then
-									probe.probeVehicleHorn()
-								end
-							end },
-							{ type = "button", label = "Probe Vehicle Exit", onClick = function()
-								if probe then
-									probe.probeVehicleExit()
-								end
-							end },
-							{ type = "button", label = "Probe Tool Reload", onClick = function()
-								if probe then
-									probe.probeToolReload()
-								end
-							end },
+							{ type = "toggle", key = "ProbeAutoLog", label = "Auto AC Logging", hud = "Probe" },
+							{ type = "toggle", key = "RemoteProbeLog", label = "Log Remote Fires", hud = "RLog" },
+							{
+								type = "slider",
+								key = "ProbeLogInterval",
+								label = "Snapshot Interval (sec)",
+								min = 5,
+								max = 60,
+								step = 5,
+							},
 						},
 					},
 				},

@@ -17,6 +17,8 @@ return {
 	VehicleFlyAutoEnter = true,
 	VehicleFlyEnterRange = 25,
 	RemoteProbeLog = true,
+	ProbeAutoLog = true,
+	ProbeLogInterval = 10,
 	FullBright = false,
 	AntiAfk = true,
 
