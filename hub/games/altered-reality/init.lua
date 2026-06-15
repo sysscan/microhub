@@ -160,6 +160,12 @@ function M.run()
 				end
 			elseif key == "SpeedBoost" then
 				movement.setSpeedBoost(value == true)
+			elseif key == "SpeedBoostSafe" or key == "WalkSpeed" then
+				if Config.SpeedBoost then
+					movement.setSpeedBoost(true)
+				end
+			elseif key == "LootESPFilter" or key == "LootESPRange" or key == "LootESPMaxItems" or key == "AutoLootFilter" then
+				loot.clearLootCache()
 			elseif key == "FullBright" then
 				movement.setFullBright()
 			elseif key == "RemoteProbeLog" and value and probe then

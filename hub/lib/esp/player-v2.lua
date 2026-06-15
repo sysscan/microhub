@@ -94,7 +94,7 @@ function M.create(opts: {
 		if not char.Parent or not root.Parent then
 			return nil
 		end
-		local head = char:FindFirstChild("SmallHead") or char:FindFirstChild("Head")
+		local head = char:FindFirstChild("SmallHead", true) or char:FindFirstChild("Head", true)
 		if head and head:IsA("BasePart") then
 			local topPos = head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.4, 0)
 			local botPos = root.Position - Vector3.new(0, 2.8, 0)

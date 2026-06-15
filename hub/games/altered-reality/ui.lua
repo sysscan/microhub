@@ -46,6 +46,7 @@ function M.create(opts)
 						title = "SPEED",
 						items = {
 							{ type = "toggle", key = "SpeedBoost", label = "Speed Boost", hud = "Speed" },
+							{ type = "toggle", key = "SpeedBoostSafe", label = "Safe Speed Cap (28)", hud = "SafeSpd" },
 							{ type = "slider", key = "WalkSpeed", label = "Walk Speed", min = 8, max = Constants.MAX_WALK_SPEED, step = 1 },
 							{ type = "toggle", key = "AlwaysSprint", label = "Always Sprint", hud = "Sprint" },
 							{ type = "toggle", key = "InfiniteStamina", label = "Infinite Stamina", hud = "Stamina" },
@@ -184,7 +185,7 @@ function M.create(opts)
 						items = {
 							{
 								type = "hint",
-								text = "Logs print to F9 Warning + Output tabs automatically. Re-run bootstrap if build is not 1.0.13.",
+								text = "Logs print to F9 Warning + Output tabs automatically. Re-run bootstrap if build is not 1.0.14.",
 							},
 							{ type = "toggle", key = "ProbeAutoLog", label = "Auto AC Logging", hud = "Probe" },
 							{ type = "toggle", key = "RemoteProbeLog", label = "Log Remote Fires", hud = "RLog" },

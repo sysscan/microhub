@@ -235,7 +235,11 @@ function M.create(opts)
 	end
 
 	local function getBoostWalkSpeed()
-		return math.clamp(tonumber(Config.WalkSpeed) or Constants.DEFAULT_WALK_SPEED, 6, Constants.MAX_WALK_SPEED)
+		local speed = tonumber(Config.WalkSpeed) or Constants.DEFAULT_WALK_SPEED
+		if Config.SpeedBoostSafe ~= false then
+			speed = math.min(speed, Constants.SAFE_WALK_SPEED or Constants.DEFAULT_WALK_SPEED)
+		end
+		return math.clamp(speed, 6, Constants.MAX_WALK_SPEED)
 	end
 
 	local function applyFlyWalkSpeed()

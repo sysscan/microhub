@@ -104,7 +104,7 @@ function M.create(opts)
 			if not isEnemyPlayer(player) then
 				continue
 			end
-			local character = player.Character
+			local character = util.getPlayerCharacter(player)
 			if not isEnemyAlive(character, player) then
 				continue
 			end

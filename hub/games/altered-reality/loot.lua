@@ -44,6 +44,11 @@ function M.create(opts)
 
 	buildAmmoNames()
 
+	local function clearLootCache()
+		table.clear(lootCaches)
+		table.clear(lootCacheAt)
+	end
+
 	local function getLootEspRange()
 		return math.clamp(tonumber(Config.LootESPRange) or Constants.DEFAULT_LOOT_ESP_RANGE, 25, Constants.MAX_LOOT_ESP_RANGE)
 	end
@@ -103,9 +108,33 @@ function M.create(opts)
 		return "Other"
 	end
 
+	local function attributeMatchesFilter(model, filter)
+		local attributeCategory = model and model:GetAttribute("Category")
+		if not attributeCategory then
+			return false
+		end
+		local attr = tostring(attributeCategory)
+		if attr == filter then
+			return true
+		end
+		local aliases = FILTER_ALIASES[filter]
+		if aliases then
+			for _, aliasName in aliases do
+				if attr == aliasName then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
 	local function matchesFilter(category, alias, model, filterOverride)
 		local filter = filterOverride or normalizeFilter()
 		if filter == "All" then
+			return true
+		end
+
+		if attributeMatchesFilter(model, filter) then
 			return true
 		end
 
@@ -115,7 +144,13 @@ function M.create(opts)
 		end
 
 		if filter == "Guns" then
-			return resolved == "Gun" or resolved == "Primary" or resolved == "Secondary"
+			if resolved == "Gun" or resolved == "Primary" or resolved == "Secondary" then
+				return true
+			end
+			local gunData = services.gunData
+			if gunData and gunData[tostring(alias)] then
+				return true
+			end
 		end
 
 		local aliases = FILTER_ALIASES[filter]
@@ -134,6 +169,58 @@ function M.create(opts)
 		return Constants.LOOT_ESP_COLORS[category] or Constants.LOOT_ESP_COLORS.Other
 	end
 
+	local function findLootModel(instance)
+		local current = instance
+		while current and current ~= workspace do
+			if current:IsA("Model") then
+				local id = current:GetAttribute("Id")
+				local alias = current:GetAttribute("Alias")
+				if id and alias then
+					return current, id, alias
+				end
+			end
+			current = current.Parent
+		end
+		return nil
+	end
+
+	local function scanContainer(container, lootCache, seenIds, origin, maxRange, filterOverride)
+		if not container then
+			return
+		end
+		for _, descendant in container:GetDescendants() do
+			if not descendant:IsA("Model") and not descendant:IsA("BasePart") then
+				continue
+			end
+			local model, id, alias = findLootModel(descendant)
+			if not model or seenIds[id] then
+				continue
+			end
+			local category = categoryFromAlias(alias, model)
+			if not matchesFilter(category, alias, model, filterOverride) then
+				continue
+			end
+			local part = descendant:IsA("BasePart") and descendant
+				or model:FindFirstChildWhichIsA("BasePart", true)
+			if not part then
+				continue
+			end
+			local distance = origin and (origin - part.Position).Magnitude or 0
+			if origin and distance > maxRange then
+				continue
+			end
+			seenIds[id] = true
+			table.insert(lootCache, {
+				id = id,
+				name = tostring(alias),
+				part = part,
+				category = category,
+				distance = distance,
+				color = getLootColor(category),
+			})
+		end
+	end
+
 	local function scanLoot(force, options)
 		options = options or {}
 		local signature = getScanSignature(options)
@@ -145,58 +232,15 @@ function M.create(opts)
 		local lootCache = {}
 		lootCaches[signature] = lootCache
 
-		local chunks = workspace:FindFirstChild("Chunks")
-		if not chunks then
-			return lootCache
-		end
-
 		local root = util.getRoot()
 		local origin = root and root.Position
 		local maxRange = options.range or getLootEspRange()
 		local maxItems = options.maxItems or getLootEspMaxItems()
 		local filterOverride = options.filter
+		local seenIds = {}
 
-		for _, chunk in chunks:GetChildren() do
-			for _, descendant in chunk:GetDescendants() do
-				if descendant:IsA("Model") or descendant:IsA("BasePart") then
-					local model
-					if descendant:IsA("Model") then
-						model = descendant
-					else
-						model = descendant.Parent
-					end
-					if not model or not model:IsA("Model") then
-						continue
-					end
-					local id = model:GetAttribute("Id")
-					local alias = model:GetAttribute("Alias")
-					if id and alias then
-						local category = categoryFromAlias(alias, model)
-						if matchesFilter(category, alias, model, filterOverride) then
-							local part
-							if descendant:IsA("BasePart") then
-								part = descendant
-							else
-								part = model:FindFirstChildWhichIsA("BasePart", true)
-							end
-							if part then
-								local distance = origin and (origin - part.Position).Magnitude or 0
-								if not origin or distance <= maxRange then
-									table.insert(lootCache, {
-										id = id,
-										name = tostring(alias),
-										part = part,
-										category = category,
-										distance = distance,
-										color = getLootColor(category),
-									})
-								end
-							end
-						end
-					end
-				end
-			end
-		end
+		scanContainer(workspace:FindFirstChild("Chunks"), lootCache, seenIds, origin, maxRange, filterOverride)
+		scanContainer(workspace:FindFirstChild("Corpses"), lootCache, seenIds, origin, maxRange, filterOverride)
 
 		if origin then
 			table.sort(lootCache, function(a, b)
@@ -213,6 +257,7 @@ function M.create(opts)
 
 	return {
 		scanLoot = scanLoot,
+		clearLootCache = clearLootCache,
 		categoryFromAlias = categoryFromAlias,
 		matchesFilter = matchesFilter,
 		getLootEspRange = getLootEspRange,
