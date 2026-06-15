@@ -18,6 +18,7 @@ local MovementLib = require("games/polyz/movement.lua")
 local WeaponLib = require("games/polyz/weapon.lua")
 local HooksLib = require("games/polyz/hooks.lua")
 local DebugLib = require("games/polyz/debug.lua")
+local LobbyLib = require("games/polyz/lobby.lua")
 local UILibDef = require("games/polyz/ui.lua")
 local BootstrapLib = require("games/polyz/bootstrap.lua")
 
@@ -74,6 +75,15 @@ function M.run()
 		localPlayer = LocalPlayer,
 	})
 
+	local lobby = LobbyLib.create({
+		config = Config,
+		constants = Constants,
+		localPlayer = LocalPlayer,
+		replicatedStorage = ReplicatedStorage,
+		util = util,
+		loops = _loopHelpers,
+	})
+
 	local hooks = HooksLib.create({
 		config = Config,
 		constants = Constants,
@@ -104,6 +114,7 @@ function M.run()
 		config = Config,
 		uiLib = UILib,
 		constants = Constants,
+		lobby = lobby,
 		onChange = function(key)
 			if key == "TargetMode" or key == "AimAtHead" or key == "AttackRange" or key == "AimFOV" then
 				hooks.invalidateAimCache(true)
@@ -141,6 +152,13 @@ function M.run()
 				else
 					movement.stopAntiAfk()
 				end
+			elseif
+				key == "AutoOpenGunCrates"
+				or key == "AutoOpenPetCrates"
+				or key == "AutoOpenCamoCrates"
+				or key == "AutoOpenOutfitCrates"
+			then
+				lobby.onAutoToggleChanged()
 			end
 		end,
 	})
@@ -184,6 +202,7 @@ function M.run()
 		movement.unload()
 		combat.unload()
 		esp.destroy()
+		lobby.unload()
 	end
 
 	local genv = typeof(getgenv) == "function" and getgenv() or _G

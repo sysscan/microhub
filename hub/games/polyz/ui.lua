@@ -4,11 +4,18 @@ function M.create(opts)
 	local Config = opts.config
 	local UILib = opts.uiLib
 	local Constants = opts.constants
+	local lobby = opts.lobby
 	local onToggle = opts.onToggle
 	local onChange = opts.onChange
 
-	if not Config or not UILib or not Constants then
-		error("[POLYZ] ui.create missing config, uiLib, or constants", 0)
+	if not Config or not UILib or not Constants or not lobby then
+		error("[POLYZ] ui.create missing config, uiLib, constants, or lobby", 0)
+	end
+
+	local camoGunOptions = lobby.getCamoGunOptions()
+	local camoSelectOptions = {}
+	for _, gunName in camoGunOptions do
+		table.insert(camoSelectOptions, gunName)
 	end
 
 	UILib.create({
@@ -145,6 +152,125 @@ function M.create(opts)
 						items = {
 							{ type = "toggle", key = "AntiAfk", label = "Anti AFK", hud = "AFK" },
 							{ type = "toggle", key = "ShowHUD", label = "Module HUD", hud = nil },
+						},
+					},
+				},
+			},
+			{
+				label = "Lobby",
+				sections = {
+					{
+						title = "CRATE COUNTS",
+						items = {
+							{
+								type = "hint",
+								text = "Lobby-only. Opens call game remotes directly (no crate animations).",
+							},
+							{ type = "button", label = "Log Crate Counts", onClick = lobby.logCrateCounts },
+							{ type = "button", label = "Log Inventory Summary", onClick = lobby.logInventory },
+						},
+					},
+					{
+						title = "GUN CRATES",
+						items = {
+							{
+								type = "select",
+								key = "GunCrateBatch",
+								label = "Open Batch",
+								options = Constants.GUN_CRATE_BATCHES,
+							},
+							{
+								type = "button",
+								label = "Open Gun Crates Now",
+								onClick = function()
+									lobby.openGunCrate()
+								end,
+							},
+							{
+								type = "toggle",
+								key = "AutoOpenGunCrates",
+								label = "Auto Open Gun Crates",
+								hud = "GunCrate",
+							},
+						},
+					},
+					{
+						title = "PET CRATES",
+						items = {
+							{
+								type = "select",
+								key = "PetCrateBatch",
+								label = "Open Batch",
+								options = Constants.PET_CRATE_BATCHES,
+							},
+							{ type = "button", label = "Log Pet Odds", onClick = lobby.logPetOdds },
+							{
+								type = "button",
+								label = "Open Pet Crates Now",
+								onClick = function()
+									lobby.openPetCrate()
+								end,
+							},
+							{
+								type = "toggle",
+								key = "AutoOpenPetCrates",
+								label = "Auto Open Pet Crates",
+								hud = "PetCrate",
+							},
+						},
+					},
+					{
+						title = "CAMO CRATES",
+						items = {
+							{
+								type = "select",
+								key = "CamoRollGun",
+								label = "Roll Gun",
+								options = camoSelectOptions,
+							},
+							{
+								type = "button",
+								label = "Open Camo Crate Now",
+								onClick = function()
+									lobby.openCamoCrate()
+								end,
+							},
+							{
+								type = "toggle",
+								key = "AutoOpenCamoCrates",
+								label = "Auto Open Camo Crates",
+								hud = "CamoCrate",
+							},
+						},
+					},
+					{
+						title = "OUTFIT CRATES",
+						items = {
+							{
+								type = "select",
+								key = "OutfitRollType",
+								label = "Roll Category",
+								options = Constants.OUTFIT_ROLL_TYPES,
+							},
+							{
+								type = "select",
+								key = "OutfitCrateBatch",
+								label = "Open Batch",
+								options = Constants.OUTFIT_CRATE_BATCHES,
+							},
+							{
+								type = "button",
+								label = "Open Outfit Crates Now",
+								onClick = function()
+									lobby.openOutfitCrate()
+								end,
+							},
+							{
+								type = "toggle",
+								key = "AutoOpenOutfitCrates",
+								label = "Auto Open Outfit Crates",
+								hud = "OutfitCrate",
+							},
 						},
 					},
 				},

@@ -40,4 +40,14 @@ return {
 	PlayerESP = false,
 	ShowEnemyHealth = true,
 	DebugRemotes = false,
+
+	AutoOpenGunCrates = false,
+	AutoOpenPetCrates = false,
+	AutoOpenCamoCrates = false,
+	AutoOpenOutfitCrates = false,
+	GunCrateBatch = 1,
+	PetCrateBatch = 1,
+	OutfitCrateBatch = 1,
+	CamoRollGun = "Random",
+	OutfitRollType = "Random",
 }
