@@ -184,7 +184,7 @@ function M.create(opts)
 						items = {
 							{
 								type = "hint",
-								text = "Logs print to F9 Warning + Output tabs automatically. Re-run bootstrap if build is not 1.0.9.",
+								text = "Logs print to F9 Warning + Output tabs automatically. Re-run bootstrap if build is not 1.0.13.",
 							},
 							{ type = "toggle", key = "ProbeAutoLog", label = "Auto AC Logging", hud = "Probe" },
 							{ type = "toggle", key = "RemoteProbeLog", label = "Log Remote Fires", hud = "RLog" },

@@ -4,7 +4,7 @@ return {
 	CombatInterval = 0.08,
 
 	SpeedBoost = false,
-	WalkSpeed = 22,
+	WalkSpeed = 28,
 	AlwaysSprint = false,
 	InfiniteStamina = false,
 	NoClip = false,

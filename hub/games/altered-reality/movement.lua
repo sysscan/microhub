@@ -36,11 +36,12 @@ function M.create(opts)
 	local function needsMovementTick()
 		return Config.Fly
 			or Config.NoClip
-			or Config.SpeedBoost
 			or Config.AlwaysSprint
 			or Config.InfiniteStamina
-			or Config.FullBright
 	end
+
+	local speedStepName = "MicroHubARSpeed"
+	local speedStepBound = false
 
 	local function captureDefaults(humanoid)
 		local character = LocalPlayer.Character
@@ -233,20 +234,56 @@ function M.create(opts)
 		end
 	end
 
-	local function applySpeed()
+	local function getBoostWalkSpeed()
+		return math.clamp(tonumber(Config.WalkSpeed) or Constants.DEFAULT_WALK_SPEED, 6, Constants.MAX_WALK_SPEED)
+	end
+
+	local function applyFlyWalkSpeed()
 		local humanoid = getHumanoid()
-		if not humanoid then
-			return
-		end
-		if Config.Fly then
+		if humanoid and Config.Fly then
 			humanoid.WalkSpeed = 0
+		end
+	end
+
+	local function bindSpeedStep()
+		if speedStepBound then
 			return
 		end
-		if Config.SpeedBoost then
-			captureDefaults(humanoid)
-			humanoid.WalkSpeed = math.clamp(tonumber(Config.WalkSpeed) or 22, 6, Constants.MAX_WALK_SPEED)
+		speedStepBound = true
+		RunService:BindToRenderStep(speedStepName, Enum.RenderPriority.Last.Value, function()
+			if not Config.SpeedBoost or Config.Fly then
+				return
+			end
+			local humanoid = getHumanoid()
+			if humanoid then
+				humanoid.WalkSpeed = getBoostWalkSpeed()
+			end
+		end)
+	end
+
+	local function unbindSpeedStep()
+		if not speedStepBound then
+			return
+		end
+		speedStepBound = false
+		pcall(function()
+			RunService:UnbindFromRenderStep(speedStepName)
+		end)
+	end
+
+	local function setSpeedBoost(enabled)
+		if enabled then
+			local humanoid = getHumanoid()
+			if humanoid then
+				captureDefaults(humanoid)
+			end
+			bindSpeedStep()
 		else
-			restoreHumanoidStats(humanoid)
+			unbindSpeedStep()
+			local humanoid = getHumanoid()
+			if humanoid then
+				restoreHumanoidStats(humanoid)
+			end
 		end
 	end
 
@@ -355,11 +392,13 @@ function M.create(opts)
 		setNoClip(Config.NoClip == true or Config.Fly == true)
 		if not Config.Fly then
 			clearFly()
-			applySpeed()
 		else
-			applySpeed()
+			applyFlyWalkSpeed()
 		end
 		applyStamina()
+	end
+
+	local function setFullBright()
 		applyFullBright()
 	end
 
@@ -368,6 +407,7 @@ function M.create(opts)
 		setNoClip(false)
 		restoreCollision()
 		clearFly()
+		unbindSpeedStep()
 		Config.FullBright = false
 		applyFullBright()
 		local humanoid = getHumanoid()
@@ -381,6 +421,8 @@ function M.create(opts)
 	return {
 		tickMovement = tickMovement,
 		tickFly = tickFly,
+		setSpeedBoost = setSpeedBoost,
+		setFullBright = setFullBright,
 		startAntiAfk = startAntiAfk,
 		stopAntiAfk = stopAntiAfk,
 		unload = unload,

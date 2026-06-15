@@ -15,10 +15,8 @@ function M.create(opts)
 	local function anyMovementEnabled()
 		return Config.Fly
 			or Config.NoClip
-			or Config.SpeedBoost
 			or Config.AlwaysSprint
 			or Config.InfiniteStamina
-			or Config.FullBright
 	end
 
 	local function anyCombatEnabled()

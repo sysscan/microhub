@@ -158,6 +158,10 @@ function M.run()
 				else
 					movement.stopAntiAfk()
 				end
+			elseif key == "SpeedBoost" then
+				movement.setSpeedBoost(value == true)
+			elseif key == "FullBright" then
+				movement.setFullBright()
 			elseif key == "RemoteProbeLog" and value and probe then
 				probe.installRemoteLogger()
 			elseif key == "ProbeAutoLog" and value and probe then
@@ -199,6 +203,14 @@ function M.run()
 
 	if Config.AntiAfk then
 		movement.startAntiAfk()
+	end
+
+	if Config.SpeedBoost then
+		movement.setSpeedBoost(true)
+	end
+
+	if Config.FullBright then
+		movement.setFullBright()
 	end
 
 	if Config.SilentAim and not hooks.canHook() then
