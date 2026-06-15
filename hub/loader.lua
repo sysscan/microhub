@@ -180,38 +180,11 @@ local function addBust(url)
 	return url .. sep .. "t=" .. cacheBust()
 end
 
-local function extractSha(body)
-	return body:match('"sha"%s*:%s*"([0-9a-fA-F]+)"')
-		or body:match('"object"%s*:%s*{%s*"sha"%s*:%s*"([0-9a-fA-F]+)"')
-end
-
-local function resolveLatestSha()
-	local urls = {
-		"https://api.github.com/repos/" .. OWNER .. "/" .. REPO .. "/commits/" .. BRANCH,
-		"https://api.github.com/repos/" .. OWNER .. "/" .. REPO .. "/git/ref/heads/" .. BRANCH,
-	}
-	local failures = {}
-	for _, url in ipairs(urls) do
-		local ok, body = pcall(httpGet, addBust(url))
-		if ok then
-			local sha = extractSha(body)
-			if sha and #sha >= 7 then
-				resolvedSha = sha
-				return sha
-			end
-			table.insert(failures, "no sha from " .. url)
-		else
-			table.insert(failures, tostring(body))
-		end
+local function addBust(url)
+	if resolvedSha then
+		return resolvedSha
 	end
-	-- GitHub REST is often rate-limited from Roblox/executor IPs; branch refs work on raw + jsdelivr.
-	warn(
-		"[MicroHub] GitHub API unavailable ("
-			.. table.concat(failures, " | ")
-			.. "); using branch ref '"
-			.. BRANCH
-			.. "'"
-	)
+	-- Skip GitHub REST: rate-limited from Roblox/executor IPs; branch refs work on CDN mirrors.
 	resolvedSha = BRANCH
 	return BRANCH
 end
@@ -227,8 +200,8 @@ end
 local function fetch(path)
 	local sha = resolvedSha or resolveLatestSha()
 	local urls = {
-		rawUrl(sha, path),
 		jsdelivrUrl(sha, path),
+		rawUrl(sha, path),
 	}
 	local failures = {}
 	for _, url in ipairs(urls) do
