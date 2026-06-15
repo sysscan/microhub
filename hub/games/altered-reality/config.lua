@@ -9,7 +9,9 @@ return {
 	InfiniteStamina = false,
 	NoClip = false,
 	Fly = false,
-	FlySpeed = 50,
+	FlyMode = "CFrame",
+	FlySpeed = 28,
+	FlySafeSpeed = true,
 	FullBright = false,
 	AntiAfk = true,
 
@@ -20,12 +22,19 @@ return {
 	AimFOV = 220,
 	ShowAimFOV = false,
 
-	PlayerESP = false,
-	PlayerESPBoxes = false,
+	ESP = false,
 	ESPSnaplines = false,
+
 	LootESP = false,
-	ShowPlayerHealth = true,
+	LootESPRange = 400,
+	LootESPMaxItems = 80,
+	LootESPShowDistance = true,
+	LootESPShowCategory = false,
+	LootESPUseColors = true,
+	LootESPTextSize = 13,
+	LootESPFilter = "All",
 
 	AutoLoot = false,
 	AutoLootRange = 12,
+	AutoLootFilter = "All",
 }

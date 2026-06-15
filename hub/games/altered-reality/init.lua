@@ -16,6 +16,7 @@ local RemotesLib = require("games/altered-reality/remotes.lua")
 local TargetsLib = require("games/altered-reality/targets.lua")
 local MovementLib = require("games/altered-reality/movement.lua")
 local CombatLib = require("games/altered-reality/combat.lua")
+local LootLib = require("games/altered-reality/loot.lua")
 local ESPLib = require("games/altered-reality/esp.lua")
 local AutomationLib = require("games/altered-reality/automation.lua")
 local UILibDef = require("games/altered-reality/ui.lua")
@@ -85,12 +86,20 @@ function M.run()
 		weapon = weapon,
 	})
 
+	local loot = LootLib.create({
+		config = Config,
+		constants = Constants,
+		services = services,
+		util = util,
+	})
+
 	local esp = ESPLib.create({
 		config = Config,
 		constants = Constants,
 		camera = Camera,
+		localPlayer = LocalPlayer,
 		canDraw = canDraw,
-		targets = targets,
+		loot = loot,
 	})
 
 	local automation = AutomationLib.create({
@@ -99,7 +108,7 @@ function M.run()
 		services = services,
 		util = util,
 		remotes = remotes,
-		esp = esp,
+		loot = loot,
 	})
 
 	UILibDef.create({

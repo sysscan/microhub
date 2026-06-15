@@ -26,7 +26,7 @@ function M.create(opts)
 	end
 
 	local function anyEspEnabled()
-		return Config.PlayerESP or Config.PlayerESPBoxes or Config.ESPSnaplines or Config.LootESP
+		return Config.ESP or Config.LootESP
 	end
 
 	table.insert(connections, RunService.Heartbeat:Connect(function(dt)
@@ -47,7 +47,10 @@ function M.create(opts)
 		end
 	end))
 
-	table.insert(connections, RunService.RenderStepped:Connect(function()
+	table.insert(connections, RunService.RenderStepped:Connect(function(dt)
+		if Config.Fly then
+			movement.tickFly(dt)
+		end
 		if anyEspEnabled() or Config.AutoLoot then
 			esp.tick(Config.AutoLoot)
 		end

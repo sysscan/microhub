@@ -53,7 +53,25 @@ function M.create(opts)
 						items = {
 							{ type = "toggle", key = "NoClip", label = "NoClip", hud = "Clip" },
 							{ type = "toggle", key = "Fly", label = "Fly", hud = "Fly" },
-							{ type = "slider", key = "FlySpeed", label = "Fly Speed", min = 20, max = Constants.MAX_FLY_SPEED, step = 5 },
+							{
+								type = "select",
+								key = "FlyMode",
+								label = "Fly Mode",
+								options = Constants.FLY_MODES,
+							},
+							{ type = "toggle", key = "FlySafeSpeed", label = "Safe Speed Cap", hud = "SafeFly" },
+							{
+								type = "slider",
+								key = "FlySpeed",
+								label = "Fly Speed",
+								min = 8,
+								max = Constants.MAX_FLY_SPEED,
+								step = 1,
+							},
+							{
+								type = "hint",
+								text = "CFrame mode avoids BodyVelocity lagbacks. Keep Safe Speed on in-game.",
+							},
 						},
 					},
 					{
@@ -71,11 +89,47 @@ function M.create(opts)
 					{
 						title = "ESP",
 						items = {
-							{ type = "toggle", key = "PlayerESP", label = "Player ESP", hud = "Players" },
-							{ type = "toggle", key = "PlayerESPBoxes", label = "Player Boxes", hud = "Boxes" },
-							{ type = "toggle", key = "ESPSnaplines", label = "Player Snaplines", hud = "Lines" },
-							{ type = "toggle", key = "ShowPlayerHealth", label = "Show Player HP", hud = "HP" },
+							{ type = "toggle", key = "ESP", label = "Player ESP", hud = "Players" },
+							{ type = "toggle", key = "ESPSnaplines", label = "Snaplines", hud = "Lines" },
+						},
+					},
+					{
+						title = "LOOT ESP",
+						items = {
 							{ type = "toggle", key = "LootESP", label = "Loot ESP", hud = "Loot" },
+							{
+								type = "slider",
+								key = "LootESPRange",
+								label = "Loot ESP Range",
+								min = 25,
+								max = Constants.MAX_LOOT_ESP_RANGE,
+								step = 25,
+							},
+							{
+								type = "slider",
+								key = "LootESPMaxItems",
+								label = "Max Loot Labels",
+								min = 10,
+								max = Constants.MAX_ESP_LOOT,
+								step = 5,
+							},
+							{ type = "toggle", key = "LootESPShowDistance", label = "Show Distance", hud = "Dist" },
+							{ type = "toggle", key = "LootESPShowCategory", label = "Show Category", hud = "Cat" },
+							{ type = "toggle", key = "LootESPUseColors", label = "Category Colors", hud = "Colors" },
+							{
+								type = "slider",
+								key = "LootESPTextSize",
+								label = "Label Size",
+								min = 10,
+								max = 20,
+								step = 1,
+							},
+							{
+								type = "select",
+								key = "LootESPFilter",
+								label = "Loot Filter",
+								options = Constants.LOOT_FILTER_OPTIONS,
+							},
 						},
 					},
 					{
@@ -94,6 +148,12 @@ function M.create(opts)
 						items = {
 							{ type = "toggle", key = "AutoLoot", label = "Auto Pickup Loot", hud = "AutoLoot" },
 							{ type = "slider", key = "AutoLootRange", label = "Pickup Range", min = 4, max = 40, step = 1 },
+							{
+								type = "select",
+								key = "AutoLootFilter",
+								label = "Pickup Filter",
+								options = Constants.LOOT_FILTER_OPTIONS,
+							},
 							{
 								type = "hint",
 								text = "Uses PickupLoot remote when spawned in-world.",

@@ -100,25 +100,58 @@ function M.create(opts)
 		end)
 	end
 
-	local function destroyFly()
+	local function zeroVelocity(root)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+
+	local function prepareFlight(root)
+		if typeof(sethiddenproperty) == "function" then
+			pcall(function()
+				sethiddenproperty(LocalPlayer, "SimulationRadius", 112412400000)
+				sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 112412400000)
+			end)
+		end
+		pcall(function()
+			if root:GetNetworkOwner() ~= LocalPlayer then
+				root:SetNetworkOwner(LocalPlayer)
+			end
+		end)
+		zeroVelocity(root)
+	end
+
+	local function clearFly()
+		local root = getRoot()
+		local humanoid = getHumanoid()
 		if flyVelocity then
 			flyVelocity:Destroy()
 			flyVelocity = nil
 		end
+		if root then
+			local existing = root:FindFirstChild("MicroHubFly")
+			if existing then
+				existing:Destroy()
+			end
+			zeroVelocity(root)
+		end
+		if humanoid then
+			humanoid.PlatformStand = false
+		end
 	end
 
-	local function applyFly()
-		local root = getRoot()
-		if not root then
-			return
+	local function getFlySpeed()
+		local speed = tonumber(Config.FlySpeed) or Constants.SAFE_FLY_SPEED
+		if Config.FlySafeSpeed then
+			return math.clamp(speed, 8, Constants.SAFE_FLY_SPEED)
 		end
-		if not flyVelocity then
-			flyVelocity = Instance.new("BodyVelocity")
-			flyVelocity.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-			flyVelocity.Velocity = Vector3.zero
-			flyVelocity.Parent = root
-		end
+		return math.clamp(speed, 8, Constants.MAX_FLY_SPEED)
+	end
+
+	local function getFlyInput()
 		local camera = workspace.CurrentCamera
+		if not camera then
+			return Vector3.zero
+		end
 		local move = Vector3.zero
 		if UserInputService:IsKeyDown(Enum.KeyCode.W) then
 			move += camera.CFrame.LookVector
@@ -139,9 +172,62 @@ function M.create(opts)
 			move -= Vector3.new(0, 1, 0)
 		end
 		if move.Magnitude > 0 then
-			move = move.Unit * (tonumber(Config.FlySpeed) or 50)
+			return move.Unit
 		end
-		flyVelocity.Velocity = move
+		return Vector3.zero
+	end
+
+	local function frameDelta(dt)
+		local n = tonumber(dt)
+		if n and n > 0 and n < 2 then
+			return n
+		end
+		return 1 / 60
+	end
+
+	local function applyFlyCFrame(dt)
+		local root = getRoot()
+		local humanoid = getHumanoid()
+		if not root or not humanoid then
+			return
+		end
+
+		prepareFlight(root)
+		local move = getFlyInput()
+		if move.Magnitude > 0 then
+			humanoid.PlatformStand = true
+			root.CFrame += move * getFlySpeed() * frameDelta(dt)
+			zeroVelocity(root)
+		else
+			humanoid.PlatformStand = false
+			zeroVelocity(root)
+		end
+	end
+
+	local function applyFlyVelocity()
+		local root = getRoot()
+		local humanoid = getHumanoid()
+		if not root or not humanoid then
+			return
+		end
+
+		local body = root:FindFirstChild("MicroHubFly")
+		if not body then
+			body = Instance.new("BodyVelocity")
+			body.Name = "MicroHubFly"
+			body.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+			body.Parent = root
+		end
+		flyVelocity = body
+
+		local move = getFlyInput()
+		if move.Magnitude > 0 then
+			body.Velocity = move * getFlySpeed()
+			humanoid.PlatformStand = true
+		else
+			body.Velocity = Vector3.zero
+			humanoid.PlatformStand = false
+		end
 	end
 
 	local function applySpeed()
@@ -239,15 +325,27 @@ function M.create(opts)
 		end)
 	end
 
+	local function tickFly(dt)
+		if not Config.Fly then
+			clearFly()
+			return
+		end
+		if Config.FlyMode == "Velocity" then
+			applyFlyVelocity()
+		else
+			applyFlyCFrame(dt)
+		end
+	end
+
 	local function tickMovement()
 		if not needsMovementTick() then
 			return
 		end
-		setNoClip(Config.NoClip == true)
-		if Config.Fly then
-			applyFly()
+		setNoClip(Config.NoClip == true or Config.Fly == true)
+		if not Config.Fly then
+			clearFly()
+			applySpeed()
 		else
-			destroyFly()
 			applySpeed()
 		end
 		applyStamina()
@@ -258,7 +356,7 @@ function M.create(opts)
 		stopAntiAfk()
 		setNoClip(false)
 		restoreCollision()
-		destroyFly()
+		clearFly()
 		Config.FullBright = false
 		applyFullBright()
 		local humanoid = getHumanoid()
@@ -271,6 +369,7 @@ function M.create(opts)
 
 	return {
 		tickMovement = tickMovement,
+		tickFly = tickFly,
 		startAntiAfk = startAntiAfk,
 		stopAntiAfk = stopAntiAfk,
 		unload = unload,

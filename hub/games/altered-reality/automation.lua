@@ -6,7 +6,7 @@ function M.create(opts)
 	local services = opts.services
 	local util = opts.util
 	local remotes = opts.remotes
-	local esp = opts.esp
+	local loot = opts.loot
 
 	local lastPickupAt = 0
 
@@ -48,7 +48,11 @@ function M.create(opts)
 		local nearest
 		local nearestDistance = range
 
-		for _, entry in esp.scanLoot(true) do
+		for _, entry in loot.scanLoot(true, {
+			range = getPickupRange(),
+			maxItems = Constants.MAX_ESP_LOOT,
+			filter = Config.AutoLootFilter or "All",
+		}) do
 			local part = entry.part
 			if part and part.Parent then
 				local distance = (root.Position - part.Position).Magnitude
